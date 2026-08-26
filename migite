@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# migite — Agentic dev workflow orchestrator
+# Usage: migite "task description"
+#        migite --jira PROJ-123
+#
+# ── About the name ────────────────────────────────────────────────────────────
+# Migite (右手, みぎて) is the Japanese word for "right hand". As in right-hand
+# man — the trusted assistant who handles the groundwork so you can focus on
+# what matters. That's exactly what this workflow does: it plans before you
+# touch a file, gates before you implement, reviews before you commit, and
+# captures knowledge so nothing gets lost. It doesn't replace your judgment —
+# it extends your reach, always one step ahead, always at your side.
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# This file is the entrypoint: config, arg parsing, and phase sequencing.
+# The phases themselves live in migite.d/, sourced below — they share this
+# script's variables (TASK_DIR, PLAN_FILE, REVIEW_FILE, ...) directly rather
+# than passing them as arguments, so read a phase file alongside this one.
+
+set -euo pipefail
+
+# ── Config ────────────────────────────────────────────────────────────────────
+DEV_LOG_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
+LOG_DIR="${LOG_DIR:-$HOME/.dev-workflow/logs}"
+DATE=$(date +%Y-%m-%d)
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
+# Python binary for LangGraph agent scripts. Override via env if your setup differs.
+MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
+# Real directory this script lives in — resolves through the ~/.local/bin symlink so
+# anything migite writes about itself lands in the repo (the source of truth), not
+# wherever it happened to be invoked from.
+MIGITE_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# ── Phases ────────────────────────────────────────────────────────────────────
+source "$MIGITE_HOME/migite.d/helpers.sh"
+source "$MIGITE_HOME/migite.d/amend.sh"
+source "$MIGITE_HOME/migite.d/plan.sh"
+source "$MIGITE_HOME/migite.d/implement.sh"
+source "$MIGITE_HOME/migite.d/review.sh"
+source "$MIGITE_HOME/migite.d/deliver.sh"
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+mkdir -p "$LOG_DIR"
+require_cmd claude
+require_cmd git
+require_cmd bundle
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+TASK=""
+JIRA_TICKET=""
+TASK_TYPE=""
+AUDIT_FILE=""
+BLUEPRINT_FILE=""
+INTAKE_FILE_ARG=""
+STAGED=false
+AMEND_MODE=false
+AMEND_FEEDBACK=""
+AMEND_FEEDBACK_FILE=""
+
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    --audit)
+      AUDIT_FILE="${2:-}"
+      [[ -z "$AUDIT_FILE" ]] && error "Provide an audit file path after --audit"
+      [[ ! -f "$AUDIT_FILE" ]] && error "Audit file not found: $AUDIT_FILE"
+      AUDIT_FILE="$(resolve_path "$AUDIT_FILE")"
+      log "Audit context: $AUDIT_FILE"
+      shift 2
+      ;;
+    --blueprint)
+      BLUEPRINT_FILE="${2:-}"
+      [[ -z "$BLUEPRINT_FILE" ]] && error "Provide a blueprint file path after --blueprint"
+      [[ ! -f "$BLUEPRINT_FILE" ]] && error "Blueprint file not found: $BLUEPRINT_FILE"
+      BLUEPRINT_FILE="$(resolve_path "$BLUEPRINT_FILE")"
+      log "Blueprint context: $BLUEPRINT_FILE"
+      shift 2
+      ;;
+    --intake)
+      INTAKE_FILE_ARG="${2:-}"
+      [[ -z "$INTAKE_FILE_ARG" ]] && error "Provide an intake file path after --intake"
+      [[ ! -f "$INTAKE_FILE_ARG" ]] && error "Intake file not found: $INTAKE_FILE_ARG"
+      INTAKE_FILE_ARG="$(resolve_path "$INTAKE_FILE_ARG")"
+      log "Intake file: $INTAKE_FILE_ARG"
+      shift 2
+      ;;
+    --staged)
+      STAGED=true
+      shift
+      ;;
+    --amend)
+      AMEND_MODE=true
+      # Optional inline feedback — only consume $2 if it's not itself a flag
+      if [[ -n "${2:-}" && "$2" != --* ]]; then
+        AMEND_FEEDBACK="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --amend-file)
+      AMEND_MODE=true
+      AMEND_FEEDBACK_FILE="${2:-}"
+      [[ -z "$AMEND_FEEDBACK_FILE" ]] && error "Provide a file path after --amend-file"
+      [[ ! -f "$AMEND_FEEDBACK_FILE" ]] && error "Amend feedback file not found: $AMEND_FEEDBACK_FILE"
+      AMEND_FEEDBACK_FILE="$(resolve_path "$AMEND_FEEDBACK_FILE")"
+      shift 2
+      ;;
+    --jira)
+      JIRA_TICKET="${2:-}"
+      [[ -z "$JIRA_TICKET" ]] && error "Provide a Jira ticket ID after --jira"
+      if echo "$JIRA_TICKET" | grep -qE 'https?://.*atlassian\.net/browse/'; then
+        JIRA_TICKET=$(echo "$JIRA_TICKET" | grep -oE '[A-Za-z]+-[0-9]+' | tail -1 | tr '[:lower:]' '[:upper:]' || true)
+        [[ -z "$JIRA_TICKET" ]] && error "Could not extract Jira ticket ID from URL"
+        log "Extracted Jira key from URL: $JIRA_TICKET"
+      fi
+      TASK="Jira ticket: $JIRA_TICKET — please fetch context from the codebase"
+      log "Jira mode: $JIRA_TICKET"
+      shift 2
+      ;;
+    --type)
+      TASK_TYPE="${2:-}"
+      case "$TASK_TYPE" in
+        feature|bug|refactor|spike|config) ;;
+        *) error "Invalid type '$TASK_TYPE'. Use: feature | bug | refactor | spike | config" ;;
+      esac
+      shift 2
+      ;;
+    *)
+      # An existing .md file is auto-detected as an intake, same as --intake.
+      # Anything else — plain text, or a path that doesn't exist — stays a task description.
+      if [[ -f "${1:-}" && "${1:-}" == *.md ]]; then
+        INTAKE_FILE_ARG="$(resolve_path "$1")"
+        log "Intake file (positional): $INTAKE_FILE_ARG"
+      else
+        TASK="${1:-}"
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Audit mode: when --audit is provided without a task, auto-set a slug so dirs have a readable name
+if [[ -n "$AUDIT_FILE" && -z "$TASK" && -z "$JIRA_TICKET" ]]; then
+  TASK="audit-remediation"
+fi
+
+# Auto-extract Jira key from an Atlassian URL passed as a plain task argument
+if [[ -z "$JIRA_TICKET" && -n "$TASK" ]] && echo "$TASK" | grep -qE 'https?://.*atlassian\.net/browse/'; then
+  EXTRACTED_KEY=$(echo "$TASK" | grep -oE '[A-Z]+-[0-9]+' | head -1 || true)
+  if [[ -n "$EXTRACTED_KEY" ]]; then
+    JIRA_TICKET="$EXTRACTED_KEY"
+    log "Extracted Jira key from URL: $JIRA_TICKET"
+    TASK="Jira ticket: $JIRA_TICKET — please fetch context from the codebase"
+  fi
+fi
+
+# ── Confirm we're in a git repo ───────────────────────────────────────────────
+git rev-parse --is-inside-work-tree &>/dev/null || error "Not inside a git repo"
+BRANCH=$(git branch --show-current)
+log "Current branch: $BRANCH"
+
+# ── Detect repo + org ─────────────────────────────────────────────────────────
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_NAME=$(basename "$REPO_ROOT")
+
+# git diff and other later commands assume cwd == REPO_ROOT. Anchor it here so
+# migite behaves the same whether invoked from the repo root or a subdirectory
+# (e.g. a monorepo's app/ dir) — otherwise git diff's repo-root-relative paths
+# get re-resolved against the wrong cwd.
+cd "$REPO_ROOT"
+
+# Sets APP_ROOT/APP_REL_PATH — the directory holding the Gemfile, which isn't
+# always $REPO_ROOT (e.g. a rails-app/ subdirectory one level down). bundle
+# exec always runs from $APP_ROOT via the bundle_exec/run_rubocop_check/
+# run_rspec_check helpers, regardless of where migite itself was invoked from.
+detect_app_root
+log "App dir: ${APP_REL_PATH:-.}"
+
+ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT")"
+log "Repo: $ORG/$REPO_NAME"
+
+# ── Detect base branch ────────────────────────────────────────────────────────
+BASE_BRANCH="$(detect_base_branch)"
+log "Base branch: $BASE_BRANCH"
+
+if [[ "$AMEND_MODE" == "true" ]]; then
+  # ── Amend mode: locate the already-implemented task, scope a delta ──────────
+  run_amend_mode
+else
+  run_plan
+  run_tdd
+fi
+
+run_implement
+run_review
+run_deliver
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
+success "Workflow complete."
+echo ""
+echo -e "  Vault:      ${CYAN}$TASK_DIR${RESET}"
+echo -e "  Scratchpad: ${CYAN}$SCRATCHPAD_DIR${RESET}"
+echo -e "    intake.md         → task intake"
+echo -e "    plan.md           → planning output"
+echo -e "    implementation.md          → implementation notes"
+echo -e "    review.md         → review verdict"
+echo -e "    pr-description.md → ready to paste into GitHub"
+echo ""

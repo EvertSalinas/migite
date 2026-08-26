@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# migite-audit — autonomous codebase audit
+#
+# Usage:
+#   migite-audit [--focus <area>] [--output <file>]
+#
+# Examples:
+#   migite-audit                    # full audit, writes to vault
+#   migite-audit --focus jobs       # audit only jobs layer
+#   migite-audit --output ./out.md  # write to specific file
+
+set -euo pipefail
+
+MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── Preflight ────────────────────────────────────────────────────────────────────
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+  echo "✘ Not inside a git repository." >&2
+  exit 1
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+if [[ ! -x "$MIGITE_PYTHON" ]]; then
+  echo "✘ Python not found at $MIGITE_PYTHON" >&2
+  echo "  Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
+  exit 1
+fi
+
+if ! "$MIGITE_PYTHON" -c "import langgraph, anthropic" 2>/dev/null; then
+  echo "✘ Python dependencies missing. Run:" >&2
+  echo "  $MIGITE_PYTHON -m pip install langgraph anthropic" >&2
+  exit 1
+fi
+
+# ── Run ──────────────────────────────────────────────────────────────────────────
+exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-audit.py" --repo-root "$REPO_ROOT" "$@"

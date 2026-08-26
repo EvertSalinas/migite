@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# migite-blueprint — project definition tool
+#
+# Takes a project brief (one sentence to several pages) and produces:
+#   - blueprint.md        — full project definition, architecture, domain model, MVP scope
+#   - knowledge.md        — seed conventions and decisions for the new repo
+#   - intake-NN-<slug>.md — one sequenced migite intake per milestone
+#
+# Usage:
+#   migite-blueprint "build a billing system for SaaS"
+#   migite-blueprint --brief path/to/brief.md
+#   migite-blueprint --brief brief.md --name "billing-api" --output ./output/
+#   migite-blueprint --brief brief.md --name "billing-api" --stack "Next.js + TypeScript + Postgres"
+#   migite-blueprint --from-blueprint blueprint.md  # re-extract intakes from edited blueprint
+#
+# Stack-agnostic: without --stack, migite-blueprint.py infers the tech stack from the
+# brief. Pass --stack to state it explicitly when the brief doesn't say.
+
+set -euo pipefail
+
+MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VAULT_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
+
+BOLD='\033[1m'
+CYAN='\033[0;36m'
+YELLOW='\033[0;33m'
+RESET='\033[0m'
+
+# ── Preflight ─────────────────────────────────────────────────────────────────
+if [[ ! -x "$MIGITE_PYTHON" ]]; then
+  echo "✘ Python not found at $MIGITE_PYTHON" >&2
+  echo "  Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
+  exit 1
+fi
+
+if ! "$MIGITE_PYTHON" -c "import langgraph, anthropic" 2>/dev/null; then
+  echo "✘ Python dependencies missing. Run:" >&2
+  echo "  $MIGITE_PYTHON -m pip install langgraph anthropic" >&2
+  exit 1
+fi
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+BRIEF_TEXT=""
+BRIEF_FILE=""
+PROJECT_NAME=""
+OUTPUT_DIR=""
+FROM_BLUEPRINT=""
+STACK=""
+
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    --brief)
+      BRIEF_FILE="${2:-}"
+      [[ -z "$BRIEF_FILE" ]] && { echo "✘ --brief requires a file path" >&2; exit 1; }
+      [[ ! -f "$BRIEF_FILE" ]] && { echo "✘ Brief file not found: $BRIEF_FILE" >&2; exit 1; }
+      shift 2
+      ;;
+    --name)
+      PROJECT_NAME="${2:-}"
+      shift 2
+      ;;
+    --output)
+      OUTPUT_DIR="${2:-}"
+      shift 2
+      ;;
+    --from-blueprint)
+      FROM_BLUEPRINT="${2:-}"
+      [[ -z "$FROM_BLUEPRINT" ]] && { echo "✘ --from-blueprint requires a file path" >&2; exit 1; }
+      [[ ! -f "$FROM_BLUEPRINT" ]] && { echo "✘ Blueprint file not found: $FROM_BLUEPRINT" >&2; exit 1; }
+      shift 2
+      ;;
+    --stack)
+      STACK="${2:-}"
+      [[ -z "$STACK" ]] && { echo "✘ --stack requires a value" >&2; exit 1; }
+      shift 2
+      ;;
+    -*)
+      echo "✘ Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      BRIEF_TEXT="$1"
+      shift
+      ;;
+  esac
+done
+
+# ── Re-extract mode ───────────────────────────────────────────────────────────
+if [[ -n "$FROM_BLUEPRINT" ]]; then
+  OUTPUT_DIR="${OUTPUT_DIR:-$(dirname "$FROM_BLUEPRINT")}"
+  echo ""
+  echo -e "${CYAN}  migite-blueprint | re-extracting from existing blueprint${RESET}"
+  echo -e "  ${CYAN}Blueprint: $FROM_BLUEPRINT${RESET}"
+  echo -e "  ${CYAN}Output:    $OUTPUT_DIR${RESET}"
+  echo ""
+  exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-blueprint.py" \
+    --from-blueprint "$FROM_BLUEPRINT" \
+    --output        "$OUTPUT_DIR"
+fi
+
+# ── Full run ──────────────────────────────────────────────────────────────────
+if [[ -z "$BRIEF_TEXT" && -z "$BRIEF_FILE" ]]; then
+  echo ""
+  echo -e "${BOLD}  What are you building?${RESET}"
+  echo -e "  ${YELLOW}Write a brief (one sentence to a few paragraphs).${RESET}"
+  echo -e "  ${YELLOW}Press Enter twice when done:${RESET}"
+  echo ""
+  BRIEF_TEXT=""
+  while IFS= read -r line; do
+    [[ -z "$line" && -z "$BRIEF_TEXT" ]] && continue
+    [[ -z "$line" ]] && break
+    BRIEF_TEXT="${BRIEF_TEXT}${line}
+"
+  done
+  [[ -z "$BRIEF_TEXT" ]] && { echo "✘ Brief cannot be empty" >&2; exit 1; }
+fi
+
+if [[ -z "$PROJECT_NAME" ]]; then
+  echo ""
+  read -r -p "$(echo -e "${YELLOW}Project name (slug, e.g. billing-api): ${RESET}")" PROJECT_NAME
+  [[ -z "$PROJECT_NAME" ]] && { echo "✘ Project name required" >&2; exit 1; }
+fi
+
+# Derive output dir from vault + project name if not overridden
+if [[ -z "$OUTPUT_DIR" ]]; then
+  SAFE_NAME=$(printf '%s' "$PROJECT_NAME" | tr -cs 'a-zA-Z0-9' '-' | tr '[:upper:]' '[:lower:]')
+  OUTPUT_DIR="$VAULT_BASE/${MIGITE_ORG:-Personal}/$SAFE_NAME/blueprint"
+fi
+
+echo ""
+echo -e "${CYAN}  migite-blueprint | 5 parallel analysts → Opus 5 synthesis → milestone extraction${RESET}"
+echo -e "  ${CYAN}Project: $PROJECT_NAME${RESET}"
+echo -e "  ${CYAN}Output:  $OUTPUT_DIR${RESET}"
+echo ""
+
+# Resolve brief: inline text wins over file if both somehow set
+PYTHON_ARGS=(
+  --project-name "$PROJECT_NAME"
+  --output       "$OUTPUT_DIR"
+)
+[[ -n "$STACK" ]] && PYTHON_ARGS+=(--stack "$STACK")
+if [[ -n "$BRIEF_FILE" ]]; then
+  PYTHON_ARGS+=(--brief-file "$BRIEF_FILE")
+else
+  BRIEF_TMP=$(mktemp)
+  printf '%s' "$BRIEF_TEXT" > "$BRIEF_TMP"
+  PYTHON_ARGS+=(--brief-file "$BRIEF_TMP")
+fi
+
+exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-blueprint.py" "${PYTHON_ARGS[@]}"

@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+# migite-review — autonomous LangGraph review agent
+#
+# Reads plan.md, implementation notes, rubocop/rspec logs, and git diff.
+# Fans out 4 parallel specialist reviewers, synthesises a verdict, and writes
+# review.md + sentinel. Called by migite's spawn_langgraph().
+#
+# Usage:
+#   migite-review --plan <file> --implementation <file> \
+#                 --rubocop-log <file> --rspec-log <file> \
+#                 --repo-root <dir> --review-output <file> --sentinel <file>
+
+import argparse
+import operator
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Annotated, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
+
+import migite_paths
+
+REVIEW_MODEL  = "claude-sonnet-5"
+CRITIC_MODEL  = "claude-opus-5"
+
+REVIEW_CMD_PATH = Path.home() / ".claude/commands/review.md"
+
+REVIEW_DIMENSIONS = [
+    (
+        "correctness",
+        "Implementation matches the approved plan. No scope creep. All acceptance criteria covered. "
+        "Logic is correct. No dead code or commented-out blocks.",
+    ),
+    (
+        "security",
+        "All controller actions authorised. Resources scoped to current_user. No N+1 queries "
+        "(check .each over AR collections). No raw SQL without parameterisation. No hardcoded secrets. "
+        "Strong params on every action. No SQL injection vectors.",
+    ),
+    (
+        "test_coverage",
+        "New public methods have unit specs. New endpoints have request specs covering success, 401, 422. "
+        "Factories used (not fixtures). No real HTTP calls in specs. Spec descriptions use 'when/with/without' for context blocks.",
+    ),
+    (
+        "testing_plan",
+        "The testing plan document exists and is complete: contains a real Rails console seed script "
+        "(generic emails only), step-by-step verification actions (curl or browser steps), log lines to grep, "
+        "and a teardown script. A missing, placeholder, or empty testing plan is a critical failure. If this "
+        "task had any amendments, the testing plan must reflect the CURRENT amended behaviour, not just the "
+        "original plan — flag any step that still describes pre-amendment behaviour.",
+    ),
+]
+
+
+# ── Claude subprocess call ──────────────────────────────────────────────────────
+
+def call_claude(prompt: str, model: str = REVIEW_MODEL) -> str:
+    import time
+    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(
+            cmd, input=prompt, capture_output=True, text=True, env=env, timeout=600
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        raise RuntimeError(f"claude --print timed out after {elapsed:.0f}s (limit=600s, model={model})")
+    elapsed = time.monotonic() - t0
+    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {result.returncode})", flush=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"claude --print failed (exit {result.returncode}, {elapsed:.1f}s): {result.stderr[:400]}"
+        )
+    return result.stdout.strip()
+
+
+# ── LangGraph state ─────────────────────────────────────────────────────────────
+
+class ReviewState(TypedDict):
+    plan: str
+    implementation: str
+    rubocop_log: str
+    rspec_log: str
+    git_diff: str
+    repo_root: str
+    base_branch: str
+    testing_plan: str
+    review_output: str
+    sentinel: str
+    review_cmd: str
+    findings: Annotated[list[str], operator.add]
+    verdict: str
+
+
+class DimensionInput(TypedDict):
+    dimension: str
+    description: str
+    plan: str
+    implementation: str
+    rubocop_log: str
+    rspec_log: str
+    git_diff: str
+    testing_plan: str
+
+
+# ── Nodes ───────────────────────────────────────────────────────────────────────
+
+def load_inputs(state: ReviewState) -> dict:
+    print("  ▶ Loading inputs + git diff", flush=True)
+    try:
+        diff = subprocess.run(
+            f"git diff {shlex.quote(state['base_branch'])}",
+            shell=True, capture_output=True, text=True,
+            cwd=state["repo_root"], timeout=30,
+        ).stdout[:14000]
+    except Exception:
+        diff = "(could not get git diff)"
+    return {"git_diff": diff}
+
+
+def route_to_reviewers(state: ReviewState) -> list[Send]:
+    print(f"  ▶ Fanning out {len(REVIEW_DIMENSIONS)} specialist reviewers in parallel", flush=True)
+    return [
+        Send("review_dimension", {
+            "dimension": dim,
+            "description": desc,
+            "plan": state["plan"],
+            "implementation": state["implementation"],
+            "rubocop_log": state["rubocop_log"],
+            "rspec_log": state["rspec_log"],
+            "git_diff": state["git_diff"],
+            "testing_plan": state["testing_plan"],
+        })
+        for dim, desc in REVIEW_DIMENSIONS
+    ]
+
+
+def review_dimension(state: DimensionInput) -> dict:
+    dim = state["dimension"]
+    print(f"    ◦ {dim}", flush=True)
+    testing_plan_block = ""
+    if dim == "testing_plan":
+        content = state.get("testing_plan") or "(no testing-plan.md found for this task)"
+        testing_plan_block = f"\n## Testing plan document (full)\n{content}\n"
+    prompt = f"""You are a senior Rails engineer doing a focused code review.
+Your dimension: **{dim}**
+
+Criteria: {state['description']}
+
+## Plan (first 2500 chars)
+{state['plan'][:2500]}
+{testing_plan_block}
+## Implementation notes
+{state['implementation'][:2000]}
+
+## Git diff (first 10k chars)
+{state['git_diff'][:10000]}
+
+## Rubocop results
+{state['rubocop_log'][:1500]}
+
+## RSpec results
+{state['rspec_log'][:1500]}
+
+Review for **{dim}** only. List each finding with severity:
+- 🔴 **Critical** — will break in production or is a security risk
+- 🟡 **Warning** — likely issue under load or edge cases
+- 🟢 **Note** — low severity, worth being aware of
+
+If nothing found, output exactly: ✅ No issues in this dimension.
+Do not repeat findings that other dimensions would cover."""
+
+    try:
+        result = call_claude(prompt)
+    except Exception as e:
+        result = f"🔴 **Critical** — reviewer failed: {e}"
+    return {"findings": [f"### {dim}\n{result}"]}
+
+
+def synthesize_verdict(state: ReviewState) -> dict:
+    print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
+    findings_text = "\n\n".join(state["findings"])
+    prompt = f"""## Review format
+{state['review_cmd']}
+
+## Plan summary (first 1500 chars)
+{state['plan'][:1500]}
+
+## Specialist findings
+{findings_text}
+
+## Rubocop
+{state['rubocop_log'][:800]}
+
+## RSpec
+{state['rspec_log'][:800]}
+
+Synthesise these findings into a single review document following the format above.
+De-duplicate overlapping findings. Assign the final verdict:
+- READY TO COMMIT — no critical issues
+- NEEDS FIXES — one or more critical issues or significant warnings remain
+
+Output only the review document."""
+
+    try:
+        result = call_claude(prompt, model=CRITIC_MODEL)
+    except Exception as e:
+        result = f"# Review\n\n## Verdict\nNEEDS FIXES\n\nReview synthesis failed: {e}"
+    return {"verdict": result}
+
+
+def write_review(state: ReviewState) -> dict:
+    print("  ▶ Writing review", flush=True)
+
+    review_path = Path(state["review_output"])
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(state["verdict"])
+    print(f"    ✔ review.md → {review_path}", flush=True)
+
+    Path(state["sentinel"]).touch()
+    print("    ✔ sentinel written", flush=True)
+    return {}
+
+
+# ── Graph ────────────────────────────────────────────────────────────────────────
+
+def build_graph() -> StateGraph:
+    g = StateGraph(ReviewState)
+    g.add_node("load_inputs", load_inputs)
+    g.add_node("review_dimension", review_dimension)
+    g.add_node("synthesize_verdict", synthesize_verdict)
+    g.add_node("write_review", write_review)
+
+    g.add_edge(START, "load_inputs")
+    g.add_conditional_edges("load_inputs", route_to_reviewers, ["review_dimension"])
+    g.add_edge("review_dimension", "synthesize_verdict")
+    g.add_edge("synthesize_verdict", "write_review")
+    g.add_edge("write_review", END)
+    return g.compile()
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="migite-review: autonomous LangGraph reviewer")
+    ap.add_argument("--plan",            required=True)
+    ap.add_argument("--implementation",  required=True)
+    ap.add_argument("--rubocop-log",     required=True)
+    ap.add_argument("--rspec-log",       required=True)
+    ap.add_argument("--repo-root",       required=True)
+    ap.add_argument("--review-output",   required=True)
+    ap.add_argument("--sentinel",        required=True)
+    ap.add_argument("--base-branch",     default=None, help="Branch to diff against (default: auto-detect origin/HEAD, then main/master/develop)")
+    ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
+    args = ap.parse_args()
+
+    base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
+
+    def read_or_empty(path: str) -> str:
+        p = Path(path)
+        return p.read_text() if p.exists() else ""
+
+    plan           = read_or_empty(args.plan)
+    implementation = read_or_empty(args.implementation)
+    rubocop_log    = read_or_empty(args.rubocop_log)
+    rspec_log      = read_or_empty(args.rspec_log)
+    testing_plan   = read_or_empty(args.testing_plan) if args.testing_plan else ""
+    review_cmd     = REVIEW_CMD_PATH.read_text() if REVIEW_CMD_PATH.exists() else ""
+
+    print(f"\n  migite-review | model={REVIEW_MODEL}  base branch: {base_branch}", flush=True)
+
+    graph = build_graph()
+    try:
+        graph.invoke({
+            "plan": plan,
+            "implementation": implementation,
+            "rubocop_log": rubocop_log,
+            "rspec_log": rspec_log,
+            "git_diff": "",
+            "repo_root": args.repo_root,
+            "base_branch": base_branch,
+            "testing_plan": testing_plan,
+            "review_output": args.review_output,
+            "sentinel": args.sentinel,
+            "review_cmd": review_cmd,
+            "findings": [],
+            "verdict": "",
+        })
+        print("\n  ✔ migite-review complete", flush=True)
+    except Exception as e:
+        print(f"\n  ✘ migite-review failed: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

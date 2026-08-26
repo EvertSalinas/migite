@@ -1,0 +1,520 @@
+#!/usr/bin/env python3
+# migite-plan — autonomous LangGraph planning agent
+#
+# Reads intake.md, fans out parallel codebase explorations, synthesises a plan,
+# runs the architecture critic, refines the plan, then writes plan.md +
+# architecture-critic.md + sentinel. Called by migite's spawn_langgraph().
+#
+# Usage:
+#   migite-plan --intake <file> --plan-output <file> --critic-output <file> \
+#               --repo-root <dir> --sentinel <file> [--task-type <type>] [--knowledge <file>]
+
+import argparse
+import glob
+import operator
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Annotated, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
+
+import migite_paths
+
+# ── Models ─────────────────────────────────────────────────────────────────────
+# Haiku for fast file analysis; Sonnet for plan synthesis; Opus for the critic
+# (one high-stakes call where missed architectural findings are most costly).
+EXPLORE_MODEL = "claude-haiku-4-5-20251001"
+THINK_MODEL   = "claude-sonnet-5"
+CRITIC_MODEL  = "claude-opus-5"
+
+PLAN_CMD_PATH = Path.home() / ".claude/commands/plan.md"
+CRITIC_CMD_PATH = Path.home() / ".claude/commands/architecture_critic.md"
+
+EXPLORE_AREAS = [
+    ("models",             ["app/models/**/*.rb"]),
+    ("controllers",        ["app/controllers/**/*.rb"]),
+    ("services",           ["app/services/**/*.rb", "app/interactors/**/*.rb", "app/commands/**/*.rb"]),
+    ("serializers",        ["app/serializers/**/*.rb"]),
+    ("specs",              ["spec/**/*_spec.rb"]),
+    ("migrations_schema",  ["db/migrate/*.rb", "db/schema.rb"]),
+    ("routes_config",      ["config/routes.rb", "config/application.rb", "config/initializers/*.rb"]),
+]
+
+STOP_WORDS = {
+    "this", "that", "with", "from", "have", "been", "will", "when", "where", "what",
+    "which", "their", "there", "they", "also", "into", "more", "some", "than", "then",
+    "type", "name", "each", "such", "well", "just", "only", "should", "would", "could",
+    "these", "those", "about", "after", "before", "other", "first", "class", "return",
+    "method", "endpoint", "rails", "ruby", "model", "controller", "service",
+}
+
+
+# ── Audit condensation ─────────────────────────────────────────────────────────
+
+def condense_audit(audit_text: str, limit: int = 4000) -> str:
+    """
+    Extract all Critical/Warning lines first (never dropped), then append
+    remaining raw text up to the limit. Prevents hard truncation from silently
+    dropping high-severity findings when an audit report exceeds the limit.
+    """
+    lines = audit_text.splitlines()
+    critical_lines = [l for l in lines if "🔴" in l or "🟡" in l]
+    findings_block = "\n".join(critical_lines)
+    if len(findings_block) >= limit:
+        return findings_block[:limit]
+    remaining = limit - len(findings_block) - 2
+    raw_tail = audit_text[:remaining] if remaining > 0 else ""
+    return (findings_block + "\n\n" + raw_tail).strip()
+
+
+# ── Claude subprocess call ──────────────────────────────────────────────────────
+
+def call_claude(prompt: str, model: str = THINK_MODEL, thinking: bool = False) -> str:
+    import time
+    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    timeout = 600 if thinking else 300
+
+    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(
+            cmd, input=prompt, capture_output=True, text=True, env=env, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        raise RuntimeError(
+            f"claude --print timed out after {elapsed:.0f}s "
+            f"(limit={timeout}s, thinking={thinking}, model={model})"
+        )
+    elapsed = time.monotonic() - t0
+    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {result.returncode})", flush=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"claude --print failed (exit {result.returncode}, {elapsed:.1f}s): {result.stderr[:400]}"
+        )
+    return result.stdout.strip()
+
+
+def extract_headings(text: str) -> set[str]:
+    return {line.strip() for line in text.splitlines() if line.strip().startswith("#")}
+
+
+# ── File discovery helpers ──────────────────────────────────────────────────────
+
+def extract_keywords(text: str) -> set[str]:
+    words = re.findall(r"\b[A-Za-z][a-zA-Z]{3,}\b", text)
+    return {w.lower() for w in words} - STOP_WORDS
+
+
+def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: set[str], base_branch: str) -> str:
+    """
+    Discover files in `area`, score by keyword relevance, read the most relevant ones.
+    Changed files (vs base_branch) are always included first.
+    """
+    # Changed files in this area
+    pat_str = " ".join(f"'{p}'" for p in patterns)
+    changed_out = subprocess.run(
+        f"git diff {shlex.quote(base_branch)} --name-only -- {pat_str}",
+        shell=True, capture_output=True, text=True, cwd=repo_root
+    ).stdout.strip()
+    changed = [f for f in changed_out.split("\n") if f]
+
+    # All files in area
+    all_files: list[str] = []
+    for pattern in patterns:
+        all_files.extend(glob.glob(f"{repo_root}/{pattern}", recursive=True))
+    all_files = sorted(set(all_files))
+
+    listing = "\n".join(f.replace(f"{repo_root}/", "") for f in all_files) or "(none)"
+
+    # Score by keyword hits in path
+    scored = sorted(
+        ((sum(1 for kw in keywords if kw in f.replace(repo_root, "").lower()), f) for f in all_files),
+        reverse=True,
+    )
+
+    # Read: changed files first, then top-scored
+    to_read: list[str] = []
+    seen: set[str] = set()
+    for cf in changed:
+        full = f"{repo_root}/{cf}"
+        if full not in seen and Path(full).exists():
+            to_read.append(full)
+            seen.add(full)
+    for _, f in scored[:8]:
+        if f not in seen:
+            to_read.append(f)
+            seen.add(f)
+
+    parts = [f"## {area} — file listing\n{listing}\n\n## Relevant file contents"]
+    total = len(parts[0])
+    for f in to_read[:14]:
+        try:
+            content = Path(f).read_text(errors="replace")[:2500]
+            rel = f.replace(f"{repo_root}/", "")
+            chunk = f"\n### {rel}\n```ruby\n{content}\n```"
+            if total + len(chunk) > 14000:
+                break
+            parts.append(chunk)
+            total += len(chunk)
+        except Exception:
+            pass
+
+    return "\n".join(parts)
+
+
+# ── LangGraph state ─────────────────────────────────────────────────────────────
+
+class PlanState(TypedDict):
+    intake: str
+    knowledge: str
+    audit: str
+    blueprint: str
+    task_file: str
+    plan_cmd: str
+    critic_cmd: str
+    repo_root: str
+    base_branch: str
+    task_type: str
+    plan_output: str
+    critic_output: str
+    testing_plan_output: str
+    sentinel: str
+    explorations: Annotated[list[str], operator.add]
+    plan_draft: str
+    critic_findings: str
+    plan_final: str
+    testing_plan: str
+
+
+class ExploreInput(TypedDict):
+    area: str
+    glob_patterns: list[str]
+    intake: str
+    knowledge: str
+    repo_root: str
+    base_branch: str
+
+
+# ── Nodes ───────────────────────────────────────────────────────────────────────
+
+def load_context(state: PlanState) -> dict:
+    print("  ▶ Context loaded", flush=True)
+    return {}
+
+
+def route_to_explorers(state: PlanState) -> list[Send]:
+    print(f"  ▶ Fanning out {len(EXPLORE_AREAS)} explorers in parallel", flush=True)
+    return [
+        Send("explore", {
+            "area": area,
+            "glob_patterns": patterns,
+            "intake": state["intake"],
+            "knowledge": state["knowledge"],
+            "repo_root": state["repo_root"],
+            "base_branch": state["base_branch"],
+        })
+        for area, patterns in EXPLORE_AREAS
+    ]
+
+
+def explore(state: ExploreInput) -> dict:
+    area = state["area"]
+    print(f"    ◦ {area}", flush=True)
+    keywords = extract_keywords(state["intake"])
+    context = read_area_context(area, state["glob_patterns"], state["repo_root"], keywords, state["base_branch"])
+    knowledge_block = (
+        f"Repository lessons (apply these):\n{state['knowledge'][:800]}\n\n"
+        if state.get("knowledge") else ""
+    )
+    prompt = f"""Task intake:
+{state['intake'][:1500]}
+
+{knowledge_block}{context}
+
+Analyse the **{area}** area above for this task. Report:
+1. Files, classes, and methods directly relevant to implementing this task
+2. Patterns and conventions the implementation must follow
+3. Anything that constrains or enables the implementation
+
+Be specific — name files and methods. Under 350 words."""
+
+    try:
+        findings = call_claude(prompt, model=EXPLORE_MODEL)
+    except Exception as e:
+        findings = f"Exploration failed: {e}"
+    return {"explorations": [f"### {area}\n{findings}"]}
+
+
+def synthesize_plan(state: PlanState) -> dict:
+    print(f"  ▶ Synthesising plan from {len(state['explorations'])} exploration reports", flush=True)
+    explorations_text = "\n\n".join(state["explorations"])
+    audit_block = (
+        f"## Known codebase issues (from audit — do not worsen these, address if relevant)\n"
+        f"{condense_audit(state['audit'])}\n\n"
+        if state.get("audit") else ""
+    )
+    blueprint_block = (
+        f"## Pre-decided architecture (from blueprint — build on these decisions, do not re-derive)\n"
+        f"{state['blueprint'][:6000]}\n\n"
+        if state.get("blueprint") else ""
+    )
+    task_file_block = (
+        f"## Additional task details (supplied separately from the intake — treat as authoritative)\n"
+        f"{state['task_file']}\n\n"
+        if state.get("task_file") else ""
+    )
+    prompt = f"""## Task intake
+{state['intake']}
+
+{task_file_block}## Repository knowledge
+{state['knowledge'] or '(none)'}
+
+{blueprint_block}{audit_block}## Codebase exploration
+{explorations_text}
+
+## Plan format and instructions
+{state['plan_cmd']}
+
+## Formatting rules (apply these on top of the format above — they override default prose style)
+
+These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
+
+- **Use `###` subheadings** inside sections whenever a section has 3+ distinct items (e.g. New files, Modified files, Schema). Never use bold text as a pseudo-header — that buries structure in a wall of text.
+- **One blank line between every top-level bullet** in any list longer than 3 items.
+- **Keep individual bullets under 4 lines.** If an explanation needs more, break it into a sub-bullet (`  -`) or a `> Note:` block. Do not write paragraph-length bullets.
+- **File entries get their own sub-section.** Each new or modified file gets a `###` heading with its path, then a short description below — not a single giant bullet that combines path + rationale + caveats.
+- **Use `---` between major top-level sections** to create visible breaks when skimming.
+- **Tables over prose for comparisons.** Anything that reads "X does Y, but Z does W" belongs in a two-column table.
+- **No inline parenthetical tangents.** If something is important enough to write, give it its own bullet. If it is not, omit it.
+
+Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
+
+    draft = call_claude(prompt, model=THINK_MODEL, thinking=True)
+    return {"plan_draft": draft}
+
+
+def run_architecture_critic(state: PlanState) -> dict:
+    print("  ▶ Architecture critic", flush=True)
+    audit_block = (
+        f"## Known codebase issues (from audit)\n{condense_audit(state['audit'])}\n\n"
+        if state.get("audit") else ""
+    )
+    blueprint_block = (
+        f"## Pre-decided architecture (from blueprint)\n{state['blueprint'][:4000]}\n\n"
+        if state.get("blueprint") else ""
+    )
+    prompt = f"""{state['critic_cmd']}
+
+{blueprint_block}{audit_block}## Plan to review:
+{state['plan_draft']}"""
+    findings = call_claude(prompt, model=CRITIC_MODEL, thinking=True)
+    return {"critic_findings": findings}
+
+
+def refine_plan(state: PlanState) -> dict:
+    findings = state.get("critic_findings", "")
+    if "No architectural concerns" in findings:
+        print("  ▶ Refine: no concerns — plan unchanged", flush=True)
+        return {"plan_final": state["plan_draft"]}
+    print("  ▶ Refining plan with critic findings", flush=True)
+    prompt = f"""Original plan:
+{state['plan_draft']}
+
+Architecture critic findings:
+{findings}
+
+Revise the plan to address every finding above. Keep the same structure and format — update only sections that need changes.
+
+Formatting rules to preserve and enforce in the revised output:
+- `###` subheadings inside sections with 3+ items — no bold pseudo-headers
+- One blank line between every top-level bullet in lists longer than 3 items
+- Bullets under 4 lines — split longer ones into sub-bullets or `> Note:` blocks
+- File entries use `###` + path heading, not a giant single bullet
+- `---` between major top-level sections
+- Tables for comparisons, not inline prose
+
+Output only the revised plan document."""
+    refined = call_claude(prompt, model=THINK_MODEL, thinking=True)
+
+    # Guard against the model returning a narrative recap of its changes instead of
+    # the actual plan document (observed failure: it describes the edits in prose
+    # rather than emitting them). A genuine revision keeps most of the draft's
+    # headings since the instructions say to preserve structure — a summary won't.
+    draft_headings = extract_headings(state["plan_draft"])
+    kept = len(draft_headings & extract_headings(refined))
+    if draft_headings and kept / len(draft_headings) < 0.6:
+        print("  ⚠ Refine output didn't preserve plan structure — retrying once", flush=True)
+        retry_prompt = prompt + (
+            "\n\nYour previous output was not the plan document — it read as a summary "
+            "or description of changes instead. Output the FULL revised plan itself, "
+            "with the same headings as the original plan, not a recap of what changed."
+        )
+        refined = call_claude(retry_prompt, model=THINK_MODEL, thinking=True)
+        kept = len(draft_headings & extract_headings(refined))
+        if kept / len(draft_headings) < 0.6:
+            print("  ⚠ Refine still failed structure check — keeping pre-refine plan; "
+                  "see architecture-critic.md for the findings that weren't applied", flush=True)
+            return {"plan_final": state["plan_draft"]}
+
+    return {"plan_final": refined}
+
+
+def generate_testing_plan(state: PlanState) -> dict:
+    print("  ▶ Generating testing plan", flush=True)
+    prompt = f"""You are writing a standalone QA/dev verification document for the implementation
+plan below — the concrete steps a human runs by hand, after the code is built, to confirm it
+actually works. This document lives on its own (not inside the plan) precisely so it can be
+regenerated in full whenever the implementation changes, without touching the plan's history.
+
+## Implementation plan
+{state['plan_final']}
+
+## Instructions
+Output ONLY the document below, no preamble, no meta-commentary. Use exactly this structure:
+
+# Testing Plan
+
+### Prerequisites — seed records (Rails console)
+```ruby
+<a runnable Rails console script that seeds whatever records this plan's verification needs.
+Use only generic emails (test.user@example.com, admin.qa@example.com) — never real addresses.>
+```
+
+### Verification steps
+<numbered steps — curl commands or browser/UI actions that exercise this plan's scope. Cover the
+happy path and the key error/edge cases called out in the plan. Include at least one step naming
+a log line to `grep` for as evidence the code path actually ran.>
+
+### Teardown
+```ruby
+<a runnable Rails console script that removes exactly the seed records created above>
+```
+
+If the plan involves no endpoints or user-facing behaviour to verify by hand (e.g. a pure internal
+refactor with only spec coverage), say so explicitly under each section and state what to verify
+instead (e.g. "run the full spec suite for X") rather than inventing steps that don't apply."""
+
+    testing_plan = call_claude(prompt, model=THINK_MODEL)
+    return {"testing_plan": testing_plan}
+
+
+def write_outputs(state: PlanState) -> dict:
+    print("  ▶ Writing outputs", flush=True)
+
+    plan_path = Path(state["plan_output"])
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(state["plan_final"])
+    print(f"    ✔ plan.md → {plan_path}", flush=True)
+
+    critic_path = Path(state["critic_output"])
+    critic_path.parent.mkdir(parents=True, exist_ok=True)
+    critic_path.write_text(state["critic_findings"])
+    print(f"    ✔ architecture-critic.md → {critic_path}", flush=True)
+
+    testing_plan_path = Path(state["testing_plan_output"])
+    testing_plan_path.parent.mkdir(parents=True, exist_ok=True)
+    testing_plan_path.write_text(state["testing_plan"])
+    print(f"    ✔ testing-plan.md → {testing_plan_path}", flush=True)
+
+    Path(state["sentinel"]).touch()
+    print("    ✔ sentinel written", flush=True)
+    return {}
+
+
+# ── Graph ────────────────────────────────────────────────────────────────────────
+
+def build_graph() -> StateGraph:
+    g = StateGraph(PlanState)
+    g.add_node("load_context", load_context)
+    g.add_node("explore", explore)
+    g.add_node("synthesize_plan", synthesize_plan)
+    g.add_node("architecture_critic", run_architecture_critic)
+    g.add_node("refine_plan", refine_plan)
+    g.add_node("generate_testing_plan", generate_testing_plan)
+    g.add_node("write_outputs", write_outputs)
+
+    g.add_edge(START, "load_context")
+    g.add_conditional_edges("load_context", route_to_explorers, ["explore"])
+    g.add_edge("explore", "synthesize_plan")
+    g.add_edge("synthesize_plan", "architecture_critic")
+    g.add_edge("architecture_critic", "refine_plan")
+    g.add_edge("refine_plan", "generate_testing_plan")
+    g.add_edge("generate_testing_plan", "write_outputs")
+    g.add_edge("write_outputs", END)
+    return g.compile()
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="migite-plan: autonomous LangGraph planner")
+    ap.add_argument("--intake",        required=True, help="Path to intake.md")
+    ap.add_argument("--plan-output",   required=True, help="Path to write plan.md")
+    ap.add_argument("--critic-output", required=True, help="Path to write architecture-critic.md")
+    ap.add_argument("--testing-plan-output", required=True, help="Path to write testing-plan.md")
+    ap.add_argument("--repo-root",     required=True, help="Git repo root directory")
+    ap.add_argument("--sentinel",      required=True, help="Sentinel file to touch on success")
+    ap.add_argument("--base-branch",   default=None, help="Branch explorers diff against (default: auto-detect origin/HEAD, then main/master/develop)")
+    ap.add_argument("--task-type",     default="feature")
+    ap.add_argument("--knowledge",     default="", help="Path to knowledge.md (optional)")
+    ap.add_argument("--audit",         default="", help="Path to audit.md (optional)")
+    ap.add_argument("--blueprint",     default="", help="Path to blueprint.md (optional)")
+    ap.add_argument("--task-file",     default="", help="Path to task.md — supplementary details on top of --intake (optional)")
+    args = ap.parse_args()
+
+    intake     = Path(args.intake).read_text()
+    knowledge  = Path(args.knowledge).read_text()   if args.knowledge  and Path(args.knowledge).exists()  else ""
+    audit      = Path(args.audit).read_text()       if args.audit      and Path(args.audit).exists()      else ""
+    blueprint  = Path(args.blueprint).read_text()   if args.blueprint  and Path(args.blueprint).exists()  else ""
+    task_file  = Path(args.task_file).read_text()   if args.task_file  and Path(args.task_file).exists()  else ""
+    plan_cmd   = PLAN_CMD_PATH.read_text()   if PLAN_CMD_PATH.exists()   else ""
+    critic_cmd = CRITIC_CMD_PATH.read_text() if CRITIC_CMD_PATH.exists() else ""
+    base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
+
+    print(f"  migite-plan | base branch: {base_branch}", flush=True)
+    if audit:
+        print(f"  migite-plan | audit context loaded ({len(audit)} chars)", flush=True)
+    if blueprint:
+        print(f"  migite-plan | blueprint context loaded ({len(blueprint)} chars)", flush=True)
+    if task_file:
+        print(f"  migite-plan | supplementary task.md loaded ({len(task_file)} chars)", flush=True)
+    print(f"  migite-plan | explore={EXPLORE_MODEL}  think={THINK_MODEL}  critic={CRITIC_MODEL}", flush=True)
+
+    graph = build_graph()
+    try:
+        graph.invoke({
+            "intake":     intake,
+            "knowledge":  knowledge,
+            "audit":      audit,
+            "blueprint":  blueprint,
+            "task_file":  task_file,
+            "plan_cmd":   plan_cmd,
+            "critic_cmd": critic_cmd,
+            "repo_root":  args.repo_root,
+            "base_branch": base_branch,
+            "task_type":  args.task_type,
+            "plan_output":   args.plan_output,
+            "critic_output": args.critic_output,
+            "testing_plan_output": args.testing_plan_output,
+            "sentinel":       args.sentinel,
+            "explorations":   [],
+            "plan_draft":     "",
+            "critic_findings": "",
+            "plan_final":     "",
+            "testing_plan":   "",
+        })
+        print("\n  ✔ migite-plan complete", flush=True)
+    except Exception as e:
+        print(f"\n  ✘ migite-plan failed: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

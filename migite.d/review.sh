@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# migite.d/review.sh — Phase 3 (rubocop/rspec + LangGraph review) and
+# the commit gate.
+#
+# Sourced by migite. run_review expects PLAN_FILE, IMPLEMENTATION_FILE,
+# REVIEW_FILE, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME to be set, and
+# sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
+# RUBY_VERSION_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
+# self-improvement prompt and by show_commit_context.
+
+run_review() {
+  echo ""
+  log "Phase 3/4 — Reviewing"
+
+  echo ""
+  log "Running rubocop on changed Ruby files..."
+  RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rubocop.txt"
+  local RUBOCOP_FINAL_LOG=""
+  RUBOCOP_FINAL_OFFENSES=0
+  RUBY_VERSION_ERROR=false
+  CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' || true)
+  if [[ -n "$CHANGED_RUBY" ]]; then
+    # One sweep: autocorrect and check in the same rubocop invocation, rather
+    # than check → autocorrect → recheck as three separate runs.
+    run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
+    if grep -q 'No version is set for command' "$RUBOCOP_LOG"; then
+      warn "Ruby version not set — bundle exec could not run rubocop. Fix .tool-versions before proceeding."
+      RUBY_VERSION_ERROR=true
+    elif grep -qE '[1-9][0-9]* offense' "$RUBOCOP_LOG"; then
+      warn "Rubocop offenses remain after autocorrect — Claude will address them in review"
+    else
+      success "Rubocop clean"
+    fi
+  else
+    warn "No Ruby files changed — skipping rubocop"
+    echo "No Ruby files changed." > "$RUBOCOP_LOG"
+  fi
+
+  echo ""
+  log "Running specs on changed files..."
+  RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rspec.txt"
+  local CHANGED_SPECS
+  CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec.rb' || true)
+  if [[ -n "$CHANGED_SPECS" ]]; then
+    # shellcheck disable=SC2086
+    bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
+  else
+    warn "No spec files changed — running full suite"
+    bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+  fi
+  if grep -q 'No version is set for command' "$RSPEC_LOG"; then
+    warn "Ruby version not set — bundle exec could not run rspec. Fix .tool-versions before proceeding."
+    RUBY_VERSION_ERROR=true
+  elif grep -q '0 examples' "$RSPEC_LOG" && grep -qi 'connection\|ConnectionBad' "$RSPEC_LOG"; then
+    warn "DB connection failed — 0 examples ran. Fix the database connection before proceeding."
+  fi
+
+  # Detect files in the diff not mentioned in implementation notes — warn before review
+  local CHANGED_ALL
+  CHANGED_ALL=$(git diff "$BASE_BRANCH" --name-only || true)
+  if [[ -f "$IMPLEMENTATION_FILE" && -n "$CHANGED_ALL" ]]; then
+    local UNMENTIONED_FILES=""
+    while IFS= read -r changed_file; do
+      local fname
+      fname=$(basename "$changed_file")
+      if ! grep -qF "$fname" "$IMPLEMENTATION_FILE" 2>/dev/null; then
+        UNMENTIONED_FILES="${UNMENTIONED_FILES}  - ${changed_file}\n"
+      fi
+    done <<< "$CHANGED_ALL"
+    if [[ -n "$UNMENTIONED_FILES" ]]; then
+      warn "Files in diff not mentioned in implementation notes — explain or separate them before the reviewer flags it:"
+      echo -e "$UNMENTIONED_FILES"
+    fi
+  fi
+
+  local REVIEW_SENTINEL="$SCRATCHPAD_DIR/.review.done"
+  local REVIEW_SCRIPT="$MIGITE_HOME/migite-review"
+  local REVIEW_LANGGRAPH_ARGS=(
+    --plan             "$PLAN_FILE"
+    --implementation   "$IMPLEMENTATION_FILE"
+    --rubocop-log      "$RUBOCOP_LOG"
+    --rspec-log        "$RSPEC_LOG"
+    --repo-root        "$REPO_ROOT"
+    --review-output    "$REVIEW_FILE"
+    --sentinel         "$REVIEW_SENTINEL"
+    --base-branch      "$BASE_BRANCH"
+  )
+  [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
+
+  rm -f "$REVIEW_SENTINEL"
+  spawn_langgraph "Reviewing" "review" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
+  [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
+  sync_artifact "$REVIEW_FILE" "review.md"
+  success "Review written to $REVIEW_FILE"
+
+  # migite-review only reads — it doesn't touch files — so the rubocop sweep
+  # above is still current. Reuse it instead of re-invoking rubocop.
+  RUBOCOP_FINAL_LOG="$RUBOCOP_LOG"
+  RUBOCOP_FINAL_OFFENSES=0
+  if [[ -n "$CHANGED_RUBY" ]] && grep -qE '[1-9][0-9]* offense' "$RUBOCOP_LOG" 2>/dev/null; then
+    RUBOCOP_FINAL_OFFENSES=$(grep -oE '[0-9]+ offense' "$RUBOCOP_LOG" | head -1 | grep -oE '^[0-9]+' || echo "?")
+  fi
+
+  notify "Phase 3 — Review ready" "Approve, fix with Claude, fix manually, or abort"
+
+  # Commit gate — [y] commit / [f] Claude fixes / [n] you fix / [q] abort
+  COMMIT_GATE_ATTEMPTS=0
+  _rerun_checks_and_review() {
+    log "Re-running checks..."
+    CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' || true)
+    CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec\.rb' || true)
+    if [[ -n "$CHANGED_RUBY" ]]; then
+      # One autocorrect sweep — no separate check-then-fix-then-recheck round trip.
+      run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
+    fi
+    if [[ -n "$CHANGED_SPECS" ]]; then
+      # shellcheck disable=SC2086
+      bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
+    else
+      bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+    fi
+    COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
+    rm -f "$REVIEW_SENTINEL"
+    spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
+    [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
+    sync_artifact "$REVIEW_FILE" "review.md"
+    # Reuse the sweep above instead of re-running rubocop a second time.
+    RUBOCOP_FINAL_LOG="$RUBOCOP_LOG"
+    RUBOCOP_FINAL_OFFENSES=0
+    if [[ -n "$CHANGED_RUBY" ]] && grep -qE '[1-9][0-9]* offense' "$RUBOCOP_LOG" 2>/dev/null; then
+      RUBOCOP_FINAL_OFFENSES=$(grep -oE '[0-9]+ offense' "$RUBOCOP_LOG" | head -1 | grep -oE '^[0-9]+' || echo "?")
+    fi
+  }
+
+  while true; do
+    show_commit_context
+    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort): "
+    case "${GATE_CHOICE:-}" in
+      y|Y)
+        success "Approved — continuing"
+        break
+        ;;
+      e|E)
+        # Direct edit of review.md — annotate, strike findings, add context
+        ${EDITOR:-vim} "$REVIEW_FILE"
+        cp "$REVIEW_FILE" "$SCRATCHPAD_DIR/review.md"
+        ;;
+      f|F)
+        # Build a fix prompt from the current review findings
+        local REVIEW_CONTENT
+        REVIEW_CONTENT=$(cat "$REVIEW_FILE" 2>/dev/null || echo "(review not found)")
+        local FIX_IMPL_FILE="$TASK_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
+        local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
+
+## Original plan (for context)
+$(cat "$PLAN_FILE" 2>/dev/null || echo "(plan not found)")
+
+## Review findings — address every issue below
+${REVIEW_CONTENT}
+
+## Instructions
+- Fix every Critical and Warning finding listed above
+- Do not change anything not mentioned in the findings
+- After fixing, write a short summary of what you changed to: ${FIX_IMPL_FILE}"
+
+        log "Opening Claude to fix review findings..."
+        run_phase "Fixing review findings" "$FIX_IMPL_FILE" "$FIX_PROMPT"
+        stamp_file "$FIX_IMPL_FILE"
+        _rerun_checks_and_review
+        ;;
+      n|N)
+        echo ""
+        echo -e "${YELLOW}  Make your fixes, then press Enter to re-run checks and re-review.${RESET}"
+        local manual_ready
+        read -r -p "$(echo -e "${YELLOW}  Ready to re-run checks? [Enter/q] (Enter=continue, q=abort): ${RESET}")" manual_ready
+        [[ "${manual_ready:-}" =~ ^[qQ]$ ]] && { warn "Workflow aborted"; exit 0; }
+        _rerun_checks_and_review
+        ;;
+      q|Q)
+        warn "Workflow aborted"
+        exit 0
+        ;;
+      *)
+        warn "Invalid input — use y / f / e / n / q"
+        ;;
+    esac
+  done
+}
