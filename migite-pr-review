@@ -5,9 +5,9 @@
 #   migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--jira <key>] [--output <file>]
 #
 # Examples:
-#   migite-pr-review --branch feature/BB-1234-add-pdf-export
-#   migite-pr-review --branch feature/BB-1234 --jira BB-1234
-#   migite-pr-review --branch feature/BB-1234 --jira https://yourcompany.atlassian.net/browse/BB-1234
+#   migite-pr-review --branch feature/<jira-ticket-id>-add-pdf-export
+#   migite-pr-review --branch feature/<jira-ticket-id> --jira <jira-ticket-id>
+#   migite-pr-review --branch feature/<jira-ticket-id> --jira https://yourcompany.atlassian.net/browse/<jira-ticket-id>
 #   migite-pr-review --branch alex/fix-n-plus-one --base develop
 #   migite-pr-review --branch feature/big-refactor --skip-tests
 

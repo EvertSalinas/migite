@@ -1,0 +1,497 @@
+# `migite` — workflow orchestrator
+
+Full reference for the main `migite` command: usage modes, phases, output files, the commit gate,
+the Testing Plan requirement, and resuming a run. See the [README](../README.md) for
+installation, configuration, and a quickstart.
+
+## Contents
+
+- [`--type` values](#type-values)
+- [Amend mode](#amend-mode)
+- [Intake mode](#intake-mode)
+- [Blueprint mode](#blueprint-mode)
+- [Audit mode](#audit-mode)
+- [Phases](#phases)
+  - [Phase 1 — Plan](#phase-1-plan)
+  - [Phase 1.5 — TDD specs](#phase-1-5-tdd)
+  - [Phase 2 — Implement](#phase-2-implement)
+  - [Phase 2.5 — Auto-heal loop](#phase-2-5-heal)
+  - [Which files get linted and tested](#lint-test-selection)
+  - [Phase 3 — Review](#phase-3-review)
+  - [Phase 3.5 — Knowledge capture](#phase-3-5-knowledge)
+  - [Phase 4 — PR description](#phase-4-pr-description)
+  - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
+- [Active memory injection](#active-memory-injection)
+- [tmux integration](#tmux-integration)
+- [Output files](#output-files)
+- [The commit gate banner](#commit-gate-banner)
+- [Testing Plan requirement](#testing-plan-requirement)
+- [Resuming a run](#resuming-a-run)
+
+---
+
+<a id="type-values"></a>
+### `--type` values
+
+| Value | When to use |
+|-------|-------------|
+| `feature` | New behaviour, new endpoint, new model |
+| `bug` | Fix a regression or reported defect |
+| `refactor` | Internal restructure, no behaviour change |
+| `spike` | Investigation or proof of concept |
+| `config` | Infrastructure, environment, or gem changes |
+
+<a id="amend-mode"></a>
+### Amend mode (`--amend`)
+
+For feedback that arrives **after** implementation — PR comments, QA bugs, scope changes. A fresh
+`--type bug` run would spend ~10 model calls re-planning from scratch and land in a new vault
+directory, disconnected from the original work. `--amend` costs **one call** and stays in place.
+
+```bash
+# Inline feedback
+migite --amend "reviewer says the translator must be idempotent on retry"
+
+# From a file (QA notes, pasted PR comments)
+migite --amend-file ./qa-notes.md
+
+# No feedback given — opens $EDITOR
+migite --amend
+
+# Target a specific ticket instead of auto-detecting
+migite --amend "fix the retry path" --jira <jira-ticket-id>
+```
+
+**How the task is found**, in order:
+
+| Step | Behaviour |
+|------|-----------|
+| `--jira <jira-ticket-id>` | Uses that ticket's vault directory |
+| Branch name | Extracts a ticket key from the branch (`feature/<jira-ticket-id>-add-pdf` → the lowercased slug) |
+| Picker | Lists the 10 most recently modified task directories for this repo |
+
+**What it does differently from a normal run:**
+
+```
+skip intake        (reuses the original)
+skip 7 explorers   (the changed files are already in your diff)
+skip synthesis / architecture critic / refine
+      │
+ONE Sonnet call ── reads plan.md + implementation.md + review.md
+                   + git diff <base> + knowledge.md + your feedback
+      │
+amendment-NN.md → gate [y/f/e/q]
+      │ (on y)
+regenerate testing-plan.md in full — one more Sonnet call
+      │
+Phase 2 implement → 2.5 heal → 3 review → commit gate → 3.5 knowledge → 4 PR description
+```
+
+The gate itself:
+
+```
+Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly, q=abort):
+```
+
+| Key | Action |
+|-----|--------|
+| `y` | Approve — regenerates `testing-plan.md` in full, then continues to implementation |
+| `f` | Feedback — one more `claude --print` call revises the amendment document in place |
+| `e` | Edit — opens `amendment-NN.md` directly in `$EDITOR` |
+| `q` | Abort the workflow |
+
+Key properties:
+
+- **`plan.md` is never overwritten.** Amendments accumulate as `amendment-01.md`, `amendment-02.md` beside the original plan, so the record of what changed and why lives with the work.
+- **`testing-plan.md` is overwritten in full on approval**, unlike `plan.md` — it reflects current, post-amendment behaviour, not history. See [Testing Plan requirement](#testing-plan-requirement).
+- **Grounded in the diff, not a re-exploration.** The amendment prompt sees the actual built code, so it can say "this already handles that, only the retry path changes" instead of re-planning greenfield.
+- **Implementation is scoped to the amendment.** The implement prompt marks the original plan as already built and enforces the amendment's `Out of scope` section.
+- **The PR description absorbs every amendment**, so it reflects the final delivered scope rather than only the original plan.
+- If the feedback turns out to be already satisfied by the current code, the amendment says so and leaves `Scope` empty rather than inventing work.
+
+Note that migite never runs `git commit` itself — the commit gate is an approval step. Each amendment is therefore naturally its own commit, made by you after the gate.
+
+<a id="intake-mode"></a>
+### Intake mode (`--intake`)
+
+`migite-explore --intakes` and `migite-blueprint` both emit ready-made intake files. Pass one to
+`migite` and it skips the type picker and the template editor entirely:
+
+```bash
+migite --intake ./exploration-.../intake-01-extract-provider-adapter.md
+migite ./intake-01-foundation.md      # positional .md file is auto-detected
+```
+
+| Derived from the file | Behaviour |
+|---|---|
+| `Title:` line | Determines the vault/scratchpad slug |
+| `Type:` line | Sets the task type — no picker prompt |
+| Missing `Title:` | Warns, falls back to the filename for the slug |
+| Invalid `Type:` | Warns, falls back to the interactive picker |
+
+An explicit `--type` always wins over the file's `Type:` line. After loading, migite shows the
+first 30 lines and opens a `[y/e/q]` confirm-or-edit prompt before planning starts.
+
+A positional argument is only treated as an intake when it is an **existing** file ending in `.md`.
+A plain description like `"fix N+1 on district index"` is unaffected, and so is a non-existent
+path like `notes.md`, which stays a task description.
+
+**Adding details the file doesn't cover.** Right after the confirm-or-edit gate, migite always asks:
+
+```
+Add supplementary details in a separate task.md before planning? [y/N]:
+```
+
+Answering `y` opens `$EDITOR` on a blank scratch file; whatever you write is saved as `task.md`
+next to `intake.md` in the vault. It's deliberately a **separate file, never merged into the
+passed intake** — the same reasoning as amendments staying beside `plan.md` instead of rewriting
+it: the original `--intake` file stays exactly what `migite-explore`/`migite-blueprint` produced
+(or whatever you were handed), and `task.md` is clearly your own addition on top of it.
+`migite-plan` reads both and treats `task.md` as authoritative context for anything it adds.
+Leaving the editor empty (or answering anything but `y`) skips it — no `task.md` is created.
+
+<a id="blueprint-mode"></a>
+### Blueprint mode (`--blueprint`)
+
+When you have a `migite-blueprint` output, pass it to `migite` with `--blueprint` to give the planner pre-decided architectural context:
+
+```bash
+migite --jira <jira-ticket-id> --blueprint ~/dev-log/Personal/my-project/blueprint/blueprint.md
+```
+
+The blueprint is injected into Phase 1 planning as settled decisions — the 7 parallel explorers still run, but `synthesize_plan` and the architecture critic treat the blueprint's domain model, API surface, and tech decisions as constraints rather than open questions.
+
+<a id="audit-mode"></a>
+### Audit mode (`--audit`)
+
+When `--audit <path>` is the primary input (no task description or Jira ticket), migite skips the type selector and intake editor entirely. It auto-generates an intake from the audit report and shows a quick `[y/e/q]` confirm-or-edit prompt before planning starts.
+
+The audit content is injected into both `synthesize_plan` and `run_architecture_critic`, so the planner and critic see the raw findings alongside the intake. The task type defaults to `refactor`.
+
+Critical findings (🔴) and warnings (🟡) are always preserved in full when the audit report is injected — they are extracted first before any character-limit trimming, so a large audit never silently drops the most important lines.
+
+```
+migite --audit <path>
+  → auto-sets task = "audit-remediation"
+  → auto-sets type = refactor
+  → generates intake from audit findings
+  → [y/e/q] — proceed / edit / abort
+  → planning starts immediately
+```
+
+---
+
+<a id="phases"></a>
+## Phases
+
+<a id="phase-1-plan"></a>
+### Phase 1 — Plan (LangGraph)
+
+`migite-plan` runs autonomously as a LangGraph graph:
+
+```
+load_context
+    │
+    ├── explore: models
+    ├── explore: controllers
+    ├── explore: services
+    ├── explore: serializers        (all 7 run in parallel)
+    ├── explore: specs
+    ├── explore: migrations + schema
+    └── explore: routes + config
+         │
+    synthesize_plan   (Sonnet 5)
+         │
+    architecture_critic   (Opus 5 — highest-stakes call, one per run)
+         │
+    refine_plan   (Sonnet 5, incorporates critic findings)
+         │
+    generate_testing_plan   (Sonnet 5, standalone QA/dev verification doc)
+         │
+    write_outputs   → plan.md + architecture-critic.md + testing-plan.md + sentinel
+```
+
+Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>`), then scores existing files by keyword relevance from the intake. Plan synthesis and refinement use Sonnet 5. The architecture critic uses Opus 5 — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation. `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](#testing-plan-requirement) for why.
+
+After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. The gate then opens:
+
+```
+Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort):
+```
+
+| Key | Action |
+|-----|--------|
+| `y` | Approve the plan and continue |
+| `f` | Give feedback — migite prompts for text, refines the plan in place with one `claude --print` call (Sonnet 5), shows a colored diff of what changed, then re-opens the gate |
+| `e` | Edit — opens `plan.md` directly in `$EDITOR` (default: vim) with zero latency |
+| `n` | Reject — re-runs the full `migite-plan` agent from scratch (fresh exploration + synthesis + critic), shows a colored diff after |
+| `q` | Abort the workflow |
+
+`f` is right when the plan needs a targeted AI correction. `e` is right when the change is surgical and you know exactly what to write. `n` is for when the exploration found the wrong files or the structure is fundamentally off. After `f` or `n`, a colored unified diff highlights what changed so you can verify the delta at a glance.
+
+<a id="phase-1-5-tdd"></a>
+### Phase 1.5 — TDD specs (opt-in, interactive)
+
+After the plan gate, migite asks whether to write spec files before implementation. If yes:
+
+1. Claude writes only RSpec spec files (red phase — no implementation code)
+2. Migite confirms specs fail (`bundle exec rspec` on the new files)
+3. Implementation proceeds with passing specs as the target
+
+<a id="phase-2-implement"></a>
+### Phase 2 — Implement (interactive)
+
+Claude implements the approved plan in an interactive session. Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written.
+
+**Staged implementation (`--staged`):** If you pass `--staged`, migite parses the `### ` sub-sections from the plan's Scope section and treats each as an implementation layer. Claude runs one interactive session per layer. Between layers, migite shows a `git diff --stat` and opens a checkpoint gate:
+
+```
+STAGE CHECKPOINT: 2/4 — controllers
+Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=abort):
+```
+
+| Key | Action |
+|-----|--------|
+| `c` | Continue to the next layer |
+| `r` | Redo this layer |
+| `e` | Type extra instructions for the *next* layer's prompt (not `$EDITOR` — a typed note, appended before the next session starts) |
+| `q` | Abort — migite never runs `git commit` itself, so any uncommitted work just stays in your working tree |
+
+Use `--staged` for large tasks where you want to verify correctness at each architectural boundary before proceeding.
+
+**Known limitations in the current implementation:** `r` decrements the stage counter, but the underlying loop (a bash `for` over the stage list) always advances to the next array element regardless — it doesn't actually re-run the current layer's session yet. And the extra instructions typed under `e` are saved to a log file but nothing feeds them back into the next stage's prompt yet. Both are open bugs, not intentional behavior.
+
+No gate after Phase 2 — migite moves directly to the heal loop.
+
+<a id="phase-2-5-heal"></a>
+### Phase 2.5 — Auto-heal loop
+
+After implementation, migite runs rubocop and rspec automatically. If failures exist:
+
+1. Claude fixes them non-interactively (`claude --print --permission-mode bypassPermissions`)
+2. Checks re-run
+3. Repeats up to `MAX_HEAL_ATTEMPTS` (default 3)
+
+Phase 3 always runs its own authoritative rubocop + rspec pass regardless — the heal loop delivers clean inputs to the reviewer, it doesn't skip the review.
+
+<a id="lint-test-selection"></a>
+### Which files get linted and tested
+
+Every phase computes its own changed-file list from `git diff <base branch> --name-only`, filtered by extension (`\.rb$`, `_spec\.rb$`) — there isn't one shared helper, and the phases aren't fully consistent with each other:
+
+| Phase | Diff filter | No-spec-files behaviour |
+|-------|-------------|--------------------------|
+| Phase 1.5 TDD red-state check (`plan.sh`) | `--diff-filter=ACMR` (deletions excluded) | skips the check, warns |
+| Phase 2.5 auto-heal loop (`implement.sh`) | `--diff-filter=ACMR` (deletions excluded) | skips rspec and says so |
+| Phase 3 review + commit-gate re-checks (`review.sh`) | `--diff-filter=ACMR` (deletions excluded) | **falls back to the full suite** |
+
+| Rule | Why |
+|------|-----|
+| Base branch is auto-detected | `origin/HEAD`, then `main` / `master` / `develop`. Hardcoding `main` silently produced empty diffs on master-based repos, so rubocop was skipped for the wrong reason |
+| Deleted files excluded (`ACMR`) everywhere | Stale paths caused rubocop `No such file or directory` and rspec load errors — Phase 3 didn't apply this filter until it was caught and fixed |
+| `bundle exec` runs from the app's actual root, not necessarily the repo root | Bundler only searches upward from cwd for a Gemfile. When the Ruby app lives one level down (e.g. a `rails-app/` subdirectory alongside other tooling), `detect_app_root` (`helpers.sh`) finds it and every `bundle_exec` call `cd`s there first — otherwise `git diff`'s repo-root-relative paths get re-resolved against the wrong directory and rubocop reports files missing |
+
+Untracked (never-`git add`ed) files are **not** included in any of these diffs — there's no `git ls-files --others` call anywhere in migite. A brand-new file that hasn't been staged yet is invisible to rubocop/rspec/review until you `git add` it.
+
+Phase 3 also runs a separate, different check: any file in the diff whose basename doesn't appear anywhere in `implementation.md` gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them — a diff-vs-notes cross-reference, not an untracked-file check.
+
+**Known inconsistency:** Phase 2.5 skips rspec (and says so) when no spec files changed, but Phase 3's review and its commit-gate re-checks still fall back to running the full suite in that case — the older behavior Phase 2.5 was specifically changed to avoid, for the same reason (it requires a live DB and verifies nothing relevant to the diff). Phase 3 hasn't been brought in line with that fix yet.
+
+<a id="phase-3-review"></a>
+### Phase 3 — Review (LangGraph)
+
+`migite-review` runs after the authoritative rubocop and rspec pass:
+
+```
+load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, testing-plan.md)
+    │
+    ├── review: correctness      (logic vs plan, scope creep, acceptance criteria)
+    ├── review: security         (auth, N+1, SQL injection, raw params, scopes)
+    ├── review: test_coverage    (unit + request specs, factories, context wording)
+    └── review: testing_plan     (testing-plan.md completeness — see below)
+         │
+    synthesize_verdict   → de-duplicates findings → READY TO COMMIT | NEEDS FIXES
+         │
+    write_review   → review.md + sentinel
+```
+
+All four reviewers use Sonnet 5 and run in parallel; `synthesize_verdict` uses Opus 5. The commit gate then opens with a context banner showing the verdict, spec failures, and rubocop offense count.
+
+```
+Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort):
+```
+
+| Key | Action |
+|-----|--------|
+| `y` | Approve — continue to Phase 3.5 |
+| `f` | Claude fixes — opens an interactive session with the full review findings + original plan as context. Claude addresses every Critical and Warning. On `/exit`, migite re-runs rubocop + rspec + `migite-review` automatically and shows the gate again |
+| `e` | Edit — opens `review.md` directly in `$EDITOR` so you can annotate, dismiss, or restructure findings before deciding |
+| `n` | Manual fix — migite pauses and waits for you to press Enter when ready, then re-runs checks and re-review |
+| `q` | Abort the workflow |
+
+Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-run the full review afterwards through the same helper — there's no cap on how many times you can loop through this, and no confirmation beyond the single `y` keypress required to approve over a `NEEDS FIXES` verdict or remaining rubocop offenses. You always get a fresh verdict before committing if you choose `f` or `n`, but nothing currently stops `y` from being pressed on the first pass regardless of what the banner says.
+
+<a id="phase-3-5-knowledge"></a>
+### Phase 3.5 — Knowledge capture
+
+A background `claude --print` pass extracts 1–3 reusable bullets from the completed run (plan + implementation + review) and appends them to `knowledge.md`. Entries link back to the review via Obsidian wikilinks (harmless plain text if you're not using Obsidian).
+
+Only domain-level insights are captured: business logic clarifications, non-obvious constraints, architectural decisions. Rails conventions and testing patterns are excluded.
+
+<a id="phase-4-pr-description"></a>
+### Phase 4 — PR description (interactive)
+
+Claude generates a PR description from the plan and review. Output goes to `pr-description.md` — ready to paste into GitHub.
+
+<a id="phase-4-5-self-improvement"></a>
+### Phase 4.5 — Self-improvement
+
+A background `claude --print` pass reviews the full run (including the migite script itself) and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run — no generic suggestions.
+
+---
+
+<a id="active-memory-injection"></a>
+## Active memory injection
+
+Before Phase 1 (Plan), Phase 1.5 (TDD specs), and Phase 2 (Implement), migite reads `knowledge.md` from the vault and injects it into the prompt as:
+
+```
+## Repository conventions and past lessons
+<contents of knowledge.md>
+```
+
+This means every new task starts with the accumulated lessons from all previous tasks in the same repo. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
+
+---
+
+<a id="tmux-integration"></a>
+## tmux integration
+
+If migite is running inside a tmux session (`$TMUX` is set), every interactive phase and every LangGraph agent opens in a **split pane below the current pane** (`split-window -v`) and signals back to the orchestrator via `tmux wait-for` when done. You get a macOS notification and focus returns to the migite pane automatically.
+
+If you close a pane before the phase completes, migite detects this and aborts with an error rather than hanging indefinitely.
+
+Outside tmux, all phases run inline in the current terminal.
+
+---
+
+<a id="output-files"></a>
+## Output files
+
+### Vault (`~/dev-log/<org>/<repo>/<ticket>/`)
+
+| File | Contents |
+|------|----------|
+| `intake.md` | Filled-in task intake |
+| `task.md` | Optional — supplementary details added via [Intake mode](#intake-mode)'s prompt, kept separate from `intake.md` |
+| `plan.md` | Implementation plan |
+| `amendment-NN.md` | Scoped delta from each `--amend` run — original plan stays untouched |
+| `testing-plan.md` | QA/dev verification steps — seed script, curls, teardown. Regenerated in full on every `--amend`, unlike `plan.md` |
+| `architecture-critic.md` | Pre-implementation risk findings |
+| `implementation.md` | Notes from the implementation session |
+| `review.md` | Code review verdict and findings |
+| `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass |
+| `pr-description.md` | Ready to paste into GitHub |
+
+See [Vault structure](./vault-structure.md) for the full directory tree.
+
+### Scratchpad (`<repo-root>/scratchpad/<ticket>/`)
+
+Live copies synced during the run. Safe to delete after merging.
+
+| Extra files | Purpose |
+|-------------|---------|
+| `.plan.done` | Sentinel written by migite-plan on success |
+| `.review.done` | Sentinel written by migite-review on success |
+
+### Logs (`~/.dev-workflow/logs/`)
+
+| File | Contents |
+|------|----------|
+| `<ts>-<ticket>-rubocop.txt` | Pre-review rubocop output |
+| `<ts>-<ticket>-rubocop-final.txt` | Post-review rubocop output |
+| `<ts>-<ticket>-rspec.txt` | Rspec output |
+| `<ts>-<ticket>-heal-rubocop.txt` | Heal loop rubocop |
+| `<ts>-<ticket>-heal-rspec.txt` | Heal loop rspec |
+| `<ts>-<ticket>-heal-fix-N.txt` | Claude's heal output per attempt |
+| `<ts>-<ticket>-critic.txt` | Architecture critic raw output |
+| `<ts>-<ticket>-knowledge.txt` | Raw knowledge extraction |
+| `<ts>-<ticket>-improvements.txt` | Raw self-improvement notes |
+| `<ts>-prompt-<label>.txt` | Every prompt sent to interactive phases |
+| `<ts>-wrapper-<label>.sh` | tmux wrapper scripts |
+
+---
+
+<a id="commit-gate-banner"></a>
+## The commit gate banner
+
+```
+── Commit context ──────────────────────────
+  ⚠ Ruby version error — bundle exec could not run. Fix .tool-versions before approving.
+  Verdict: NEEDS FIXES
+  Specs:   ⚠ 1 failure — check /path/to/rspec.txt before approving
+  Rubocop: 3 offense(s) remain
+────────────────────────────────────────────
+```
+
+| Signal | Source |
+|--------|--------|
+| Tooling error | `No version is set for command`, `Bundler::GitError`, `not yet checked out`, or a missing gem in either log — the tool never ran, so all results below are untrustworthy |
+| Verdict | Extracted from review.md: `NEEDS FIXES` / `APPROVED` / `PASS` / `READY TO COMMIT` |
+| Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
+| Rubocop state | Offense count from the post-review re-run |
+
+| Key | Action |
+|-----|--------|
+| `y` | Commit — continue to Phase 3.5, even if the banner above shows blockers. There's no confirmation step beyond the keypress itself |
+| `f` | Claude fixes the findings in an interactive session, then checks + review re-run automatically |
+| `e` | Open `review.md` in `$EDITOR` to read and annotate before deciding |
+| `n` | Manual fix — pauses for you, then re-runs checks + review when you're ready |
+| `q` | Abort |
+
+---
+
+<a id="testing-plan-requirement"></a>
+## Testing Plan requirement
+
+The QA/dev verification steps — seed script, curls or browser actions, teardown — live in their own `testing-plan.md`, not inside `plan.md`. This is deliberate: `plan.md` is history (amendments accumulate beside it, never overwriting it), but the testing plan describes how to verify the code **as it exists right now**. If it lived inside `plan.md`, every amendment that changed behaviour would leave it silently describing the pre-amendment version.
+
+`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan. Every `--amend` run regenerates it **in full** (not appended) from the current testing plan + the new amendment + the diff, so a step an amendment invalidates gets rewritten or dropped instead of lingering. `migite-review`'s `testing_plan` specialist reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
+
+Required shape:
+
+````markdown
+# Testing Plan
+
+### Prerequisites — seed records (Rails console)
+```ruby
+district = District.find_by!(subdomain: "qa-district")
+user = User.create!(email: "test.user@example.com", ...)
+puts "Seeded: user=#{user.id}"
+```
+
+### Verification steps
+1. Hit the endpoint: `curl -X POST https://localhost:3000/api/v1/... | jq`
+2. Check the log: `grep "EventName" log/development.log | tail -5`
+
+### Teardown
+```ruby
+User.find_by(email: "test.user@example.com")&.destroy
+```
+````
+
+Only generic emails (`test.user@example.com`, `admin.qa@example.com`) — never real addresses.
+
+One gap worth knowing: regeneration only happens on `--amend` (and on a full plan `n`-redo at the Phase 1 gate). The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
+
+---
+
+<a id="resuming-a-run"></a>
+## Resuming a run
+
+| State | Behaviour |
+|-------|-----------|
+| `scratchpad/<ticket>/intake.md` exists | Reused — no template copy |
+| `plan.md` exists in vault | Offers `[u]se existing` or `[r]edo` |
+| `.plan.done` sentinel missing after agent | Hard error on the initial plan generation; only a warning (gate still opens) if it's missing after an `n`-redo from the plan gate |
+| `.review.done` sentinel missing after agent | Warning — review output may be incomplete |
