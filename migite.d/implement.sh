@@ -160,6 +160,7 @@ run_auto_heal_loop() {
     run_rubocop_check "$HEAL_CHANGED_RUBY" "$HEAL_RUBOCOP_LOG" true || true
     RUBOCOP_REMAINING=false
     grep -qE '[1-9][0-9]* offense' "$HEAL_RUBOCOP_LOG" 2>/dev/null && RUBOCOP_REMAINING=true
+    return 0
   }
 
   local RUBOCOP_REMAINING=false
