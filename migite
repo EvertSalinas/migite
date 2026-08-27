@@ -49,6 +49,7 @@ require_cmd bundle
 # ── Parse args ────────────────────────────────────────────────────────────────
 TASK=""
 JIRA_TICKET=""
+JIRA_URL=""
 TASK_TYPE=""
 AUDIT_FILE=""
 BLUEPRINT_FILE=""
@@ -110,11 +111,12 @@ while [[ $# -gt 0 ]]; do
       JIRA_TICKET="${2:-}"
       [[ -z "$JIRA_TICKET" ]] && error "Provide a Jira ticket ID after --jira"
       if echo "$JIRA_TICKET" | grep -qE 'https?://.*atlassian\.net/browse/'; then
+        JIRA_URL="$JIRA_TICKET"
         JIRA_TICKET=$(echo "$JIRA_TICKET" | grep -oE '[A-Za-z]+-[0-9]+' | tail -1 | tr '[:lower:]' '[:upper:]' || true)
         [[ -z "$JIRA_TICKET" ]] && error "Could not extract Jira ticket ID from URL"
         log "Extracted Jira key from URL: $JIRA_TICKET"
       fi
-      TASK="Jira ticket: $JIRA_TICKET — please fetch context from the codebase"
+      TASK="$JIRA_TICKET"
       log "Jira mode: $JIRA_TICKET"
       shift 2
       ;;
@@ -149,9 +151,10 @@ fi
 if [[ -z "$JIRA_TICKET" && -n "$TASK" ]] && echo "$TASK" | grep -qE 'https?://.*atlassian\.net/browse/'; then
   EXTRACTED_KEY=$(echo "$TASK" | grep -oE '[A-Z]+-[0-9]+' | head -1 || true)
   if [[ -n "$EXTRACTED_KEY" ]]; then
+    JIRA_URL="$TASK"
     JIRA_TICKET="$EXTRACTED_KEY"
     log "Extracted Jira key from URL: $JIRA_TICKET"
-    TASK="Jira ticket: $JIRA_TICKET — please fetch context from the codebase"
+    TASK="$JIRA_TICKET"
   fi
 fi
 
@@ -200,11 +203,11 @@ run_deliver
 echo ""
 success "Workflow complete."
 echo ""
-echo -e "  Vault:      ${CYAN}$TASK_DIR${RESET}"
 echo -e "  Scratchpad: ${CYAN}$SCRATCHPAD_DIR${RESET}"
-echo -e "    intake.md         → task intake"
-echo -e "    plan.md           → planning output"
-echo -e "    implementation.md          → implementation notes"
-echo -e "    review.md         → review verdict"
-echo -e "    pr-description.md → ready to paste into GitHub"
+echo -e "    intake.md          → task intake"
+echo -e "    plan.md            → planning output"
+echo -e "    implementation.md  → implementation notes"
+echo -e "    review.md          → review verdict"
+echo -e "    pr-description.md  → ready to paste into GitHub"
+echo -e "  Vault (read-only mirror): ${CYAN}$TASK_DIR${RESET}"
 echo ""

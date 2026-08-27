@@ -133,11 +133,25 @@ def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: 
 
     listing = "\n".join(f.replace(f"{repo_root}/", "") for f in all_files) or "(none)"
 
-    # Score by keyword hits in path
-    scored = sorted(
-        ((sum(1 for kw in keywords if kw in f.replace(repo_root, "").lower()), f) for f in all_files),
-        reverse=True,
-    )
+    # Read once, reused for both scoring below and the excerpt loop further down
+    contents: dict[str, str] = {}
+    for f in all_files:
+        try:
+            contents[f] = Path(f).read_text(errors="replace")[:2500]
+        except Exception:
+            contents[f] = ""
+
+    # Score by keyword hits in path and in content. Path hits are weighted higher —
+    # a deliberately-named file ("invoice_service.rb") is a stronger relevance signal
+    # than an incidental keyword mention — but content hits catch relevant files whose
+    # names don't reflect the intake's vocabulary, which path-only scoring missed.
+    def score(f: str) -> int:
+        path_hits = sum(1 for kw in keywords if kw in f.replace(repo_root, "").lower())
+        body = contents[f].lower()
+        content_hits = sum(body.count(kw) for kw in keywords)
+        return path_hits * 5 + content_hits
+
+    scored = sorted(((score(f), f) for f in all_files), reverse=True)
 
     # Read: changed files first, then top-scored
     to_read: list[str] = []
@@ -155,16 +169,18 @@ def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: 
     parts = [f"## {area} — file listing\n{listing}\n\n## Relevant file contents"]
     total = len(parts[0])
     for f in to_read[:14]:
-        try:
-            content = Path(f).read_text(errors="replace")[:2500]
-            rel = f.replace(f"{repo_root}/", "")
-            chunk = f"\n### {rel}\n```ruby\n{content}\n```"
-            if total + len(chunk) > 14000:
-                break
-            parts.append(chunk)
-            total += len(chunk)
-        except Exception:
-            pass
+        content = contents.get(f)
+        if content is None:
+            try:
+                content = Path(f).read_text(errors="replace")[:2500]
+            except Exception:
+                continue
+        rel = f.replace(f"{repo_root}/", "")
+        chunk = f"\n### {rel}\n```ruby\n{content}\n```"
+        if total + len(chunk) > 14000:
+            break
+        parts.append(chunk)
+        total += len(chunk)
 
     return "\n".join(parts)
 
