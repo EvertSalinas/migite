@@ -3,14 +3,16 @@
 # the commit gate.
 #
 # Sourced by migite. run_review expects PLAN_FILE, IMPLEMENTATION_FILE,
-# REVIEW_FILE, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME to be set, and
-# sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
+# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME to be
+# set, and sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
 # RUBY_VERSION_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
 # self-improvement prompt and by show_commit_context.
 
 run_review() {
   echo ""
   log "Phase 3/4 — Reviewing"
+
+  resume_from_vault "$REVIEW_FILE" "$REVIEW_VAULT"
 
   echo ""
   log "Running rubocop on changed Ruby files..."
@@ -90,7 +92,7 @@ run_review() {
   rm -f "$REVIEW_SENTINEL"
   spawn_langgraph "Reviewing" "review" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
   [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
-  sync_artifact "$REVIEW_FILE" "review.md"
+  sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
   success "Review written to $REVIEW_FILE"
 
   # migite-review only reads — it doesn't touch files — so the rubocop sweep
@@ -123,7 +125,7 @@ run_review() {
     rm -f "$REVIEW_SENTINEL"
     spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
-    sync_artifact "$REVIEW_FILE" "review.md"
+    sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
     # Reuse the sweep above instead of re-running rubocop a second time.
     RUBOCOP_FINAL_LOG="$RUBOCOP_LOG"
     RUBOCOP_FINAL_OFFENSES=0
@@ -143,13 +145,13 @@ run_review() {
       e|E)
         # Direct edit of review.md — annotate, strike findings, add context
         ${EDITOR:-vim} "$REVIEW_FILE"
-        cp "$REVIEW_FILE" "$SCRATCHPAD_DIR/review.md"
+        sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
         ;;
       f|F)
         # Build a fix prompt from the current review findings
         local REVIEW_CONTENT
         REVIEW_CONTENT=$(cat "$REVIEW_FILE" 2>/dev/null || echo "(review not found)")
-        local FIX_IMPL_FILE="$TASK_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
+        local FIX_IMPL_FILE="$SCRATCHPAD_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
         local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
 
 ## Original plan (for context)
@@ -165,7 +167,7 @@ ${REVIEW_CONTENT}
 
         log "Opening Claude to fix review findings..."
         run_phase "Fixing review findings" "$FIX_IMPL_FILE" "$FIX_PROMPT"
-        stamp_file "$FIX_IMPL_FILE"
+        sync_artifact "$FIX_IMPL_FILE" "$TASK_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
         _rerun_checks_and_review
         ;;
       n|N)

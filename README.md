@@ -19,6 +19,7 @@ Migite is a personal agentic dev workflow orchestrator. It wraps Claude around e
 - [Usage](#usage)
   - [`--type` values](#type-values)
 - [Documentation](#documentation)
+- [FAQ](#faq)
 - [Roadmap](#roadmap)
 
 ---
@@ -96,6 +97,9 @@ migite/                   ← wherever you clone this repo
 ├── migite-pr-review.py   ← LangGraph PR review agent (Python)
 ├── migite_paths.py       ← shared run-directory resolver (id/name → vault folder)
 ├── migite-improvements.md ← self-improvement notes appended after each run
+├── templates/            ← intake templates + the PR-description prompt, read by migite.d/plan.sh and deliver.sh
+│   ├── feature.md, bug.md, refactor.md, spike.md, config.md  ← intake templates ($TASK_TYPE.md)
+│   └── commit.md         ← PR-description generation prompt (Phase 4)
 ├── docs/                 ← deep-dive reference docs (phases, standalone tools, vault, troubleshooting)
 └── README.md
 ```
@@ -124,8 +128,8 @@ migite/                   ← wherever you clone this repo
 ### Files expected
 
 - Vault root: `~/dev-log/` — plain markdown files, created automatically on first run. No note-taking app required; point `DEV_LOG_BASE` at an existing Obsidian vault (or anywhere else) if you have one and want the `[[wikilinks]]` to resolve.
-- Intake templates: `~/.claude/templates/{feature,bug,refactor,spike,config}.md`
-- Phase prompts: `~/.claude/commands/{plan,implement,review,commit,architecture_critic}.md`
+- Intake templates and the PR-description prompt ship in this repo's [`templates/`](./templates) directory — `migite.d/plan.sh` and `migite.d/deliver.sh` read them via `$MIGITE_HOME`, no `~/.claude/` setup required for these.
+- Remaining phase prompts: `~/.claude/commands/{plan,implement,review,architecture_critic}.md`
 
 ---
 
@@ -261,6 +265,44 @@ For amend mode, intake mode, blueprint mode, audit mode, the full phase-by-phase
 | [docs/internals.md](./docs/internals.md) | The internal `migite-plan` / `migite-review` LangGraph scripts `migite` calls directly |
 | [docs/vault-structure.md](./docs/vault-structure.md) | Full `~/dev-log/` directory tree and org resolution |
 | [docs/troubleshooting.md](./docs/troubleshooting.md) | Permission failures, tooling preflight, review loops |
+
+---
+
+<a id="faq"></a>
+## FAQ
+
+**Does `--jira` always open the intake editor?**
+No. It opens `$EDITOR` on the template only on a first run with no existing intake. It silently reuses an existing `intake.md` for that ticket's slug when resuming, and skips the editor entirely in `--intake`/`--audit` mode (just a `[y/e/q]` confirm prompt instead).
+
+**Does `--jira` fetch the ticket's content automatically?**
+No. The ticket key/link is only used for slugging and pre-filling the intake's `Title`/`Jira` header fields. Every phase's `claude --print` call runs headless with no Atlassian/MCP tool access, so you still need to paste the ticket's description into the intake yourself.
+
+**Why do the planning explorers only read a handful of files instead of the whole codebase?**
+Cost and context budget — each of the 7 parallel Haiku explorers is capped at 14 files / 14,000 chars. They're not meant to be exhaustive; they exist to ground the plan in real file/method names before Phase 2 (an interactive session with full Read/Grep/Edit access) does the actual deep exploration during implementation.
+
+**Why does an explorer check `git diff <base_branch>` before any code has been written?**
+On a fresh branch it's empty and changes nothing. It matters when resuming a plan, running `--amend`, or if you'd already hand-edited files before invoking `migite` — in those cases, already-changed files are the strongest relevance signal and are always read first.
+
+**How are the remaining files ranked when there's no diff to fall back to?**
+By intake-keyword hits — weighted 5x for a match in the file's path (deliberate naming is a stronger signal) plus 1x per keyword occurrence found in the file's content, so relevant files with generic names still surface.
+
+**Does migite commit for me?**
+No — it never runs `git commit` at any point, including at the commit gate's `y` (approve). That just advances to Phase 3.5; the actual commit is always yours to make. See [The commit gate banner](./docs/migite.md#commit-gate-banner).
+
+**Do I need a separate Anthropic API key?**
+No. Every phase shells out to the `claude` CLI, which shares your existing Claude Code auth — see [Requirements](#requirements).
+
+**Does migite work on non-Ruby/Rails projects?**
+Not yet. `migite` itself hardcodes Ruby/Rails tooling (`bundle`, rubocop, rspec, `Gemfile` detection) throughout `migite.d/*.sh` — see [Roadmap](#roadmap). `migite-blueprint` is the exception; it already infers/accepts any stack for new-project definition.
+
+**Can I resume a run if I close the terminal or a phase fails partway through?**
+Yes — just re-run the same `migite --jira <ticket>` (or same task/intake) command. It picks up from whatever already exists: an existing `intake.md` is reused with no editor, an existing `plan.md` offers `[u]se existing` or `[r]edo`. See [Resuming a run](./docs/migite.md#resuming-a-run).
+
+**Why did my brand-new file get skipped by lint/tests/review?**
+Every phase scopes its file list from `git diff <base branch>`, which only sees tracked changes — a file that hasn't been `git add`ed yet is invisible to rubocop, rspec, and the reviewer until you stage it. See [Which files get linted and tested](./docs/migite.md#lint-test-selection).
+
+**Why does Phase 3 re-run rubocop/rspec when the Phase 2.5 auto-heal loop already got them passing?**
+The heal loop's job is to deliver clean input to the reviewer, not to replace the review — Phase 3 always runs its own authoritative pass regardless of heal-loop outcome, so a stale or partial heal never silently reaches the commit gate.
 
 ---
 

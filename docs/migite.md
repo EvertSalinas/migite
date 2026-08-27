@@ -41,6 +41,10 @@ installation, configuration, and a quickstart.
 | `spike` | Investigation or proof of concept |
 | `config` | Infrastructure, environment, or gem changes |
 
+Each value maps to an intake template shipped in this repo's [`templates/`](../templates) directory
+(`templates/<type>.md`) — `plan.sh` copies `$MIGITE_HOME/templates/${TASK_TYPE}.md` into the
+scratchpad before opening `$EDITOR` on it (see [Phase 1 — Plan](#phase-1-plan)).
+
 <a id="amend-mode"></a>
 ### Amend mode (`--amend`)
 
@@ -143,7 +147,7 @@ Add supplementary details in a separate task.md before planning? [y/N]:
 ```
 
 Answering `y` opens `$EDITOR` on a blank scratch file; whatever you write is saved as `task.md`
-next to `intake.md` in the vault. It's deliberately a **separate file, never merged into the
+next to `intake.md` in the scratchpad (mirrored to the vault). It's deliberately a **separate file, never merged into the
 passed intake** — the same reasoning as amendments staying beside `plan.md` instead of rewriting
 it: the original `--intake` file stays exactly what `migite-explore`/`migite-blueprint` produced
 (or whatever you were handed), and `task.md` is clearly your own addition on top of it.
@@ -211,7 +215,7 @@ load_context
     write_outputs   → plan.md + architecture-critic.md + testing-plan.md + sentinel
 ```
 
-Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>`), then scores existing files by keyword relevance from the intake. Plan synthesis and refinement use Sonnet 5. The architecture critic uses Opus 5 — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation. `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](#testing-plan-requirement) for why.
+Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis and refinement use Sonnet 5. The architecture critic uses Opus 5 — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation. `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](#testing-plan-requirement) for why.
 
 After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. The gate then opens:
 
@@ -341,7 +345,9 @@ Only domain-level insights are captured: business logic clarifications, non-obvi
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)
 
-Claude generates a PR description from the plan and review. Output goes to `pr-description.md` — ready to paste into GitHub.
+Claude generates a PR description from the plan and review, following the prompt/template in
+this repo's [`templates/commit.md`](../templates/commit.md) (`deliver.sh` reads it via
+`$MIGITE_HOME`). Output goes to `pr-description.md` — ready to paste into GitHub.
 
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement
@@ -378,7 +384,11 @@ Outside tmux, all phases run inline in the current terminal.
 <a id="output-files"></a>
 ## Output files
 
-### Vault (`~/dev-log/<org>/<repo>/<ticket>/`)
+### Scratchpad (`<repo-root>/scratchpad/<ticket>/`) — source of truth for the run
+
+Every phase reads and writes here directly. `sync_artifact()` (`migite.d/helpers.sh`) mirrors
+each file out to the vault immediately after every write, edit, refine, or redo, so the vault
+copy never lags behind.
 
 | File | Contents |
 |------|----------|
@@ -389,20 +399,27 @@ Outside tmux, all phases run inline in the current terminal.
 | `testing-plan.md` | QA/dev verification steps — seed script, curls, teardown. Regenerated in full on every `--amend`, unlike `plan.md` |
 | `architecture-critic.md` | Pre-implementation risk findings |
 | `implementation.md` | Notes from the implementation session |
+| `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
 | `review.md` | Code review verdict and findings |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass |
 | `pr-description.md` | Ready to paste into GitHub |
-
-See [Vault structure](./vault-structure.md) for the full directory tree.
-
-### Scratchpad (`<repo-root>/scratchpad/<ticket>/`)
-
-Live copies synced during the run. Safe to delete after merging.
-
-| Extra files | Purpose |
-|-------------|---------|
 | `.plan.done` | Sentinel written by migite-plan on success |
 | `.review.done` | Sentinel written by migite-review on success |
+| `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo |
+
+If the scratchpad copy of any of the above is missing (cleaned, fresh clone, different
+machine), `resume_from_vault()` pulls it back in from the vault mirror before the phase that
+needs it runs — see [Resuming a run](#resuming-a-run).
+
+### Vault (`~/dev-log/<org>/<repo>/<ticket>/`) — read-only mirror
+
+A synced copy of every file above (same names, same paths under `$TASK_DIR`), meant for
+reading/browsing later — e.g. in Obsidian — not for resuming or working from directly. Safe to
+delete the scratchpad copy after merging; the vault mirror keeps the durable record.
+`knowledge.md` (one file per repo, not per-ticket) and `migite-improvements.md` (in the migite
+tool's own repo) are the exceptions — they live in the vault only, with no scratchpad copy.
+
+See [Vault structure](./vault-structure.md) for the full directory tree.
 
 ### Logs (`~/.dev-workflow/logs/`)
 
@@ -492,6 +509,8 @@ One gap worth knowing: regeneration only happens on `--amend` (and on a full pla
 | State | Behaviour |
 |-------|-----------|
 | `scratchpad/<ticket>/intake.md` exists | Reused — no template copy |
-| `plan.md` exists in vault | Offers `[u]se existing` or `[r]edo` |
+| `scratchpad/<ticket>/plan.md` missing but vault has one | `resume_from_vault()` copies it into the scratchpad before the plan gate runs |
+| `plan.md` exists (scratchpad, after the above) | Offers `[u]se existing` or `[r]edo` |
 | `.plan.done` sentinel missing after agent | Hard error on the initial plan generation; only a warning (gate still opens) if it's missing after an `n`-redo from the plan gate |
 | `.review.done` sentinel missing after agent | Warning — review output may be incomplete |
+| `--amend` targeting a task whose scratchpad no longer exists | `resume_from_vault()` recovers `plan.md`/`implementation.md`/`review.md`/`testing-plan.md`/`intake.md` from the vault mirror before amend mode checks for an existing plan |

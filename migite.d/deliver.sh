@@ -73,7 +73,9 @@ End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
     echo "> Knowledge: [[${KNOWLEDGE_WIKILINK}]]"
   } >> "$REVIEW_FILE"
 
-  sync_artifact "$KNOWLEDGE_FILE" "knowledge.md"
+  # knowledge.md is repo-wide (one file per repo, not per-task) and lives in the
+  # vault only — no scratchpad copy to sync, just bump its frontmatter.
+  stamp_file "$KNOWLEDGE_FILE"
   success "Knowledge appended to $KNOWLEDGE_FILE"
   notify "Phase 3.5 — Knowledge captured" "Review the entry in Obsidian"
 
@@ -81,15 +83,22 @@ End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
   echo ""
   log "Phase 4/4 — Generating PR description"
 
-  local PR_FILE="$TASK_DIR/pr-description.md"
+  local PR_FILE="$SCRATCHPAD_DIR/pr-description.md"
   local TICKET_SUFFIX=""
   [[ -n "$JIRA_TICKET" ]] && TICKET_SUFFIX=" [$JIRA_TICKET]"
 
   # Amendments accumulate beside plan.md — fold every one into the PR so the description
-  # reflects the final delivered scope, not just the original plan
+  # reflects the final delivered scope, not just the original plan. Scanned from both
+  # scratchpad and vault (deduped by basename, scratchpad wins) so an older amendment
+  # that only survives in the vault mirror isn't silently dropped.
   local ALL_AMENDMENTS=""
-  for _amend_f in "$TASK_DIR"/amendment-*.md; do
+  local _seen_amendments=""
+  for _amend_f in "$SCRATCHPAD_DIR"/amendment-*.md "$TASK_DIR"/amendment-*.md; do
     [[ -f "$_amend_f" ]] || continue
+    local _amend_base
+    _amend_base=$(basename "$_amend_f")
+    [[ "$_seen_amendments" == *" $_amend_base "* ]] && continue
+    _seen_amendments="$_seen_amendments $_amend_base "
     ALL_AMENDMENTS="${ALL_AMENDMENTS}
 $(cat "$_amend_f")
 "
@@ -104,10 +113,10 @@ $(cat "$REVIEW_FILE")
 
 Jira ticket reference: $TICKET_SUFFIX
 
-$(cat "$HOME/.claude/commands/commit.md" | sed "s|\\[PR_FILE\\]|$PR_FILE|g")"
+$(cat "$MIGITE_HOME/templates/commit.md" | sed "s|\\[PR_FILE\\]|$PR_FILE|g")"
 
   run_phase "PR description" "$PR_FILE" "$PR_PROMPT"
-  sync_artifact "$PR_FILE" "pr-description.md"
+  sync_artifact "$PR_FILE" "$TASK_DIR/pr-description.md"
   notify "Phase 4 — PR description ready" "Check pr-description.md in Obsidian"
 
   # ── Phase 4.5: Self-improvement ───────────────────────────────────────────────

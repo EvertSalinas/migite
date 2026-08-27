@@ -4,9 +4,13 @@
 #
 # Sourced by migite. run_amend_mode expects BRANCH, ORG, REPO_NAME, DEV_LOG_BASE,
 # REPO_ROOT, JIRA_TICKET, AMEND_FEEDBACK, AMEND_FEEDBACK_FILE, DATE to be set,
-# and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, PLAN_FILE,
-# IMPLEMENTATION_FILE, REVIEW_FILE, AMEND_NUM, AMENDMENT_FILE, PLAN_GATE_ATTEMPTS
-# for the phases that run after it.
+# and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, PLAN_FILE, PLAN_VAULT,
+# IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT, REVIEW_FILE, REVIEW_VAULT,
+# TESTING_PLAN_FILE, TESTING_PLAN_VAULT, AMEND_NUM, AMENDMENT_FILE,
+# PLAN_GATE_ATTEMPTS for the phases that run after it. PLAN_FILE/IMPLEMENTATION_FILE/
+# REVIEW_FILE/TESTING_PLAN_FILE live in the scratchpad; resume_from_vault pulls them
+# back in from the vault mirror if the scratchpad copy is missing (e.g. amending an
+# older task on a fresh clone or after the branch's scratchpad was cleaned).
 
 run_amend_mode() {
   log "Amend mode — locating task to amend"
@@ -58,13 +62,22 @@ run_amend_mode() {
   SCRATCHPAD_DIR="$REPO_ROOT/scratchpad/$TASK_SLUG"
   mkdir -p "$SCRATCHPAD_DIR"
   INTAKE_FILE="$SCRATCHPAD_DIR/intake.md"
-  PLAN_FILE="$TASK_DIR/plan.md"
-  IMPLEMENTATION_FILE="$TASK_DIR/implementation.md"
-  REVIEW_FILE="$TASK_DIR/review.md"
-  TESTING_PLAN_FILE="$TASK_DIR/testing-plan.md"
+  PLAN_FILE="$SCRATCHPAD_DIR/plan.md"
+  PLAN_VAULT="$TASK_DIR/plan.md"
+  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation.md"
+  IMPLEMENTATION_VAULT="$TASK_DIR/implementation.md"
+  REVIEW_FILE="$SCRATCHPAD_DIR/review.md"
+  REVIEW_VAULT="$TASK_DIR/review.md"
+  TESTING_PLAN_FILE="$SCRATCHPAD_DIR/testing-plan.md"
+  TESTING_PLAN_VAULT="$TASK_DIR/testing-plan.md"
+
+  resume_from_vault "$INTAKE_FILE" "$TASK_DIR/intake.md"
+  resume_from_vault "$PLAN_FILE" "$PLAN_VAULT"
+  resume_from_vault "$IMPLEMENTATION_FILE" "$IMPLEMENTATION_VAULT"
+  resume_from_vault "$REVIEW_FILE" "$REVIEW_VAULT"
+  resume_from_vault "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
 
   [[ -f "$PLAN_FILE" ]] || error "No plan.md found in $TASK_DIR — amend requires an already-planned task"
-  [[ -f "$INTAKE_FILE" ]] || { [[ -f "$TASK_DIR/intake.md" ]] && cp "$TASK_DIR/intake.md" "$INTAKE_FILE"; }
 
   log "Amending: $TASK_DIR"
   log "Scratchpad: $SCRATCHPAD_DIR"
@@ -90,10 +103,13 @@ run_amend_mode() {
   [[ -n "$(echo "$AMEND_FEEDBACK_TEXT" | tr -d '[:space:]')" ]] || error "No amendment feedback provided"
 
   # Next amendment number — plan.md is never overwritten, amendments accumulate beside it
+  # Checks both scratchpad and vault so a scratchpad that's missing older amendments
+  # (cleaned, fresh clone) can't reuse a number already taken in vault history.
   local AMEND_LAST
-  AMEND_LAST=$(find "$TASK_DIR" -maxdepth 1 -name 'amendment-*.md' 2>/dev/null | sed -E 's/.*amendment-([0-9]+)\.md/\1/' | sort -n | tail -1)
+  AMEND_LAST=$(find "$TASK_DIR" "$SCRATCHPAD_DIR" -maxdepth 1 -name 'amendment-*.md' 2>/dev/null | sed -E 's/.*amendment-([0-9]+)\.md/\1/' | sort -n | tail -1)
   AMEND_NUM=$(printf '%02d' "$(( ${AMEND_LAST:-0} + 1 ))")
-  AMENDMENT_FILE="$TASK_DIR/amendment-${AMEND_NUM}.md"
+  AMENDMENT_FILE="$SCRATCHPAD_DIR/amendment-${AMEND_NUM}.md"
+  local AMENDMENT_VAULT="$TASK_DIR/amendment-${AMEND_NUM}.md"
 
   local AMEND_DIFF
   AMEND_DIFF=$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
@@ -140,7 +156,7 @@ Output ONLY this document — no preamble, no meta-commentary."
 
   thinking "Generating amendment $AMEND_NUM" "$AMENDMENT_FILE" "$AMEND_PROMPT" "--model claude-sonnet-5 --output-format text"
   [[ -s "$AMENDMENT_FILE" ]] || error "Amendment generation returned empty output"
-  sync_artifact "$AMENDMENT_FILE" "amendment-${AMEND_NUM}.md"
+  sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
   success "Amendment written to $AMENDMENT_FILE"
 
   # Regenerates testing-plan.md in full (not appended) so it always reflects current,
@@ -183,7 +199,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
     thinking "Updating testing plan for amendment $AMEND_NUM" "$testing_plan_tmp" "$testing_plan_prompt" "--model claude-sonnet-5 --output-format text"
     if [[ -s "$testing_plan_tmp" ]]; then
       mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
-      sync_artifact "$TESTING_PLAN_FILE" "testing-plan.md"
+      sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
       success "Testing plan updated for amendment $AMEND_NUM"
     else
       rm -f "$testing_plan_tmp"
@@ -216,7 +232,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
           > "$_amend_refine_tmp" 2>/dev/null
         if [[ -s "$_amend_refine_tmp" ]]; then
           mv "$_amend_refine_tmp" "$AMENDMENT_FILE"
-          sync_artifact "$AMENDMENT_FILE" "amendment-${AMEND_NUM}.md"
+          sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
           echo ""
           cat "$AMENDMENT_FILE"
           success "Amendment refined — review again"
@@ -227,7 +243,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
         ;;
       e|E)
         ${EDITOR:-vim} "$AMENDMENT_FILE"
-        sync_artifact "$AMENDMENT_FILE" "amendment-${AMEND_NUM}.md"
+        sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
         success "Amendment saved — review again"
         ;;
       q|Q)

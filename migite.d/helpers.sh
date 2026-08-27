@@ -332,14 +332,27 @@ stamp_file() {
   fi
 }
 
-# sync_artifact <file> <dest-basename>
-# Stamps <file> with frontmatter, then copies it into $SCRATCHPAD_DIR under <dest>.
-# Used after every vault-side artifact write (plan/review/implementation/PR/knowledge/amendments)
-# so the scratchpad mirror (what the repo tracks) stays in sync with the vault (source of truth).
+# sync_artifact <file> <vault-dest-path>
+# Stamps <file> (the scratchpad-primary copy) with frontmatter, then copies it to
+# <vault-dest-path>. Used after every scratchpad-side artifact write (plan/review/
+# implementation/PR/knowledge/amendments) so the vault mirror (for reading/browsing,
+# e.g. in Obsidian) stays current with the scratchpad (source of truth for the run).
 sync_artifact() {
-  local file="$1" dest="$2"
+  local file="$1" vault_dest="$2"
   stamp_file "$file"
-  cp "$file" "$SCRATCHPAD_DIR/$dest"
+  mkdir -p "$(dirname "$vault_dest")"
+  cp "$file" "$vault_dest"
+}
+
+# resume_from_vault <scratchpad-path> <vault-path>
+# If the scratchpad copy is missing but a vault copy exists (scratchpad was cleaned,
+# fresh clone, different machine), pulls the vault copy in so resuming a task doesn't
+# silently start over. No-op if the scratchpad copy already exists or there's nothing
+# in the vault to recover.
+resume_from_vault() {
+  local scratch="$1" vault="$2"
+  [[ -f "$scratch" || ! -f "$vault" ]] && return 0
+  cp "$vault" "$scratch"
 }
 
 # build_knowledge_injection <knowledge-file>

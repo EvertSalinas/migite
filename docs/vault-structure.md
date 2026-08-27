@@ -44,3 +44,12 @@ key or Atlassian URL) to group their output under an existing ticket's folder in
 flat, disconnected file. `migite_paths.py` is the shared resolver behind this — see its module
 docstring for exact match/prefix-match/ambiguous-folder rules. `--output`, when given, always wins
 and skips the resolver entirely. `migite` itself does not yet use this resolver.
+
+**The `<ticket>/` files above are a read-only mirror, not the source of truth.** For the main
+`migite` command (not the standalone tools), every file under `<ticket>/` — `plan.md`,
+`testing-plan.md`, `architecture-critic.md`, `implementation.md`, `review.md`,
+`pr-description.md`, `amendment-NN.md`, `intake.md`, `task.md` — is written and read primarily in
+`<repo-root>/scratchpad/<ticket>/`, and synced out to this vault path after every write so both
+copies stay current. Use the vault copy for reading/browsing (e.g. in Obsidian); resuming or
+amending a task reads from the scratchpad, falling back to the vault mirror only if the
+scratchpad copy is missing. See [Output files](./migite.md#output-files) for the full picture.

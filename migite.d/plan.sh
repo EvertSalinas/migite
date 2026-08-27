@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # migite.d/plan.sh — Phase 1 (plan) and Phase 1.5 (TDD red phase).
 #
-# Sourced by migite. run_plan expects TASK, JIRA_TICKET, TASK_TYPE,
+# Sourced by migite. run_plan expects TASK, JIRA_TICKET, JIRA_URL, TASK_TYPE,
 # AUDIT_FILE, BLUEPRINT_FILE, INTAKE_FILE_ARG, ORG, REPO_NAME, REPO_ROOT, BRANCH,
 # DEV_LOG_BASE, MIGITE_HOME to be set, and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR,
-# INTAKE_FILE, TASK_FILE, PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE, KNOWLEDGE_FILE,
-# KNOWLEDGE_INJECT, PLAN_GATE_ATTEMPTS for the phases that run after it.
+# INTAKE_FILE, TASK_FILE, PLAN_FILE, PLAN_VAULT, IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT,
+# REVIEW_FILE, REVIEW_VAULT, TESTING_PLAN_FILE, TESTING_PLAN_VAULT, CRITIC_FILE,
+# CRITIC_VAULT, KNOWLEDGE_FILE, KNOWLEDGE_INJECT, PLAN_GATE_ATTEMPTS for the phases
+# that run after it. PLAN_FILE/TESTING_PLAN_FILE/CRITIC_FILE live in the scratchpad
+# (source of truth); the _VAULT siblings are synced mirrors under $TASK_DIR for
+# reading/browsing (e.g. in Obsidian) — never written to directly.
 # run_tdd expects PLAN_FILE, TASK_DIR, SCRATCHPAD_DIR, TASK_SLUG.
 
 run_plan() {
@@ -137,11 +141,11 @@ run_plan() {
     esac
   else
     [[ -z "$TASK_TYPE" ]] && _pick_task_type
-    local TASK_TEMPLATE="$HOME/.claude/templates/${TASK_TYPE}.md"
+    local TASK_TEMPLATE="$MIGITE_HOME/templates/${TASK_TYPE}.md"
     [[ -f "$TASK_TEMPLATE" ]] || error "Template not found: $TASK_TEMPLATE"
     cp "$TASK_TEMPLATE" "$INTAKE_FILE"
     [[ -n "$TASK" ]] && sed -i '' "s|<!-- one sentence.*-->|$TASK|" "$INTAKE_FILE"
-    [[ -n "$JIRA_TICKET" ]] && sed -i '' "s|<!-- ticket ID or N/A -->|$JIRA_TICKET|" "$INTAKE_FILE"
+    [[ -n "$JIRA_TICKET" ]] && sed -i '' "s|<!-- ticket ID or N/A -->|${JIRA_URL:-$JIRA_TICKET}|" "$INTAKE_FILE"
     log "Created intake from template: $TASK_TYPE"
 
     ${EDITOR:-vim} "$INTAKE_FILE"
@@ -169,16 +173,26 @@ run_plan() {
   fi
 
   local INTAKE_VAULT="$TASK_DIR/intake.md"
-  PLAN_FILE="$TASK_DIR/plan.md"
-  IMPLEMENTATION_FILE="$TASK_DIR/implementation.md"
-  REVIEW_FILE="$TASK_DIR/review.md"
-  TESTING_PLAN_FILE="$TASK_DIR/testing-plan.md"
+  PLAN_FILE="$SCRATCHPAD_DIR/plan.md"
+  PLAN_VAULT="$TASK_DIR/plan.md"
+  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation.md"
+  IMPLEMENTATION_VAULT="$TASK_DIR/implementation.md"
+  REVIEW_FILE="$SCRATCHPAD_DIR/review.md"
+  REVIEW_VAULT="$TASK_DIR/review.md"
+  TESTING_PLAN_FILE="$SCRATCHPAD_DIR/testing-plan.md"
+  TESTING_PLAN_VAULT="$TASK_DIR/testing-plan.md"
+  CRITIC_FILE="$SCRATCHPAD_DIR/architecture-critic.md"
+  CRITIC_VAULT="$TASK_DIR/architecture-critic.md"
+
+  resume_from_vault "$PLAN_FILE" "$PLAN_VAULT"
+  resume_from_vault "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+  resume_from_vault "$CRITIC_FILE" "$CRITIC_VAULT"
 
   cp "$INTAKE_FILE" "$INTAKE_VAULT"
   stamp_file "$INTAKE_FILE"
   stamp_file "$INTAKE_VAULT"
-  log "Vault: $TASK_DIR"
   log "Scratchpad: $SCRATCHPAD_DIR"
+  log "Vault mirror: $TASK_DIR"
 
   # --intake mode only: offer a separate task.md for anything the passed file didn't
   # cover. It stays its own file (never merged into the passed intake) and is read
@@ -196,9 +210,9 @@ run_plan() {
       local task_file_content
       task_file_content=$(grep -v '^<!--' "$TASK_FILE_TMP" || true)
       if [[ -n "$(echo "$task_file_content" | tr -d '[:space:]')" ]]; then
-        TASK_FILE="$TASK_DIR/task.md"
+        TASK_FILE="$SCRATCHPAD_DIR/task.md"
         printf '%s\n' "$task_file_content" > "$TASK_FILE"
-        sync_artifact "$TASK_FILE" "task.md"
+        sync_artifact "$TASK_FILE" "$TASK_DIR/task.md"
         success "Additional task details saved to $TASK_FILE"
       else
         warn "No additional details entered — skipping task.md"
@@ -217,7 +231,7 @@ run_plan() {
   local PLAN_LANGGRAPH_ARGS=(
     --intake        "$INTAKE_FILE"
     --plan-output   "$PLAN_FILE"
-    --critic-output "$TASK_DIR/architecture-critic.md"
+    --critic-output "$CRITIC_FILE"
     --testing-plan-output "$TESTING_PLAN_FILE"
     --repo-root     "$REPO_ROOT"
     --task-type     "${TASK_TYPE:-feature}"
@@ -230,13 +244,12 @@ run_plan() {
   [[ -n "$TASK_FILE" ]]       && PLAN_LANGGRAPH_ARGS+=(--task-file  "$TASK_FILE")
 
   # Display architecture-critic.md written by migite-plan (called after every plan run)
-  local critic_file="$TASK_DIR/architecture-critic.md"
   show_critic() {
-    if [[ -f "$critic_file" ]] && grep -q '[^[:space:]]' "$critic_file" 2>/dev/null \
-         && ! grep -q 'No architectural concerns' "$critic_file"; then
+    if [[ -f "$CRITIC_FILE" ]] && grep -q '[^[:space:]]' "$CRITIC_FILE" 2>/dev/null \
+         && ! grep -q 'No architectural concerns' "$CRITIC_FILE"; then
       echo ""
       echo -e "${BOLD}── Architecture critic ─────────────────────────────${RESET}"
-      cat "$critic_file"
+      cat "$CRITIC_FILE"
       echo -e "${BOLD}────────────────────────────────────────────────────${RESET}"
     fi
   }
@@ -245,7 +258,7 @@ run_plan() {
   # refine/redo/edit is always recoverable instead of destroying the last good copy.
   _backup_plan_file() {
     [[ -s "$PLAN_FILE" ]] || return 0
-    local hist_dir="$TASK_DIR/.plan-history"
+    local hist_dir="$SCRATCHPAD_DIR/.plan-history"
     mkdir -p "$hist_dir"
     cp "$PLAN_FILE" "$hist_dir/plan-$(date +%Y%m%d-%H%M%S).md"
   }
@@ -265,8 +278,9 @@ run_plan() {
         rm -f "$PLAN_SENTINEL"
         spawn_langgraph "Planning" "plan" "$PLAN_SCRIPT" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
-        sync_artifact "$PLAN_FILE" "plan.md"
-        sync_artifact "$TESTING_PLAN_FILE" "testing-plan.md"
+        sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
+        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
         success "Plan written to $PLAN_FILE"
         notify "Phase 1 — Plan ready" "Review the plan and approve to continue"
         ;;
@@ -278,8 +292,9 @@ run_plan() {
     rm -f "$PLAN_SENTINEL"
     spawn_langgraph "Planning" "plan" "$PLAN_SCRIPT" "${PLAN_LANGGRAPH_ARGS[@]}"
     [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
-    sync_artifact "$PLAN_FILE" "plan.md"
-    sync_artifact "$TESTING_PLAN_FILE" "testing-plan.md"
+    sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
+    sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+    sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
     success "Plan written to $PLAN_FILE"
     notify "Phase 1 — Plan ready" "Review the plan and approve to continue"
   fi
@@ -356,7 +371,7 @@ run_plan() {
           > "$_refine_tmp" 2>/dev/null
         if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
           mv "$_refine_tmp" "$PLAN_FILE"
-          sync_artifact "$PLAN_FILE" "plan.md"
+          sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
           _show_plan_diff "$_refine_prev"
           success "Plan refined — review again"
         else
@@ -373,7 +388,7 @@ run_plan() {
         # Direct edit — open plan.md in $EDITOR, no AI round-trip
         _backup_plan_file
         ${EDITOR:-vim} "$PLAN_FILE"
-        sync_artifact "$PLAN_FILE" "plan.md"
+        sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
         success "Plan saved — review again"
         show_critic
         ;;
@@ -386,8 +401,9 @@ run_plan() {
         rm -f "$PLAN_SENTINEL"
         spawn_langgraph "Revising plan" "plan-r${PLAN_GATE_ATTEMPTS}" "$PLAN_SCRIPT" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || warn "migite-plan revision may not have completed — check agent log in $LOG_DIR"
-        sync_artifact "$PLAN_FILE" "plan.md"
-        sync_artifact "$TESTING_PLAN_FILE" "testing-plan.md"
+        sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
+        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
         _show_plan_diff "$_rerun_prev"
         show_critic
         ;;
@@ -409,7 +425,7 @@ run_tdd() {
   if [[ "$tdd_choice" =~ ^[Yy]$ ]]; then
     log "Phase 1.5/4 — Writing specs (TDD red phase)"
 
-    local SPEC_IMPL_FILE="$TASK_DIR/spec-implementation.md"
+    local SPEC_IMPL_FILE="$SCRATCHPAD_DIR/spec-implementation.md"
     local SPEC_IMPL_PROMPT="${KNOWLEDGE_INJECT}$(cat "$HOME/.claude/commands/implement.md" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
 
 $(cat "$PLAN_FILE")
@@ -426,7 +442,7 @@ Rules:
 - When done, write the list of spec files created to: $SPEC_IMPL_FILE"
 
     run_phase "Writing specs (TDD)" "$SPEC_IMPL_FILE" "$SPEC_IMPL_PROMPT"
-    sync_artifact "$SPEC_IMPL_FILE" "spec-implementation.md"
+    sync_artifact "$SPEC_IMPL_FILE" "$TASK_DIR/spec-implementation.md"
     success "Spec files written"
 
     log "Confirming red state (specs should fail)..."

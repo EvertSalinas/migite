@@ -4,7 +4,7 @@
 #
 # Sourced by migite. run_implement expects AMEND_MODE, STAGED,
 # KNOWLEDGE_INJECT, PLAN_FILE, AMENDMENT_FILE, AMEND_NUM, IMPLEMENTATION_FILE,
-# SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG, MAX_HEAL_ATTEMPTS to be set.
+# IMPLEMENTATION_VAULT, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG, MAX_HEAL_ATTEMPTS to be set.
 # Leaves HEAL_ATTEMPT set for the caller's summary logging.
 
 run_implement() {
@@ -64,7 +64,7 @@ $(cat "$PLAN_FILE")
       echo ""
       log "Stage $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL"
 
-      local STAGE_OUTPUT_FILE="$TASK_DIR/implementation-stage-${STAGE_NUM}.md"
+      local STAGE_OUTPUT_FILE="$SCRATCHPAD_DIR/implementation-stage-${STAGE_NUM}.md"
       local PRIOR_CONTEXT=""
       if [[ -n "$STAGE_NOTES_COMBINED" ]]; then
         PRIOR_CONTEXT="
@@ -81,7 +81,7 @@ Do not implement layers that come after this one — they will be handled in sub
 When done, write notes on what you built to: $STAGE_OUTPUT_FILE"
 
       run_phase "Stage $STAGE_NUM — $STAGE_LABEL" "$STAGE_OUTPUT_FILE" "$STAGE_PROMPT"
-      stamp_file "$STAGE_OUTPUT_FILE"
+      sync_artifact "$STAGE_OUTPUT_FILE" "$TASK_DIR/implementation-stage-${STAGE_NUM}.md"
       STAGE_NOTES_COMBINED="${STAGE_NOTES_COMBINED}
 ### Stage $STAGE_NUM: $STAGE_LABEL
 $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
@@ -117,17 +117,16 @@ $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
 
     # Merge all stage notes into the canonical implementation file
     printf '%s' "$STAGE_NOTES_COMBINED" > "$IMPLEMENTATION_FILE"
-    sync_artifact "$IMPLEMENTATION_FILE" "implementation.md"
+    sync_artifact "$IMPLEMENTATION_FILE" "$IMPLEMENTATION_VAULT"
     success "All $STAGE_COUNT stage(s) complete — notes written to $IMPLEMENTATION_FILE"
 
   else
     # ── Standard single-session implementation ────────────────────────────────
     local IMPL_PROMPT="$(_impl_base_prompt)
-- When done, write implementation notes to: $IMPLEMENTATION_FILE
-  Do NOT write to scratchpad — migite handles that copy"
+- When done, write implementation notes to: $IMPLEMENTATION_FILE"
 
     run_phase "Implementing" "$IMPLEMENTATION_FILE" "$IMPL_PROMPT"
-    sync_artifact "$IMPLEMENTATION_FILE" "implementation.md"
+    sync_artifact "$IMPLEMENTATION_FILE" "$IMPLEMENTATION_VAULT"
     success "Implementation notes written to $IMPLEMENTATION_FILE"
   fi
 
