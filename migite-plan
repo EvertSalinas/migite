@@ -112,6 +112,70 @@ def extract_keywords(text: str) -> set[str]:
     return {w.lower() for w in words} - STOP_WORDS
 
 
+def camelize(name: str) -> str:
+    return "".join(part.capitalize() for part in re.split(r"[-_]", name) if part)
+
+
+def discover_vendored_gems(repo_root: str) -> list[str]:
+    """Gem names declared in the Gemfile — candidates for module-reference matching below."""
+    gemfile = Path(repo_root) / "Gemfile"
+    if not gemfile.exists():
+        return []
+    text = gemfile.read_text(errors="replace")
+    return re.findall(r'^\s*gem\s+["\']([\w-]+)["\']', text, re.MULTILINE)
+
+
+def read_vendored_gem_methods(repo_root: str, gem_name: str) -> str:
+    """
+    Enumerate every method defined in a gem's own lib/ source via `bundle show`.
+    Exists so a plan's claim that a gem "doesn't support X" / "has no bulk equivalent"
+    is checked against what the gem actually exposes, not just against which of its
+    methods the app already happens to call.
+    """
+    try:
+        show = subprocess.run(
+            ["bundle", "show", gem_name], cwd=repo_root, capture_output=True, text=True, timeout=15
+        )
+    except Exception:
+        return ""
+    gem_path = show.stdout.strip()
+    if show.returncode != 0 or not gem_path or not Path(gem_path).is_dir():
+        return ""
+    lib_dir = Path(gem_path) / "lib"
+    if not lib_dir.is_dir():
+        return ""
+    lines = []
+    for rb_file in sorted(lib_dir.rglob("*.rb")):
+        rel = rb_file.relative_to(gem_path)
+        try:
+            for i, line in enumerate(rb_file.read_text(errors="replace").splitlines(), start=1):
+                m = re.match(r"\s*def\s+(self\.)?([\w?!=]+)", line)
+                if m:
+                    lines.append(f"{rel}:{i}: def {m.group(1) or ''}{m.group(2)}")
+        except Exception:
+            continue
+    return "\n".join(lines[:200])
+
+
+def read_external_gem_context(repo_root: str, area_text: str) -> str:
+    """
+    If an area's file contents reference a vendored gem's module namespace (e.g.
+    `FormsService::Client` for gem "forms_service" — Ruby's gem-name-to-module
+    convention), pull that gem's full method inventory straight from its lib/ source
+    and hand it to the planner as ground truth, rather than letting the plan infer
+    what the gem can/can't do from which methods the app already calls.
+    """
+    blocks = []
+    for gem_name in discover_vendored_gems(repo_root):
+        module_name = camelize(gem_name)
+        if len(module_name) < 4 or module_name not in area_text:
+            continue
+        methods = read_vendored_gem_methods(repo_root, gem_name)
+        if methods:
+            blocks.append(f"## Vendored gem: {gem_name} — full method inventory (from gem source)\n{methods}")
+    return "\n\n".join(blocks)
+
+
 def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: set[str], base_branch: str) -> str:
     """
     Discover files in `area`, score by keyword relevance, read the most relevant ones.
@@ -193,6 +257,7 @@ class PlanState(TypedDict):
     audit: str
     blueprint: str
     task_file: str
+    jira_context: str
     plan_cmd: str
     critic_cmd: str
     repo_root: str
@@ -214,6 +279,7 @@ class ExploreInput(TypedDict):
     glob_patterns: list[str]
     intake: str
     knowledge: str
+    jira_context: str
     repo_root: str
     base_branch: str
 
@@ -233,6 +299,7 @@ def route_to_explorers(state: PlanState) -> list[Send]:
             "glob_patterns": patterns,
             "intake": state["intake"],
             "knowledge": state["knowledge"],
+            "jira_context": state.get("jira_context", ""),
             "repo_root": state["repo_root"],
             "base_branch": state["base_branch"],
         })
@@ -243,11 +310,21 @@ def route_to_explorers(state: PlanState) -> list[Send]:
 def explore(state: ExploreInput) -> dict:
     area = state["area"]
     print(f"    ◦ {area}", flush=True)
-    keywords = extract_keywords(state["intake"])
+    keywords = extract_keywords(state["intake"] + "\n" + state.get("jira_context", ""))
     context = read_area_context(area, state["glob_patterns"], state["repo_root"], keywords, state["base_branch"])
+    gem_context = read_external_gem_context(state["repo_root"], context)
+    if gem_context:
+        context += f"\n\n{gem_context}"
     knowledge_block = (
         f"Repository lessons (apply these):\n{state['knowledge'][:800]}\n\n"
         if state.get("knowledge") else ""
+    )
+    gem_instruction = (
+        "\n4. If a \"Vendored gem\" method inventory is included above, treat it as the "
+        "authoritative list of what that gem supports. Never conclude a capability is "
+        "missing just because the app doesn't currently call the method that provides it — "
+        "check the inventory first."
+        if gem_context else ""
     )
     prompt = f"""Task intake:
 {state['intake'][:1500]}
@@ -257,7 +334,7 @@ def explore(state: ExploreInput) -> dict:
 Analyse the **{area}** area above for this task. Report:
 1. Files, classes, and methods directly relevant to implementing this task
 2. Patterns and conventions the implementation must follow
-3. Anything that constrains or enables the implementation
+3. Anything that constrains or enables the implementation{gem_instruction}
 
 Be specific — name files and methods. Under 350 words."""
 
@@ -286,10 +363,15 @@ def synthesize_plan(state: PlanState) -> dict:
         f"{state['task_file']}\n\n"
         if state.get("task_file") else ""
     )
+    jira_block = (
+        f"## Jira ticket (fetched from Jira — authoritative source for scope, acceptance criteria, and priority)\n"
+        f"{state['jira_context']}\n\n"
+        if state.get("jira_context") else ""
+    )
     prompt = f"""## Task intake
 {state['intake']}
 
-{task_file_block}## Repository knowledge
+{task_file_block}{jira_block}## Repository knowledge
 {state['knowledge'] or '(none)'}
 
 {blueprint_block}{audit_block}## Codebase exploration
@@ -483,6 +565,7 @@ def main() -> None:
     ap.add_argument("--audit",         default="", help="Path to audit.md (optional)")
     ap.add_argument("--blueprint",     default="", help="Path to blueprint.md (optional)")
     ap.add_argument("--task-file",     default="", help="Path to task.md — supplementary details on top of --intake (optional)")
+    ap.add_argument("--jira-context",  default="", help="Path to a pre-fetched Jira ticket summary (optional)")
     args = ap.parse_args()
 
     intake     = Path(args.intake).read_text()
@@ -490,6 +573,7 @@ def main() -> None:
     audit      = Path(args.audit).read_text()       if args.audit      and Path(args.audit).exists()      else ""
     blueprint  = Path(args.blueprint).read_text()   if args.blueprint  and Path(args.blueprint).exists()  else ""
     task_file  = Path(args.task_file).read_text()   if args.task_file  and Path(args.task_file).exists()  else ""
+    jira_context = Path(args.jira_context).read_text() if args.jira_context and Path(args.jira_context).exists() else ""
     plan_cmd   = PLAN_CMD_PATH.read_text()   if PLAN_CMD_PATH.exists()   else ""
     critic_cmd = CRITIC_CMD_PATH.read_text() if CRITIC_CMD_PATH.exists() else ""
     base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
@@ -501,6 +585,8 @@ def main() -> None:
         print(f"  migite-plan | blueprint context loaded ({len(blueprint)} chars)", flush=True)
     if task_file:
         print(f"  migite-plan | supplementary task.md loaded ({len(task_file)} chars)", flush=True)
+    if jira_context:
+        print(f"  migite-plan | Jira ticket context loaded ({len(jira_context)} chars)", flush=True)
     print(f"  migite-plan | explore={EXPLORE_MODEL}  think={THINK_MODEL}  critic={CRITIC_MODEL}", flush=True)
 
     graph = build_graph()
@@ -511,6 +597,7 @@ def main() -> None:
             "audit":      audit,
             "blueprint":  blueprint,
             "task_file":  task_file,
+            "jira_context": jira_context,
             "plan_cmd":   plan_cmd,
             "critic_cmd": critic_cmd,
             "repo_root":  args.repo_root,

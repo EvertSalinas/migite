@@ -217,6 +217,8 @@ load_context
 
 Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis and refinement use Sonnet 5. The architecture critic uses Opus 5 — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation. `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](#testing-plan-requirement) for why.
 
+**Jira ticket fetching.** When `--jira` was used, `plan.sh` fetches the actual ticket (title, type, priority, status, description, acceptance criteria) via the Atlassian MCP before `migite-plan` runs — the one call in the entire pipeline granted tool access, and it's scoped to just the two read-only Jira-lookup tools, never the full toolset. The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into both `synthesize_plan` and the explorers' keyword extraction. If the fetch fails — MCP not configured, not authenticated, wrong key, no access — planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
+
 After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. The gate then opens:
 
 ```
@@ -394,6 +396,7 @@ copy never lags behind.
 |------|----------|
 | `intake.md` | Filled-in task intake |
 | `task.md` | Optional — supplementary details added via [Intake mode](#intake-mode)'s prompt, kept separate from `intake.md` |
+| `jira-context.md` | Optional — fetched Jira ticket content when `--jira` is used and the fetch succeeds |
 | `plan.md` | Implementation plan |
 | `amendment-NN.md` | Scoped delta from each `--amend` run — original plan stays untouched |
 | `testing-plan.md` | QA/dev verification steps — seed script, curls, teardown. Regenerated in full on every `--amend`, unlike `plan.md` |

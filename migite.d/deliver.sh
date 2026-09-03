@@ -27,9 +27,25 @@ EOF
     success "Created knowledge file: $KNOWLEDGE_FILE"
   fi
 
+  # The automated extraction below only sees plan/implementation/review — it misses
+  # anything the developer noticed but didn't write down anywhere migite reads
+  # (a domain quirk mentioned in Slack, a hunch about why something behaved the way
+  # it did, a gotcha from testing manually). Ask before extracting so that input can
+  # be folded in as authoritative rather than lost.
+  local USER_KNOWLEDGE_FEEDBACK
+  read -r -p "$(echo -e "${CYAN}  Anything worth remembering from this run that migite might not catch? (optional, Enter to skip): ${RESET}")" USER_KNOWLEDGE_FEEDBACK
+
+  local USER_FEEDBACK_BLOCK=""
+  if [[ -n "$USER_KNOWLEDGE_FEEDBACK" ]]; then
+    USER_FEEDBACK_BLOCK="Engineer's own observation from this run (authoritative — always include this as its own bullet below, tightened for clarity but never dropped or reinterpreted away):
+$USER_KNOWLEDGE_FEEDBACK
+
+"
+  fi
+
   local KNOWLEDGE_PROMPT="You are extracting reusable knowledge from a completed implementation.
 
-Plan:
+${USER_FEEDBACK_BLOCK}Plan:
 $(cat "$PLAN_FILE")
 
 Implementation notes:
@@ -38,7 +54,7 @@ $(cat "$IMPLEMENTATION_FILE")
 Review:
 $(cat "$REVIEW_FILE")
 
-Extract 1–3 bullet points worth keeping for future work on this repo. Be selective — only include things that will genuinely matter later.
+Extract bullet points worth keeping for future work on this repo: the engineer's observation above (if any) plus up to 3 more drawn from the material below. Be selective on the drawn-from-material ones — only include things that will genuinely matter later.
 
 INCLUDE:
 - Business logic clarifications the developer provided (rules, edge cases, domain constraints that aren't obvious from the code)
@@ -51,7 +67,7 @@ EXCLUDE:
 - Obvious things any developer would know
 - Process notes (\"we ran rubocop\", \"specs passed\")
 
-If nothing in the above material meets the INCLUDE criteria, output nothing.
+If nothing in the material below meets the INCLUDE criteria, output nothing beyond the engineer's own observation (if one was given).
 
 Output ONLY the bullet points, no preamble. Each bullet starts with '- '.
 End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"

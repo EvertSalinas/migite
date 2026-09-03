@@ -168,6 +168,43 @@ ${REVIEW_CONTENT}
         log "Opening Claude to fix review findings..."
         run_phase "Fixing review findings" "$FIX_IMPL_FILE" "$FIX_PROMPT"
         sync_artifact "$FIX_IMPL_FILE" "$TASK_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
+
+        # Fix rounds routinely change behaviour the testing plan asserts against
+        # (log lines, method signatures, argument shapes) — leaving it stale just
+        # means the next review re-diagnoses the same drift as a fresh finding
+        # instead of it being fixed here, in the same round that caused it.
+        if [[ -f "$TESTING_PLAN_FILE" ]]; then
+          log "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}..."
+          local TESTING_PLAN_FIX_PROMPT="You are updating the QA/dev testing plan after a review-fix round. The testing plan must describe how to verify the CURRENT, post-fix behaviour — not what it was before this round's fixes.
+
+## Current testing plan (supersede anything this fix round changes)
+$(cat "$TESTING_PLAN_FILE")
+
+## Review findings that were just fixed
+${REVIEW_CONTENT}
+
+## Fix summary for this round
+$(cat "$FIX_IMPL_FILE" 2>/dev/null || echo "(fix summary not found)")
+
+## Current diff against $BASE_BRANCH
+$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
+
+## Instructions
+Output the FULL updated testing plan — not just the delta. Keep steps that are still valid, rewrite or remove steps this fix round invalidates (wrong log text, wrong argument shape, wrong method/constant names, assertions that now contradict the fixed behaviour), and add steps for any new behaviour the fix introduced. Preserve the existing structure (Prerequisites / Verification steps / Teardown). Output ONLY the document, no preamble."
+
+          local testing_plan_tmp
+          testing_plan_tmp=$(mktemp)
+          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "--model claude-sonnet-5 --output-format text"
+          if [[ -s "$testing_plan_tmp" ]]; then
+            mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
+            sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+            success "Testing plan updated for fix round ${COMMIT_GATE_ATTEMPTS}"
+          else
+            rm -f "$testing_plan_tmp"
+            warn "Testing plan regeneration returned empty — testing-plan.md left unchanged"
+          fi
+        fi
+
         _rerun_checks_and_review
         ;;
       n|N)

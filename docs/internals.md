@@ -18,10 +18,13 @@ migite-plan \
   [--audit        path/to/audit.md] \
   [--blueprint    path/to/blueprint.md] \
   [--task-file    path/to/task.md] \
+  [--jira-context path/to/jira-context.md] \
   [--base-branch  master]
 ```
 
 `--task-file` injects supplementary details from [migite's intake mode](./migite.md#intake-mode)'s "add a separate task.md" prompt into `synthesize_plan` as authoritative context alongside the intake — it's optional and only ever set when that prompt produced a file.
+
+`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria) — fetched in `plan.sh` via the Atlassian MCP whenever `--jira` is used, cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context) and the 7 explorers' keyword extraction. `migite-plan` itself never calls the MCP — it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
 
 `--base-branch` sets the branch explorers diff against. Omitted, it auto-detects from `origin/HEAD`, then falls back to `main` / `master` / `develop`. `migite` passes its own detected value so both agree.
 

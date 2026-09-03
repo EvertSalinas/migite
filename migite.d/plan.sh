@@ -34,6 +34,66 @@ run_plan() {
   # Stays PRELIMINARY_SLUG unless --intake overrides it with the file's own name.
   local INTAKE_SLUG_FALLBACK="$PRELIMINARY_SLUG"
 
+  # ── Jira context (only when --jira was used) ────────────────────────────────
+  # JIRA_TICKET/JIRA_URL are labels only until this point — nothing has ever
+  # fetched the ticket's actual content. This is the one call in the whole
+  # pipeline that's granted tool access (scoped to the two read-only Atlassian
+  # lookups, never the full toolset) so planning can see real scope/acceptance
+  # criteria instead of just a key. Cached in the scratchpad so redos/resumes
+  # within the same task don't re-fetch. Any failure (MCP not configured, not
+  # authenticated, wrong key, no access) degrades gracefully — planning just
+  # proceeds without ticket context, same as a missing knowledge.md/audit/blueprint.
+  local JIRA_CONTEXT_FILE=""
+  if [[ -n "$JIRA_TICKET" ]]; then
+    JIRA_CONTEXT_FILE="$SCRATCHPAD_DIR/jira-context.md"
+    local JIRA_CONTEXT_VAULT="$TASK_DIR/jira-context.md"
+    resume_from_vault "$JIRA_CONTEXT_FILE" "$JIRA_CONTEXT_VAULT"
+    if [[ -s "$JIRA_CONTEXT_FILE" ]]; then
+      log "Reusing cached Jira context for $JIRA_TICKET"
+    else
+      log "Fetching Jira ticket $JIRA_TICKET..."
+      local JIRA_FETCH_PROMPT="Fetch the Jira ticket ${JIRA_TICKET}${JIRA_URL:+ ($JIRA_URL)} using the Atlassian MCP tools. If a URL is given, try its hostname as the cloudId first; otherwise use getAccessibleAtlassianResources to find it.
+
+Output ONLY this structure, no preamble:
+
+## Jira ticket: $JIRA_TICKET
+**Title:** <ticket summary>
+**Type:** <issue type>
+**Priority:** <priority>
+**Status:** <status>
+**Description:**
+<full description, plain text, Jira markup stripped>
+
+**Acceptance criteria:**
+<any acceptance-criteria / definition-of-done content found in the description, or \"None specified in the ticket\">
+
+If the ticket cannot be fetched (no MCP access, not authenticated, wrong key, no permission), output exactly:
+JIRA_FETCH_FAILED: <short reason>"
+
+      local JIRA_FETCH_TMP
+      JIRA_FETCH_TMP=$(mktemp)
+      printf '%s' "$JIRA_FETCH_PROMPT" \
+        | env -u CLAUDECODE claude --print --permission-mode bypassPermissions \
+            --allowedTools "mcp__claude_ai_Atlassian__getJiraIssue mcp__claude_ai_Atlassian__getAccessibleAtlassianResources" \
+            --model claude-sonnet-5 --output-format text \
+        > "$JIRA_FETCH_TMP" 2>/dev/null || true
+
+      if [[ -s "$JIRA_FETCH_TMP" ]] && ! grep -q '^JIRA_FETCH_FAILED' "$JIRA_FETCH_TMP"; then
+        mv "$JIRA_FETCH_TMP" "$JIRA_CONTEXT_FILE"
+        sync_artifact "$JIRA_CONTEXT_FILE" "$JIRA_CONTEXT_VAULT"
+        success "Jira ticket fetched — added to planning context"
+      else
+        if [[ -s "$JIRA_FETCH_TMP" ]]; then
+          warn "Jira fetch failed: $(cat "$JIRA_FETCH_TMP")"
+        else
+          warn "Jira fetch returned nothing — planning without ticket context"
+        fi
+        rm -f "$JIRA_FETCH_TMP"
+        JIRA_CONTEXT_FILE=""
+      fi
+    fi
+  fi
+
   _pick_task_type() {
     echo ""
     echo -e "${BOLD}  Task type:${RESET}"
@@ -242,6 +302,7 @@ run_plan() {
   [[ -n "$AUDIT_FILE" ]]      && PLAN_LANGGRAPH_ARGS+=(--audit      "$AUDIT_FILE")
   [[ -n "$BLUEPRINT_FILE" ]]  && PLAN_LANGGRAPH_ARGS+=(--blueprint  "$BLUEPRINT_FILE")
   [[ -n "$TASK_FILE" ]]       && PLAN_LANGGRAPH_ARGS+=(--task-file  "$TASK_FILE")
+  [[ -s "$JIRA_CONTEXT_FILE" ]] && PLAN_LANGGRAPH_ARGS+=(--jira-context "$JIRA_CONTEXT_FILE")
 
   # Display architecture-critic.md written by migite-plan (called after every plan run)
   show_critic() {
