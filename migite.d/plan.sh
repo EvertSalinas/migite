@@ -487,7 +487,7 @@ run_tdd() {
     log "Phase 1.5/4 — Writing specs (TDD red phase)"
 
     local SPEC_IMPL_FILE="$SCRATCHPAD_DIR/spec-implementation.md"
-    local SPEC_IMPL_PROMPT="${KNOWLEDGE_INJECT}$(cat "$HOME/.claude/commands/implement.md" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
+    local SPEC_IMPL_PROMPT="${KNOWLEDGE_INJECT}$(cat "$IMPLEMENT_CMD_PATH" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
 
 $(cat "$PLAN_FILE")
 

@@ -26,11 +26,18 @@ DATE=$(date +%Y-%m-%d)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
 # Python binary for LangGraph agent scripts. Override via env if your setup differs.
-MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
+# Resolved dynamically (not pinned to a specific asdf patch version) so an asdf Python
+# upgrade doesn't silently break this the same way a hardcoded path once broke
+# IMPROVEMENTS_FILE (see migite-improvements.md, 2026-08-20 pass) — falls back to the
+# previous hardcoded path only if no python3 is on PATH at all.
+MIGITE_PYTHON="${MIGITE_PYTHON:-$(command -v python3 || echo "$HOME/.asdf/installs/python/3.13.5/bin/python3")}"
 # Real directory this script lives in — resolves through the ~/.local/bin symlink so
 # anything migite writes about itself lands in the repo (the source of truth), not
 # wherever it happened to be invoked from.
 MIGITE_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# Single source of truth for the /implement command file — mirrors PLAN_CMD_PATH /
+# CRITIC_CMD_PATH in migite-plan rather than hardcoding this path at each call site.
+IMPLEMENT_CMD_PATH="$HOME/.claude/commands/implement.md"
 
 # ── Phases ────────────────────────────────────────────────────────────────────
 source "$MIGITE_HOME/migite.d/helpers.sh"

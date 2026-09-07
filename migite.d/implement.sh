@@ -13,7 +13,7 @@ run_implement() {
 
   _impl_base_prompt() {
     if [[ "$AMEND_MODE" == "true" ]]; then
-      printf '%s' "${KNOWLEDGE_INJECT}$(cat "$HOME/.claude/commands/implement.md" | sed "s|\\[PLAN_PATH\\]|$AMENDMENT_FILE|g")
+      printf '%s' "${KNOWLEDGE_INJECT}$(cat "$IMPLEMENT_CMD_PATH" | sed "s|\\[PLAN_PATH\\]|$AMENDMENT_FILE|g")
 
 ## Original plan (already built — for context only, do not re-implement)
 $(cat "$PLAN_FILE")
@@ -26,7 +26,7 @@ $(cat "$AMENDMENT_FILE")
 - Respect the amendment's Out of scope section — do not touch anything listed there
 - Do NOT run rubocop or rspec — migite runs them after this phase"
     else
-      printf '%s' "${KNOWLEDGE_INJECT}$(cat "$HOME/.claude/commands/implement.md" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
+      printf '%s' "${KNOWLEDGE_INJECT}$(cat "$IMPLEMENT_CMD_PATH" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
 
 $(cat "$PLAN_FILE")
 
