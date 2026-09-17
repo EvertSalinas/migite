@@ -12,6 +12,7 @@
 #   migite-explore --brief path/to/brief.md
 #   migite-explore --brief brief.md --name agent-agnostic --intakes
 #   migite-explore "extract billing into a service" --focus approaches
+#   migite-explore --brief brief.md --attach ./data-map.csv
 #
 # Unlike migite-plan and migite-audit this is language-agnostic - it discovers
 # files with `git ls-files`, so it works on any repo, not just Rails.
@@ -50,7 +51,8 @@ OUTPUT_DIR=""
 FOCUS=""
 WANT_INTAKES=false
 FROM_EXPLORATION=""
-ID=""
+JIRA=""
+ATTACH_FILES=()
 
 usage() {
   cat <<'EOF'
@@ -65,8 +67,13 @@ Usage:
 Options:
   --brief <file>              Read the initiative brief from a file
   --name <slug>               Short slug for the initiative (default: derived from brief)
-  --id <ticket>               Jira ticket key or URL - groups this exploration under
+  --jira <ticket>             Jira ticket key or URL - groups this exploration under
                               the ticket's existing vault folder
+  --attach <file>             Fold a file's raw content into the brief as reference
+                              material (repeatable). Every Claude call here is a
+                              headless `claude --print` with no tool access, so a
+                              path merely mentioned in the brief can never be opened
+                              by the model itself - this is the only way it sees it.
   --output <dir>              Output directory (default: vault)
   --focus <lens>              Limit to one lens: current_state | touchpoints |
                               coupling_and_risk | existing_seams | constraints | approaches
@@ -75,7 +82,7 @@ Options:
                               possibly hand-edited) exploration.md. Skips the lenses,
                               synthesis, and challenge pass - one model call instead of
                               nine. Leaves exploration.md and challenges.md untouched.
-                              Needs no git repo, unless --id is also passed.
+                              Needs no git repo, unless --jira is also passed.
   -h, --help                  Show this help
 
 Outputs (in the output directory):
@@ -101,8 +108,15 @@ while [[ $# -gt 0 ]]; do
       INIT_NAME="${2:-}"
       shift 2
       ;;
-    --id)
-      ID="${2:-}"
+    --jira)
+      JIRA="${2:-}"
+      shift 2
+      ;;
+    --attach)
+      ATTACH_ARG="${2:-}"
+      [[ -z "$ATTACH_ARG" ]] && { echo "✘ --attach requires a file path" >&2; exit 1; }
+      [[ ! -f "$ATTACH_ARG" ]] && { echo "✘ Attachment file not found: $ATTACH_ARG" >&2; exit 1; }
+      ATTACH_FILES+=("$ATTACH_ARG")
       shift 2
       ;;
     --output)
@@ -141,12 +155,12 @@ done
 if [[ -n "$FROM_EXPLORATION" ]]; then
   REEXTRACT_ARGS=(--from-exploration "$FROM_EXPLORATION")
   [[ -n "$OUTPUT_DIR" ]] && REEXTRACT_ARGS+=(--output "$OUTPUT_DIR")
-  if [[ -n "$ID" ]]; then
+  if [[ -n "$JIRA" ]]; then
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-      echo "✘ --id requires a git repository (to resolve org/repo for the vault path)." >&2
+      echo "✘ --jira requires a git repository (to resolve org/repo for the vault path)." >&2
       exit 1
     fi
-    REEXTRACT_ARGS+=(--id "$ID" --repo-root "$(git rev-parse --show-toplevel)")
+    REEXTRACT_ARGS+=(--jira "$JIRA" --repo-root "$(git rev-parse --show-toplevel)")
   fi
   exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-explore.py" "${REEXTRACT_ARGS[@]}"
 fi
@@ -189,7 +203,32 @@ echo ""
 
 PYTHON_ARGS=(--repo-root "$REPO_ROOT")
 
-if [[ -n "$BRIEF_FILE" ]]; then
+# --attach files are folded straight into the brief text (not passed through to
+# migite-explore.py, which stays unaware attachments exist) — state["brief"] is
+# interpolated verbatim into every lens/synthesis/challenge/refine prompt, so
+# this is the one place that reliably reaches all of them. Every Claude call
+# here is a headless `claude --print` with no tool access, so a path merely
+# mentioned in the brief text could never be opened by the model itself.
+if [[ ${#ATTACH_FILES[@]} -gt 0 ]]; then
+  BRIEF_TMP=$(mktemp)
+  trap 'rm -f "$BRIEF_TMP"' EXIT
+  if [[ -n "$BRIEF_FILE" ]]; then
+    cat "$BRIEF_FILE" > "$BRIEF_TMP"
+  else
+    printf '%s' "$BRIEF_TEXT" > "$BRIEF_TMP"
+  fi
+  printf '\n\n---\n\n## Attachments\n\n' >> "$BRIEF_TMP"
+  ATTACH_MAX_CHARS=50000
+  for ATTACH_F in "${ATTACH_FILES[@]}"; do
+    ATTACH_CONTENT=$(cat "$ATTACH_F")
+    if [[ ${#ATTACH_CONTENT} -gt $ATTACH_MAX_CHARS ]]; then
+      ATTACH_CONTENT="${ATTACH_CONTENT:0:$ATTACH_MAX_CHARS}"$'\n\n'"[... truncated, file is larger than the ${ATTACH_MAX_CHARS}-char cap ...]"
+      echo -e "${YELLOW}⚠ Attachment $(basename "$ATTACH_F") truncated to $ATTACH_MAX_CHARS chars${RESET}" >&2
+    fi
+    printf '### %s\n\n%s\n\n' "$(basename "$ATTACH_F")" "$ATTACH_CONTENT" >> "$BRIEF_TMP"
+  done
+  PYTHON_ARGS+=(--brief-file "$BRIEF_TMP")
+elif [[ -n "$BRIEF_FILE" ]]; then
   PYTHON_ARGS+=(--brief-file "$BRIEF_FILE")
 else
   BRIEF_TMP=$(mktemp)
@@ -199,7 +238,7 @@ else
 fi
 
 [[ -n "$INIT_NAME"  ]] && PYTHON_ARGS+=(--name   "$INIT_NAME")
-[[ -n "$ID"         ]] && PYTHON_ARGS+=(--id     "$ID")
+[[ -n "$JIRA"       ]] && PYTHON_ARGS+=(--jira   "$JIRA")
 [[ -n "$OUTPUT_DIR" ]] && PYTHON_ARGS+=(--output "$OUTPUT_DIR")
 [[ -n "$FOCUS"      ]] && PYTHON_ARGS+=(--focus  "$FOCUS")
 [[ -f "$KNOWLEDGE_FILE" ]] && PYTHON_ARGS+=(--knowledge "$KNOWLEDGE_FILE")

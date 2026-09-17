@@ -8,6 +8,7 @@
 import argparse
 import operator
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -24,6 +25,12 @@ REVIEW_MODEL  = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
+
+# Same ticket-in-branch-name heuristic as migite.d/amend.sh's BRANCH_TICKET —
+# a branch like "feature/bb-3136-add-pdf-export" embeds the ticket key amid
+# other text, so this can't reuse migite_paths.extract_ticket_key (anchored,
+# whole-string match only).
+BRANCH_TICKET_RE = re.compile(r"[A-Za-z]+-\d+")
 
 PR_REVIEW_DIMENSIONS = [
     (
@@ -389,8 +396,22 @@ def main() -> None:
             print("  Pass --output explicitly to disambiguate.", file=sys.stderr)
             sys.exit(1)
 
+    # No --jira (or no matching ticket folder) — fall back to the branch's own
+    # task folder, if one already exists (e.g. from an earlier `migite` run on
+    # this branch). Never created on demand, unlike the --jira folder above:
+    # an ad hoc PR review on an arbitrary branch shouldn't seed a new vault dir.
+    branch_run_dir = None
+    if not args.output and not run_dir:
+        branch_ticket_match = BRANCH_TICKET_RE.search(args.branch)
+        if branch_ticket_match:
+            branch_slug = migite_paths.slugify(branch_ticket_match.group(0).upper())
+            candidate = Path(VAULT_BASE) / org / repo_name / branch_slug
+            if candidate.is_dir():
+                branch_run_dir = candidate
+
     output = args.output or (
         str(run_dir / f"pr-review-{safe_branch}-{timestamp}.md") if run_dir
+        else str(branch_run_dir / f"pr-review-{today}.md") if branch_run_dir
         else str(Path(VAULT_BASE) / org / repo_name / f"pr-review-{safe_branch}-{today}.md")
     )
 

@@ -11,6 +11,7 @@ installation, configuration, and a quickstart.
 - [Intake mode](#intake-mode)
 - [Blueprint mode](#blueprint-mode)
 - [Audit mode](#audit-mode)
+- [Design principles](#design-principles)
 - [Phases](#phases)
   - [Phase 1 — Plan](#phase-1-plan)
   - [Phase 1.5 — TDD specs](#phase-1-5-tdd)
@@ -152,7 +153,20 @@ passed intake** — the same reasoning as amendments staying beside `plan.md` in
 it: the original `--intake` file stays exactly what `migite-explore`/`migite-blueprint` produced
 (or whatever you were handed), and `task.md` is clearly your own addition on top of it.
 `migite-plan` reads both and treats `task.md` as authoritative context for anything it adds.
-Leaving the editor empty (or answering anything but `y`) skips it — no `task.md` is created.
+Leaving the editor empty (or answering anything but `y`) skips it — no `task.md` is created,
+unless `--attach` was also given (see below), in which case `task.md` is still written from the
+attachments alone.
+
+**Attaching reference material (`--attach <file>`, repeatable).** `migite-plan`'s Claude calls are
+headless (`claude --print`, never given `--permission-mode` — see
+[Permission failures](./troubleshooting.md#troubleshooting-permissions)), so a file path merely
+mentioned in the intake (a data map, a spec doc, a design mock) can never be opened by the model
+itself. `--attach` reads the file's raw content and folds it into `task.md` as a `## Attachment:
+<name>` block, so it reaches `migite-plan` as plain prompt text instead. Works regardless of
+`--intake` mode — if you also answer `y` to the supplementary-details prompt above, the attachment
+content is pre-filled into the editor buffer so you can add more around it, in the same file. Each
+attachment is capped at 50,000 chars (truncated with a warning beyond that) since it's repeated in
+full on every explore/synthesis/critic/refine call for this task, not read once.
 
 <a id="blueprint-mode"></a>
 ### Blueprint mode (`--blueprint`)
@@ -182,6 +196,15 @@ migite --audit <path>
   → [y/e/q] — proceed / edit / abort
   → planning starts immediately
 ```
+
+<a id="design-principles"></a>
+### Design principles
+
+Two principles that already govern how migite has evolved, written down as a citable reference:
+
+- **Narrow core, capability at the edges.** Prefer editing a prompt/template over adding new bash logic to `migite.d/*.sh` when the same result is reachable that way. Growing `migite.d/*.sh` for something a prompt template already covers adds permanent core surface for a one-off need.
+
+- **Doc-drift checklist.** Before calling a rename/move done, grep `README.md` and `docs/*.md` for the old name. Nothing in this repo enforces docs and implementation moving together, so it has to be a manual habit.
 
 ---
 
@@ -295,7 +318,7 @@ Every phase computes its own changed-file list from `git diff <base branch> --na
 |------|-----|
 | Base branch is auto-detected | `origin/HEAD`, then `main` / `master` / `develop`. Hardcoding `main` silently produced empty diffs on master-based repos, so rubocop was skipped for the wrong reason |
 | Deleted files excluded (`ACMR`) everywhere | Stale paths caused rubocop `No such file or directory` and rspec load errors — Phase 3 didn't apply this filter until it was caught and fixed |
-| `bundle exec` runs from the app's actual root, not necessarily the repo root | Bundler only searches upward from cwd for a Gemfile. When the Ruby app lives one level down (e.g. a `rails-app/` subdirectory alongside other tooling), `detect_app_root` (`helpers.sh`) finds it and every `bundle_exec` call `cd`s there first — otherwise `git diff`'s repo-root-relative paths get re-resolved against the wrong directory and rubocop reports files missing |
+| `bundle exec` runs from the app's actual root, not necessarily the repo root | Bundler only searches upward from cwd for a Gemfile. When the Ruby app lives one level down (e.g. a `rails-app/` subdirectory alongside other tooling), `detect_stack` (`helpers.sh`) finds it via the `rails` stack profile's `stack_rails_app_root` and every `bundle_exec` call `cd`s there first — otherwise `git diff`'s repo-root-relative paths get re-resolved against the wrong directory and rubocop reports files missing |
 
 Untracked (never-`git add`ed) files are **not** included in any of these diffs — there's no `git ls-files --others` call anywhere in migite. A brand-new file that hasn't been staged yet is invisible to rubocop/rspec/review until you `git add` it.
 
@@ -395,7 +418,7 @@ copy never lags behind.
 | File | Contents |
 |------|----------|
 | `intake.md` | Filled-in task intake |
-| `task.md` | Optional — supplementary details added via [Intake mode](#intake-mode)'s prompt, kept separate from `intake.md` |
+| `task.md` | Optional — supplementary details added via [Intake mode](#intake-mode)'s prompt and/or `--attach`, kept separate from `intake.md` |
 | `jira-context.md` | Optional — fetched Jira ticket content when `--jira` is used and the fetch succeeds |
 | `plan.md` | Implementation plan |
 | `amendment-NN.md` | Scoped delta from each `--amend` run — original plan stays untouched |

@@ -88,6 +88,7 @@ End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
     echo "---"
     echo "> Knowledge: [[${KNOWLEDGE_WIKILINK}]]"
   } >> "$REVIEW_FILE"
+  sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
 
   # knowledge.md is repo-wide (one file per repo, not per-task) and lives in the
   # vault only — no scratchpad copy to sync, just bump its frontmatter.

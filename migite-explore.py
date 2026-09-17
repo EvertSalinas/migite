@@ -811,7 +811,7 @@ def main() -> None:
     ap.add_argument("--knowledge",  default="", help="Path to knowledge.md (optional)")
     ap.add_argument("--focus",      default="", help="Limit to lenses matching this keyword")
     ap.add_argument("--intakes",    action="store_true", help="Also emit workstream intake files")
-    ap.add_argument("--id",         default="", help="Jira ticket key or URL — groups this exploration under the ticket's existing folder")
+    ap.add_argument("--jira",       default="", help="Jira ticket key or URL — groups this exploration under the ticket's existing folder")
     ap.add_argument("--from-exploration",
                     help="Re-extract workstream intakes from an existing exploration.md")
     args = ap.parse_args()
@@ -821,14 +821,14 @@ def main() -> None:
     # ── Re-extract mode: no repo, no brief, no model-heavy phases ──────────────
     if args.from_exploration:
         output_dir = args.output
-        if not output_dir and args.id:
+        if not output_dir and args.jira:
             if not args.repo_root:
-                print("✘ --repo-root is required to resolve --id without --output", file=sys.stderr)
+                print("✘ --repo-root is required to resolve --jira without --output", file=sys.stderr)
                 sys.exit(1)
             repo_name = Path(args.repo_root).name
             org       = migite_paths.detect_org(args.repo_root)
             try:
-                run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.id)
+                run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.jira)
             except migite_paths.InvalidRunKeyError as e:
                 print(f"✘ {e}", file=sys.stderr)
                 sys.exit(1)
@@ -876,10 +876,10 @@ def main() -> None:
     slug      = migite_paths.slugify(args.name) if args.name else migite_paths.slugify(title)
 
     run_dir = None
-    if not args.output and (args.id or args.name):
+    if not args.output and (args.jira or args.name):
         try:
             run_dir = migite_paths.resolve_run_dir(
-                VAULT_BASE, org, repo_name, id=args.id or None, name=args.name or None
+                VAULT_BASE, org, repo_name, id=args.jira or None, name=args.name or None
             )
         except migite_paths.InvalidRunKeyError as e:
             print(f"✘ {e}", file=sys.stderr)

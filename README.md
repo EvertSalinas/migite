@@ -79,7 +79,7 @@ Full reference for all four: [docs/standalone-tools.md](./docs/standalone-tools.
 migite/                   ← wherever you clone this repo
 ├── migite                ← workflow orchestrator entrypoint (bash) — config, arg parsing, phase sequencing
 ├── migite.d/              ← phase fragments sourced by migite, in run order
-│   ├── helpers.sh         ← output/prompt helpers + shared DRY helpers (sync_artifact, run_rubocop_check, detect_app_root, bundle_exec, resolve_path, ...)
+│   ├── helpers.sh         ← output/prompt helpers + shared DRY helpers (sync_artifact, run_rubocop_check, detect_stack + stack profiles, bundle_exec, resolve_path, ...)
 │   ├── amend.sh           ← --amend mode (scope a delta against an already-built task)
 │   ├── plan.sh            ← Phase 1 (plan) + Phase 1.5 (TDD red phase)
 │   ├── implement.sh       ← Phase 2 (implement, staged or single-session) + Phase 2.5 auto-heal loop
@@ -108,7 +108,7 @@ migite/                   ← wherever you clone this repo
 
 `~/.local/bin/` holds symlinks to every top-level file above except README.md, docs/, and migite-improvements.md. `migite.d/` is not symlinked separately — `migite` resolves its own real path (through the symlink) to find `migite.d/` alongside it, so the directory just needs to stay next to `migite` in this repo.
 
-**Gemfile-subdirectory detection.** `migite` always `cd`s to `$REPO_ROOT` right after computing it, so `git diff` and every other command run from a consistent directory regardless of where `migite` was invoked from — but Bundler only searches upward from cwd for a `Gemfile`, never into subdirectories. When the actual Ruby app lives one level down (e.g. a `rails-app/` folder alongside other tooling in the same repo), `detect_app_root()` finds it and sets `$APP_ROOT`; every `bundle_exec` call then `cd`s there first, and `strip_app_prefix()` rewrites the repo-root-relative paths `git diff` produces into `$APP_ROOT`-relative ones before handing them to rubocop/rspec. `resolve_path()` absolutizes user-supplied file paths (`--audit`, `--blueprint`, `--intake`, `--amend-file`) before that `cd`, so they still resolve correctly afterward even if given relative to wherever you ran `migite` from.
+**Gemfile-subdirectory detection.** `migite` always `cd`s to `$REPO_ROOT` right after computing it, so `git diff` and every other command run from a consistent directory regardless of where `migite` was invoked from — but Bundler only searches upward from cwd for a `Gemfile`, never into subdirectories. When the actual Ruby app lives one level down (e.g. a `rails-app/` folder alongside other tooling in the same repo), `detect_stack()` finds it (via the `rails` stack profile's `stack_rails_app_root`) and sets `$APP_ROOT`; every `bundle_exec` call then `cd`s there first, and `strip_app_prefix()` rewrites the repo-root-relative paths `git diff` produces into `$APP_ROOT`-relative ones before handing them to rubocop/rspec. `resolve_path()` absolutizes user-supplied file paths (`--audit`, `--blueprint`, `--intake`, `--amend-file`, `--attach`) before that `cd`, so they still resolve correctly afterward even if given relative to wherever you ran `migite` from. `rails` and `generic` are the two registered stack profiles today — see [`--stack` values](#-stack-values) above and `docs/hermes-agent-improvements-plan.md` for the plan to add more.
 
 ---
 
@@ -238,6 +238,21 @@ migite --jira <jira-ticket-id> --staged
 # Amend an already-implemented task with post-implementation feedback
 migite --amend "reviewer says the service must be idempotent on retry"
 migite --amend-file ./qa-notes.md
+
+# Attach reference material the plan should ground itself in (repeatable) —
+# folded into task.md as plain text, since migite-plan's Claude calls are
+# headless and can't open a path mentioned in the intake themselves
+migite --jira <jira-ticket-id> --type spike --attach ~/Downloads/data-map.csv
+
+# Non-Rails / no-Gemfile repo — auto-detects as the generic stack (no
+# rubocop/rspec, plan+review still run). --stack forces it explicitly, e.g.
+# on a monorepo where auto-detection would otherwise pick rails.
+migite "add a health-check endpoint" --stack generic
+
+# Health check — read-only, mutates nothing. Tool resolution, scratchpad/vault
+# sync drift, orphaned sentinels. Exits non-zero if anything's found.
+migite doctor
+migite doctor --repo ~/Code/some-other-repo
 ```
 
 <a id="type-values"></a>
@@ -250,6 +265,16 @@ migite --amend-file ./qa-notes.md
 | `refactor` | Internal restructure, no behaviour change |
 | `spike` | Investigation or proof of concept |
 | `config` | Infrastructure, environment, or gem changes |
+
+### `--stack` values
+
+| Value | When it's used |
+|-------|----------------|
+| `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down. Runs rubocop/rspec via `bundle_exec`. |
+| `generic` | Auto-detected fallback for any repo with no recognized stack. Skips rubocop/rspec/`bundle` entirely; plan and review still run against the diff using general engineering judgment, with generic (language-agnostic) explore-area globs instead of Rails' MVC split. |
+
+Pass `--stack <value>` to override auto-detection. See `docs/hermes-agent-improvements-plan.md`
+("stack profiles") for the plan to add more stacks beyond these two.
 
 For amend mode, intake mode, blueprint mode, audit mode, the full phase-by-phase breakdown, output files, the commit gate, the Testing Plan requirement, and resuming a run, see **[docs/migite.md](./docs/migite.md)**.
 

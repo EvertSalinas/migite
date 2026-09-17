@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# migite.d/doctor.sh — `migite doctor`: a read-only, non-mutating health check.
+#
+# Sourced by migite. run_doctor is intentionally self-contained (parses its own
+# --repo flag, resolves REPO_ROOT/ORG/REPO_NAME/DEV_LOG_BASE itself) because it
+# must work even in cases the normal pipeline can't tolerate — a repo with no
+# Gemfile, a missing `claude`/`bundle`, an interrupted run leaving orphaned
+# state — so it runs before migite's own Setup (`require_cmd`, mkdir, arg
+# parsing) rather than assuming any of that already succeeded. Never mutates
+# anything it inspects; exits 0 if clean, 1 if it found anything.
+#
+# Expects MIGITE_HOME, MIGITE_PYTHON, DEV_LOG_BASE and helpers.sh's
+# detect_stack/STACK_PROFILES to already be available (sourced by migite
+# before this file).
+
+run_doctor() {
+  local doc_repo_arg="$PWD"
+  while [[ $# -gt 0 ]]; do
+    case "${1:-}" in
+      --repo)
+        doc_repo_arg="${2:-}"
+        [[ -z "$doc_repo_arg" ]] && { echo "Provide a path after --repo" >&2; return 1; }
+        shift 2
+        ;;
+      *)
+        echo "Unknown doctor argument: $1 (supported: --repo <path>)" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  echo ""
+  echo "migite doctor"
+  echo ""
+
+  if ! (cd "$doc_repo_arg" 2>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null); then
+    echo "✘ Not a git repo: $doc_repo_arg"
+    return 1
+  fi
+
+  local issues=0
+  local REPO_ROOT REPO_NAME ORG
+  REPO_ROOT="$(cd "$doc_repo_arg" && git rev-parse --show-toplevel)"
+  REPO_NAME="$(basename "$REPO_ROOT")"
+  ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT" 2>/dev/null || echo "unknown")"
+  local doc_dev_log_base="${DEV_LOG_BASE:-$HOME/dev-log}"
+
+  # ── Stack detection — read-only, never errors since Stage 2 (generic is the
+  # catch-all) — see docs/hermes-agent-improvements-plan.md "stack profiles".
+  detect_stack
+  echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+
+  # ── Tool resolution ────────────────────────────────────────────────────────
+  local doc_tool
+  for doc_tool in claude git "$MIGITE_PYTHON"; do
+    if command -v "$doc_tool" &>/dev/null; then
+      echo "✔ Tool resolves: $doc_tool"
+    else
+      echo "✘ Tool does not resolve: $doc_tool"
+      issues=$((issues + 1))
+    fi
+  done
+  if [[ "$STACK" == "rails" ]]; then
+    if command -v bundle &>/dev/null; then
+      echo "✔ Tool resolves: bundle"
+    else
+      echo "✘ Tool does not resolve: bundle (required for the rails stack)"
+      issues=$((issues + 1))
+    fi
+  fi
+
+  # ── Scratchpad / vault sync drift ──────────────────────────────────────────
+  # Every scratchpad/<slug>/*.md should have a same-or-newer counterpart under
+  # the vault mirror — a mismatch means a sync_artifact call didn't happen
+  # (crashed run, or a bug in a phase that forgot to sync).
+  local scratchpad_root="$REPO_ROOT/scratchpad"
+  local vault_root="$doc_dev_log_base/$ORG/$REPO_NAME"
+  local drift=()
+  if [[ -d "$scratchpad_root" ]]; then
+    local task_dir
+    for task_dir in "$scratchpad_root"/*/; do
+      [[ -d "$task_dir" ]] || continue
+      local slug fname vault_f f
+      slug=$(basename "$task_dir")
+      for f in "$task_dir"*.md; do
+        [[ -f "$f" ]] || continue
+        fname=$(basename "$f")
+        vault_f="$vault_root/$slug/$fname"
+        if [[ ! -f "$vault_f" ]]; then
+          drift+=("$slug/$fname — no vault counterpart")
+        elif [[ "$f" -nt "$vault_f" ]]; then
+          drift+=("$slug/$fname — scratchpad is newer than vault (sync_artifact may not have run)")
+        fi
+      done
+    done
+  fi
+  if [[ ${#drift[@]} -eq 0 ]]; then
+    echo "✔ Scratchpad/vault sync: no drift found"
+  else
+    echo "⚠ Scratchpad/vault drift (${#drift[@]}):"
+    local d
+    for d in "${drift[@]}"; do
+      echo "  - $d"
+    done
+    issues=$((issues + ${#drift[@]}))
+  fi
+
+  # ── Orphaned sentinels ──────────────────────────────────────────────────────
+  # A sentinel (.plan.done / .review.done) with no corresponding non-empty
+  # output file means a LangGraph run was interrupted after touching the
+  # sentinel but before (or without) writing real content.
+  local orphans=()
+  if [[ -d "$scratchpad_root" ]]; then
+    local task_dir
+    for task_dir in "$scratchpad_root"/*/; do
+      [[ -d "$task_dir" ]] || continue
+      local slug
+      slug=$(basename "$task_dir")
+      if [[ -f "$task_dir/.plan.done" && ! -s "$task_dir/plan.md" ]]; then
+        orphans+=("$slug/.plan.done — plan.md missing or empty")
+      fi
+      if [[ -f "$task_dir/.review.done" && ! -s "$task_dir/review.md" ]]; then
+        orphans+=("$slug/.review.done — review.md missing or empty")
+      fi
+    done
+  fi
+  if [[ ${#orphans[@]} -eq 0 ]]; then
+    echo "✔ Sentinels: none orphaned"
+  else
+    echo "⚠ Orphaned sentinels (${#orphans[@]}):"
+    local o
+    for o in "${orphans[@]}"; do
+      echo "  - $o"
+    done
+    issues=$((issues + ${#orphans[@]}))
+  fi
+
+  # ── Knowledge duplicate-entry heuristic ─────────────────────────────────────
+  # knowledge.md accumulates one bullet per run, extracted independently each
+  # time — nothing stops the same lesson landing twice. Flags entries whose
+  # normalized text (wikilink stripped, so different runs' citations don't
+  # mask the match) repeats an earlier one. A warning, not an automatic dedup —
+  # knowledge.md is meant to be eyeballed before it's trusted.
+  local knowledge_file="$vault_root/knowledge.md"
+  local dupes=()
+  if [[ -f "$knowledge_file" ]]; then
+    local seen=() line normalized prior found
+    while IFS= read -r line; do
+      [[ "$line" == "- "* ]] || continue
+      normalized=$(echo "${line#- }" \
+        | sed -E 's/\[\[[^]]*\]\]//g' \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9 ]//g' \
+        | tr -s ' ' \
+        | sed -E 's/^ +| +$//g')
+      [[ -z "$normalized" ]] && continue
+      found=""
+      for prior in "${seen[@]}"; do
+        if [[ "$prior" == "$normalized" ]]; then
+          found=1
+          break
+        fi
+      done
+      if [[ -n "$found" ]]; then
+        dupes+=("\"${line#- }\" repeats an earlier entry")
+      else
+        seen+=("$normalized")
+      fi
+    done < "$knowledge_file"
+  fi
+  if [[ ${#dupes[@]} -eq 0 ]]; then
+    echo "✔ Knowledge duplicates: none found"
+  else
+    echo "⚠ Possible duplicate knowledge entries (${#dupes[@]}):"
+    local dpe
+    for dpe in "${dupes[@]}"; do
+      echo "  - $dpe"
+    done
+    issues=$((issues + ${#dupes[@]}))
+  fi
+
+  # ── helpers.sh size watch (informational) ───────────────────────────────────
+  # Hermes treats ~2,000 lines / ~300 lines-per-function as its own signal to
+  # split a facade file. Not enforced here — just surfaced so migite.d/helpers.sh
+  # growth doesn't go unnoticed the way it did for Hermes before that threshold
+  # existed. Never adds to $issues; this can't fail doctor, only inform it.
+  local helpers_file="$MIGITE_HOME/migite.d/helpers.sh"
+  if [[ -f "$helpers_file" ]]; then
+    local helpers_lines
+    helpers_lines=$(wc -l < "$helpers_file" | tr -d ' ')
+    if [[ "$helpers_lines" -ge 2000 ]]; then
+      echo "⚠ helpers.sh is $helpers_lines lines — at Hermes' own ~2,000-line split trigger, worth a look"
+    else
+      echo "ℹ helpers.sh: $helpers_lines lines (split trigger: ~2,000)"
+    fi
+  fi
+
+  echo ""
+  if [[ $issues -eq 0 ]]; then
+    echo "0 issues found."
+    return 0
+  else
+    echo "$issues issue(s) found."
+    return 1
+  fi
+}

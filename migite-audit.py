@@ -302,7 +302,7 @@ def main() -> None:
     ap.add_argument("--repo-root", required=True)
     ap.add_argument("--focus",  default="", help="Limit audit to areas matching this keyword")
     ap.add_argument("--output", default="", help="Output file path (default: vault)")
-    ap.add_argument("--id",     default="", help="Jira ticket key or URL — groups this audit under the ticket's existing folder")
+    ap.add_argument("--jira",   default="", help="Jira ticket key or URL — groups this audit under the ticket's existing folder")
     args = ap.parse_args()
 
     repo_name = Path(args.repo_root).name
@@ -311,9 +311,9 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     run_dir = None
-    if not args.output and args.id:
+    if not args.output and args.jira:
         try:
-            run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.id)
+            run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.jira)
         except migite_paths.InvalidRunKeyError as e:
             print(f"✘ Not a Jira ticket key: {e}", file=sys.stderr)
             sys.exit(1)

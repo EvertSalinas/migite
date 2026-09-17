@@ -2,9 +2,10 @@
 # migite.d/plan.sh — Phase 1 (plan) and Phase 1.5 (TDD red phase).
 #
 # Sourced by migite. run_plan expects TASK, JIRA_TICKET, JIRA_URL, TASK_TYPE,
-# AUDIT_FILE, BLUEPRINT_FILE, INTAKE_FILE_ARG, ORG, REPO_NAME, REPO_ROOT, BRANCH,
-# DEV_LOG_BASE, MIGITE_HOME to be set, and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR,
-# INTAKE_FILE, TASK_FILE, PLAN_FILE, PLAN_VAULT, IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT,
+# AUDIT_FILE, BLUEPRINT_FILE, INTAKE_FILE_ARG, ATTACH_FILES, ORG, REPO_NAME,
+# REPO_ROOT, BRANCH, DEV_LOG_BASE, MIGITE_HOME to be set, and sets TASK_SLUG,
+# TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, TASK_FILE, PLAN_FILE, PLAN_VAULT,
+# IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT,
 # REVIEW_FILE, REVIEW_VAULT, TESTING_PLAN_FILE, TESTING_PLAN_VAULT, CRITIC_FILE,
 # CRITIC_VAULT, KNOWLEDGE_FILE, KNOWLEDGE_INJECT, PLAN_GATE_ATTEMPTS for the phases
 # that run after it. PLAN_FILE/TESTING_PLAN_FILE/CRITIC_FILE live in the scratchpad
@@ -254,10 +255,15 @@ JIRA_FETCH_FAILED: <short reason>"
   log "Scratchpad: $SCRATCHPAD_DIR"
   log "Vault mirror: $TASK_DIR"
 
-  # --intake mode only: offer a separate task.md for anything the passed file didn't
-  # cover. It stays its own file (never merged into the passed intake) and is read
-  # by migite-plan as additional context, same spirit as amendments staying beside plan.md.
+  # task.md carries two independent sources on top of the passed intake, both
+  # optional: --attach files (below) and, --intake mode only, a supplementary
+  # editor prompt. It stays its own file (never merged into the passed intake)
+  # and is read by migite-plan as additional context, same spirit as
+  # amendments staying beside plan.md.
   TASK_FILE=""
+  local ATTACH_BLOCK
+  ATTACH_BLOCK="$(build_attachments_block)"
+
   if [[ -n "$INTAKE_FILE_ARG" ]]; then
     echo ""
     local task_file_choice
@@ -265,7 +271,10 @@ JIRA_FETCH_FAILED: <short reason>"
     if [[ "$task_file_choice" =~ ^[Yy]$ ]]; then
       local TASK_FILE_TMP
       TASK_FILE_TMP=$(mktemp)
-      printf '<!-- Additional details/context for this task, on top of the intake above. Lines starting with <!-- are ignored. -->\n\n' > "$TASK_FILE_TMP"
+      {
+        printf '<!-- Additional details/context for this task, on top of the intake above. Lines starting with <!-- are ignored. -->\n\n'
+        [[ -n "$ATTACH_BLOCK" ]] && printf '%s' "$ATTACH_BLOCK"
+      } > "$TASK_FILE_TMP"
       ${EDITOR:-vim} "$TASK_FILE_TMP"
       local task_file_content
       task_file_content=$(grep -v '^<!--' "$TASK_FILE_TMP" || true)
@@ -279,6 +288,15 @@ JIRA_FETCH_FAILED: <short reason>"
       fi
       rm -f "$TASK_FILE_TMP"
     fi
+  fi
+
+  # --attach given but no editor pass wrote task.md above (non-intake mode, or
+  # the prompt was declined/skipped) — still save the attachments on their own.
+  if [[ -z "$TASK_FILE" && -n "$ATTACH_BLOCK" ]]; then
+    TASK_FILE="$SCRATCHPAD_DIR/task.md"
+    printf '%s' "$ATTACH_BLOCK" > "$TASK_FILE"
+    sync_artifact "$TASK_FILE" "$TASK_DIR/task.md"
+    success "Attachment(s) saved to $TASK_FILE"
   fi
 
   # Inject knowledge.md so Plan and Implement phases inherit repo-level memory
@@ -297,6 +315,7 @@ JIRA_FETCH_FAILED: <short reason>"
     --task-type     "${TASK_TYPE:-feature}"
     --sentinel      "$PLAN_SENTINEL"
     --base-branch   "$BASE_BRANCH"
+    --stack         "$STACK"
   )
   [[ -f "$KNOWLEDGE_FILE" ]]   && PLAN_LANGGRAPH_ARGS+=(--knowledge  "$KNOWLEDGE_FILE")
   [[ -n "$AUDIT_FILE" ]]      && PLAN_LANGGRAPH_ARGS+=(--audit      "$AUDIT_FILE")

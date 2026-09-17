@@ -36,12 +36,32 @@ resolve_path() {
 # origin/HEAD is authoritative when set; otherwise falls back to whichever of
 # main/master/develop actually exists locally, so migite works unmodified on
 # repos of either convention.
-# detect_app_root — sets $APP_ROOT and $APP_REL_PATH.
+
+# ── Stack profiles ────────────────────────────────────────────────────────────
+# A stack is a `stack_<name>_detect` / `stack_<name>_app_root` function pair.
+# detect_stack() tries STACK_PROFILES in order and dispatches to the first
+# match — adding a stack means registering one more pair here, not adding a
+# branch to detect_stack() or to any caller. `generic` must stay last — it's
+# the catch-all (see docs/hermes-agent-improvements-plan.md, "stack profiles",
+# Stage 2) that lets migite run on any project, not just Rails: review.sh
+# skips rubocop/rspec entirely when $STACK == "generic", and migite-plan uses
+# a generic file-glob set instead of the Rails-MVC EXPLORE_AREAS.
+STACK_PROFILES=(rails generic)
+
+# stack_rails_detect — true if a Gemfile exists at $REPO_ROOT or exactly one
+# level down. Detection only, no side effects — stack_rails_app_root (below)
+# does the actual, more detailed resolution once this stack is selected.
+stack_rails_detect() {
+  [[ -f "$REPO_ROOT/Gemfile" ]] && return 0
+  find "$REPO_ROOT" -mindepth 2 -maxdepth 2 -name Gemfile -print -quit 2>/dev/null | grep -q .
+}
+
+# stack_rails_app_root — sets $APP_ROOT and $APP_REL_PATH.
 # Bundler only searches upward from cwd for a Gemfile, never into
 # subdirectories. Most repos have it at $REPO_ROOT, but some nest the actual
 # Ruby app one level down (e.g. a rails-app/ dir alongside other tooling) —
 # without this, every bundle exec call fails with "Could not locate Gemfile".
-detect_app_root() {
+stack_rails_app_root() {
   if [[ -f "$REPO_ROOT/Gemfile" ]]; then
     APP_ROOT="$REPO_ROOT"
     APP_REL_PATH=""
@@ -62,6 +82,40 @@ detect_app_root() {
       ;;
     *) error "Multiple Gemfiles found under $REPO_ROOT (${matches[*]}) — migite doesn't support multi-app monorepos yet" ;;
   esac
+}
+
+# stack_generic_detect — always matches. The catch-all for any repo that
+# isn't a recognized stack; must stay last in STACK_PROFILES.
+stack_generic_detect() { return 0; }
+
+# stack_generic_app_root — no Gemfile-style subdirectory nesting to resolve;
+# the app root is always the repo root.
+stack_generic_app_root() {
+  APP_ROOT="$REPO_ROOT"
+  APP_REL_PATH=""
+}
+
+# detect_stack — sets $STACK, then dispatches to the matched profile's
+# _app_root to set $APP_ROOT/$APP_REL_PATH. Honors an explicit $STACK_OVERRIDE
+# (set via migite's --stack flag) before trying STACK_PROFILES in order.
+detect_stack() {
+  if [[ -n "${STACK_OVERRIDE:-}" ]]; then
+    if [[ ! " ${STACK_PROFILES[*]} " == *" $STACK_OVERRIDE "* ]]; then
+      error "Unknown stack '$STACK_OVERRIDE' — supported: ${STACK_PROFILES[*]}"
+    fi
+    STACK="$STACK_OVERRIDE"
+    "stack_${STACK}_app_root"
+    return
+  fi
+
+  local s
+  for s in "${STACK_PROFILES[@]}"; do
+    if "stack_${s}_detect"; then
+      STACK="$s"
+      "stack_${s}_app_root"
+      return
+    fi
+  done
 }
 
 # strip_app_prefix <files> — rewrites REPO_ROOT-relative paths (as produced by
@@ -85,6 +139,28 @@ strip_app_prefix() {
 # the Gemfile (and .tool-versions) regardless of where migite was invoked from.
 bundle_exec() {
   (cd "$APP_ROOT" && bundle exec "$@")
+}
+
+# changed_ruby_files/changed_spec_files <base_branch> — echo changed .rb /
+# _spec.rb files, tracked (git diff --diff-filter=ACMR) union untracked (git
+# ls-files --others). A file that hasn't been `git add`-ed yet is invisible to
+# `git diff`, and thus to rubocop/rspec — this exact blind spot has recurred
+# at least five times in production (migite-improvements.md: 2026-07-23,
+# 2026-08-05, 2026-08-11, 2026-08-12, 2026-08-17), each time fixed at one call
+# site and not the others. One shared function, used everywhere the two are
+# needed, so it can't drift out of sync again.
+changed_ruby_files() {
+  local base_branch="$1"
+  { git diff "$base_branch" --name-only --diff-filter=ACMR
+    git ls-files --others --exclude-standard
+  } | grep '\.rb$' | sort -u
+}
+
+changed_spec_files() {
+  local base_branch="$1"
+  { git diff "$base_branch" --name-only --diff-filter=ACMR
+    git ls-files --others --exclude-standard
+  } | grep '_spec\.rb$' | sort -u
 }
 
 detect_base_branch() {
@@ -355,6 +431,32 @@ resume_from_vault() {
   cp "$vault" "$scratch"
 }
 
+# build_attachments_block — reads each path in the global ATTACH_FILES array
+# (populated by migite's --attach flag) and renders it as a heading + raw
+# content block, so it can be folded into plain prompt text. Attachments feed
+# directly into every plan model call (synthesize/critic/refine, all headless
+# `claude --print` — see docs/troubleshooting.md), so a huge file multiplies
+# token cost per call, not just once; truncated at a safety cap accordingly.
+# Echoes nothing if ATTACH_FILES is empty or unset.
+build_attachments_block() {
+  # ${ATTACH_FILES+set} (not ${#ATTACH_FILES[@]}) so this is safe under `set -u`
+  # whether the array was never declared or declared empty — both mean "no
+  # attachments" here, and only the former would otherwise raise "unbound variable".
+  [[ -z "${ATTACH_FILES+set}" ]] && return 0
+  local max_chars=50000
+  local f content
+  for f in "${ATTACH_FILES[@]}"; do
+    content=$(cat "$f")
+    if [[ ${#content} -gt $max_chars ]]; then
+      content="${content:0:$max_chars}"$'\n\n'"[... truncated, file is larger than the ${max_chars}-char cap ...]"
+      # Callers capture this function's stdout via command substitution — the
+      # warning must not land in that string, so it goes to stderr instead.
+      warn "Attachment $(basename "$f") truncated to $max_chars chars" >&2
+    fi
+    printf '## Attachment: %s\n\n%s\n\n' "$(basename "$f")" "$content"
+  done
+}
+
 # build_knowledge_injection <knowledge-file>
 # Renders the "repository conventions" block injected into Plan/Implement/Amend prompts.
 # Echoes nothing if the file doesn't exist yet.
@@ -375,6 +477,37 @@ read_gate_choice() {
   echo -e "${BOLD}────────────────────────────────────────${RESET}"
   echo ""
   read -r -p "$(echo -e "${YELLOW}${prompt}${RESET}")" GATE_CHOICE
+}
+
+# tooling_failed <log> — checks a rubocop/rspec output log for the failure
+# patterns migite has had to add detection for one at a time in production
+# (migite-improvements.md): a Ruby version not selected for `bundle exec`, a
+# git-sourced gem not checked out, or an rspec run that produced 0 examples
+# because of a DB connection failure or a load error. Echoes a short
+# description and returns 0 (failed) on a match, 1 (clean) otherwise — every
+# caller that inspects a log for these patterns should call this rather than
+# repeating the grep list, which is exactly how the git-error and load-error
+# patterns went missing from some call sites but not others.
+tooling_failed() {
+  local log="$1"
+  [[ -f "$log" ]] || return 1
+  if grep -q 'No version is set for command' "$log"; then
+    echo "Ruby version not set — bundle exec could not run"
+    return 0
+  fi
+  if grep -q 'Bundler::GitError\|not yet checked out' "$log"; then
+    echo "Bundler::GitError — a git-sourced gem isn't checked out (run bundle install)"
+    return 0
+  fi
+  if grep -q '0 examples' "$log" && grep -qi 'connection\|ConnectionBad' "$log"; then
+    echo "DB connection failed — 0 examples ran, no coverage verified"
+    return 0
+  fi
+  if grep -q '0 examples' "$log" && grep -qi 'error occurred while loading\|LoadError' "$log"; then
+    echo "Load errors — 0 examples ran, spec coverage unverified"
+    return 0
+  fi
+  return 1
 }
 
 # run_rubocop_check <files> <log> [autocorrect=false]

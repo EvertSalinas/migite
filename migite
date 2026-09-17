@@ -28,9 +28,20 @@ MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
 # Python binary for LangGraph agent scripts. Override via env if your setup differs.
 # Resolved dynamically (not pinned to a specific asdf patch version) so an asdf Python
 # upgrade doesn't silently break this the same way a hardcoded path once broke
-# IMPROVEMENTS_FILE (see migite-improvements.md, 2026-08-20 pass) — falls back to the
-# previous hardcoded path only if no python3 is on PATH at all.
-MIGITE_PYTHON="${MIGITE_PYTHON:-$(command -v python3 || echo "$HOME/.asdf/installs/python/3.13.5/bin/python3")}"
+# IMPROVEMENTS_FILE (see migite-improvements.md, 2026-08-20 pass) — but `command -v
+# python3` alone isn't enough to verify: an asdf shim always exists on PATH even with
+# no version selected for the current directory, so presence-checking it would
+# silently resolve to a shim that then fails with "No version is set for command
+# python3" on any repo without one pinned (found while testing the stack-profiles
+# work — migite's own repo has no python pinned). Verify it actually runs before
+# trusting it; fall back to the previous hardcoded path otherwise.
+if [[ -n "${MIGITE_PYTHON:-}" ]]; then
+  : # explicit override — trust it as-is
+elif command -v python3 &>/dev/null && python3 --version &>/dev/null; then
+  MIGITE_PYTHON="$(command -v python3)"
+else
+  MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
+fi
 # Real directory this script lives in — resolves through the ~/.local/bin symlink so
 # anything migite writes about itself lands in the repo (the source of truth), not
 # wherever it happened to be invoked from.
@@ -41,17 +52,28 @@ IMPLEMENT_CMD_PATH="$HOME/.claude/commands/implement.md"
 
 # ── Phases ────────────────────────────────────────────────────────────────────
 source "$MIGITE_HOME/migite.d/helpers.sh"
+source "$MIGITE_HOME/migite.d/doctor.sh"
 source "$MIGITE_HOME/migite.d/amend.sh"
 source "$MIGITE_HOME/migite.d/plan.sh"
 source "$MIGITE_HOME/migite.d/implement.sh"
 source "$MIGITE_HOME/migite.d/review.sh"
 source "$MIGITE_HOME/migite.d/deliver.sh"
 
+# `migite doctor [--repo <path>]` — dispatched before Setup (require_cmd, arg
+# parsing) since it must run even when those would fail (no Gemfile, missing
+# `claude`/`bundle`, etc.) — that's the whole point of a health check.
+if [[ "${1:-}" == "doctor" ]]; then
+  shift
+  run_doctor "$@"
+  exit $?
+fi
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 require_cmd claude
 require_cmd git
-require_cmd bundle
+# `bundle` is only required for the `rails` stack — checked after detect_stack,
+# once we know which stack this repo actually is.
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 TASK=""
@@ -65,6 +87,8 @@ STAGED=false
 AMEND_MODE=false
 AMEND_FEEDBACK=""
 AMEND_FEEDBACK_FILE=""
+STACK_OVERRIDE=""
+ATTACH_FILES=()
 
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
@@ -135,6 +159,28 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
+    --stack)
+      # Overrides auto-detection (helpers.sh's detect_stack) — for the
+      # ambiguous/monorepo case, or to force the generic (no lint/test
+      # tooling) path on a repo that would otherwise auto-detect as rails.
+      STACK_OVERRIDE="${2:-}"
+      [[ -z "$STACK_OVERRIDE" ]] && error "Provide a stack name after --stack"
+      shift 2
+      ;;
+    --attach)
+      # Repeatable. Each file's raw content is folded into task.md (see
+      # run_plan in plan.sh) so migite-plan sees it as plain prompt text —
+      # its Claude calls are headless (`claude --print`, no --permission-mode
+      # ever passed, see docs/troubleshooting.md), so a referenced path in the
+      # intake can never be opened by the model itself.
+      ATTACH_ARG="${2:-}"
+      [[ -z "$ATTACH_ARG" ]] && error "Provide a file path after --attach"
+      [[ ! -f "$ATTACH_ARG" ]] && error "Attachment file not found: $ATTACH_ARG"
+      ATTACH_ARG="$(resolve_path "$ATTACH_ARG")"
+      ATTACH_FILES+=("$ATTACH_ARG")
+      log "Attachment: $ATTACH_ARG"
+      shift 2
+      ;;
     *)
       # An existing .md file is auto-detected as an intake, same as --intake.
       # Anything else — plain text, or a path that doesn't exist — stays a task description.
@@ -180,12 +226,14 @@ REPO_NAME=$(basename "$REPO_ROOT")
 # get re-resolved against the wrong cwd.
 cd "$REPO_ROOT"
 
-# Sets APP_ROOT/APP_REL_PATH — the directory holding the Gemfile, which isn't
-# always $REPO_ROOT (e.g. a rails-app/ subdirectory one level down). bundle
-# exec always runs from $APP_ROOT via the bundle_exec/run_rubocop_check/
-# run_rspec_check helpers, regardless of where migite itself was invoked from.
-detect_app_root
-log "App dir: ${APP_REL_PATH:-.}"
+# Detects the project's stack ($STACK) and sets $APP_ROOT/$APP_REL_PATH — the
+# directory holding the Gemfile, which isn't always $REPO_ROOT (e.g. a
+# rails-app/ subdirectory one level down). bundle exec always runs from
+# $APP_ROOT via the bundle_exec/run_rubocop_check/run_rspec_check helpers,
+# regardless of where migite itself was invoked from.
+detect_stack
+log "Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+[[ "$STACK" == "rails" ]] && require_cmd bundle
 
 ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT")"
 log "Repo: $ORG/$REPO_NAME"

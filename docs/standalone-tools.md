@@ -107,7 +107,12 @@ migite-explore "make migite agent-agnostic across claude code and opencode"
 migite-explore --brief ./initiative.md --name agent-agnostic
 
 # Group this exploration under an existing ticket's vault folder
-migite-explore --brief ./initiative.md --id <jira-ticket-id>
+migite-explore --brief ./initiative.md --jira <jira-ticket-id>
+
+# Fold a file's content into the brief as reference material (repeatable) —
+# every lens sees it, since it's just text folded into the brief before any
+# Claude call happens
+migite-explore --brief ./initiative.md --attach ./data-map.csv
 
 # Also emit one migite intake per workstream, ready to feed back into migite
 migite-explore "extract billing into a service" --intakes
@@ -156,6 +161,14 @@ context is capped (~22,000 chars total, ~4,000/file, top 30 ranked files; the ch
 a further-truncated 12,000-char slice) with no warning surfaced when a large repo/initiative gets
 trimmed — a known limitation, not a bug, but worth knowing on a big repo.
 
+**Referencing external material.** Every Claude call here is a headless `claude --print` with no
+tool access (`MIGITE_PERMISSION_MODE` only ever adds `--permission-mode`, never a working
+directory to read from) — a path merely mentioned in the brief can never be opened by the model
+itself. `--attach <file>` (repeatable) reads a file's raw content and folds it directly into the
+brief text before any Claude call happens, so it reaches all six lenses plus synthesis, challenge,
+and refine reliably. Each attachment is capped at 50,000 chars (truncated with a warning beyond
+that), since it's repeated in full on every one of those ~9 calls, not read once.
+
 The **challenge pass** is what separates this from a plan. Feasibility documents fail in
 predictable ways — missed touchpoints, underestimated effort, hand-waved hard parts, a confident
 verdict from thin evidence. A second Opus 5 pass attacks the draft on seven axes and the document
@@ -170,7 +183,7 @@ is revised against those findings.
 | `intake-NN-<slug>.md` | One migite intake per workstream (only with `--intakes`) |
 | `workstreams-raw.md` | Only written if workstream extraction couldn't be parsed into intake blocks — the raw text lands here instead of being silently dropped |
 
-`--output`, when given, always wins over `--id`/`--name` — no resolver lookup happens at all in that
+`--output`, when given, always wins over `--jira`/`--name` — no resolver lookup happens at all in that
 case. Reusing an existing `--name` creates a *new* `<slug>/explore-<timestamp>/` folder alongside
 any older `exploration-<slug>-<date>/` folder from before this change — the two aren't merged
 automatically.
@@ -228,8 +241,8 @@ migite-explore --from-exploration ~/…/exploration-billing-2026-08-18/explorati
 | Reads | `## Workstreams` section of the exploration document |
 | Writes | `intake-NN-<slug>.md` only |
 | Never touches | `exploration.md` (your input) and `challenges.md` (the original run's output) |
-| Output dir | Defaults to the directory containing the exploration file; overridden by `--output`; if `--id` is passed instead, goes to that ticket's `explore-<timestamp>/` folder regardless of where the source file lives |
-| Git repo | Not required when working directly on a file in the vault — **required if `--id` is also passed**, to resolve org/repo for the ticket folder |
+| Output dir | Defaults to the directory containing the exploration file; overridden by `--output`; if `--jira` is passed instead, goes to that ticket's `explore-<timestamp>/` folder regardless of where the source file lives |
+| Git repo | Not required when working directly on a file in the vault — **required if `--jira` is also passed**, to resolve org/repo for the ticket folder |
 
 Warns if the document has no `## Workstreams` section rather than silently producing nothing.
 
@@ -239,9 +252,9 @@ If a repo `knowledge.md` exists in the vault, it is injected into every lens aut
 there is no implementation phase downstream to catch a shallow read), `claude-opus-5` for both
 synthesis and the adversarial challenge, `claude-sonnet-5` for refinement and workstream extraction.
 
-**Default output:** no `--id`/`--name` — `~/dev-log/<org>/<repo>/exploration-<slug>-<date>/`.
-With `--id <jira-ticket-id>` or `--name <slug>` — `~/dev-log/<org>/<repo>/<slug>/explore-<timestamp>/`,
-grouped alongside any other run already using that folder (only `--id` prefix-matches an existing
+**Default output:** no `--jira`/`--name` — `~/dev-log/<org>/<repo>/exploration-<slug>-<date>/`.
+With `--jira <jira-ticket-id>` or `--name <slug>` — `~/dev-log/<org>/<repo>/<slug>/explore-<timestamp>/`,
+grouped alongside any other run already using that folder (only `--jira` prefix-matches an existing
 sibling; `--name` is exact-match-only).
 
 ---
@@ -262,7 +275,7 @@ migite-audit --focus jobs
 migite-audit --focus controllers
 
 # Group this audit under an existing ticket's vault folder
-migite-audit --id <jira-ticket-id>
+migite-audit --jira <jira-ticket-id>
 
 # Write to a specific file
 migite-audit --output ./audit.md
@@ -277,14 +290,14 @@ After the audit, feed the report directly into migite planning:
 migite --audit ~/dev-log/<org>/<repo>/audit-<date>.md
 ```
 
-`--output`, when given, always wins over `--id` — no resolver lookup happens at all in that case.
+`--output`, when given, always wins over `--jira` — no resolver lookup happens at all in that case.
 When a run finds any critical finding, it prints a `migite --type refactor` suggestion alongside
 the `N critical / N warnings / N notes` summary.
 
 **Models used:** `claude-haiku-4-5-20251001` for per-area analysis, `claude-sonnet-5` for synthesis.
 
-**Default output:** no `--id` — `~/dev-log/<org>/<repo>/audit-<date>.md`. With
-`--id <jira-ticket-id>` — `~/dev-log/<org>/<repo>/<jira-ticket-id>/audit-<timestamp>.md`, grouped
+**Default output:** no `--jira` — `~/dev-log/<org>/<repo>/audit-<date>.md`. With
+`--jira <jira-ticket-id>` — `~/dev-log/<org>/<repo>/<jira-ticket-id>/audit-<timestamp>.md`, grouped
 alongside any other run already using that ticket folder.
 
 ---
@@ -323,12 +336,18 @@ migite-pr-review --branch feature/big-refactor --skip-tests
 migite-pr-review --branch feature/<jira-ticket-id> --output ./review.md
 ```
 
-**Default output:** no `--jira` — `~/dev-log/<org>/<repo>/pr-review-<branch>-<date>.md`.
-With `--jira <jira-ticket-id>` — `~/dev-log/<org>/<repo>/<jira-ticket-id>/pr-review-<branch>-<timestamp>.md`,
-grouped alongside any other run already using that ticket folder. The branch name has `/` replaced
-with `-` in the filename either way. `--output`, when given, always wins over `--jira` — no resolver
-lookup happens at all in that case. `--jira` only affects the output path when it parses as a
-ticket key or Atlassian URL — a free-text value is still passed into the review as reference
-context, just without grouping the output under a ticket folder.
+**Default output:** with `--jira <jira-ticket-id>` —
+`~/dev-log/<org>/<repo>/<jira-ticket-id>/pr-review-<branch>-<timestamp>.md`, grouped alongside any
+other run already using that ticket folder (created if it doesn't exist yet). Without `--jira` (or
+with one that doesn't parse as a ticket key/URL), migite looks for a ticket key embedded in the
+branch name itself (e.g. `feature/bb-3136-add-pdf-export` → `bb-3136`) — if `~/dev-log/<org>/<repo>/<that-key>/`
+already exists (from an earlier `migite` run on this branch), the review is written there as
+`pr-review-<date>.md`; unlike the `--jira` case, this folder is never created on demand, so an ad
+hoc review of an arbitrary branch doesn't seed a new vault directory. Otherwise, output falls back
+to `~/dev-log/<org>/<repo>/pr-review-<branch>-<date>.md`, with `/` in the branch name replaced by
+`-`. `--output`, when given, always wins over all of the above — no resolver lookup happens at all
+in that case. `--jira` only affects the output path when it parses as a ticket key or Atlassian
+URL — a free-text value is still passed into the review as reference context, just without
+grouping the output under a ticket folder.
 
 **Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5` for the final verdict. This tool is read-only — it never commits anything, there's no gate to approve.
