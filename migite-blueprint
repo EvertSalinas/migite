@@ -34,9 +34,9 @@ if [[ ! -x "$MIGITE_PYTHON" ]]; then
   exit 1
 fi
 
-if ! "$MIGITE_PYTHON" -c "import langgraph, anthropic" 2>/dev/null; then
+if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
   echo "✘ Python dependencies missing. Run:" >&2
-  echo "  $MIGITE_PYTHON -m pip install langgraph anthropic" >&2
+  echo "  $MIGITE_PYTHON -m pip install langgraph" >&2
   exit 1
 fi
 

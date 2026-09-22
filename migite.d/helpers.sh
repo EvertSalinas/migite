@@ -42,8 +42,7 @@ resolve_path() {
 # detect_stack() tries STACK_PROFILES in order and dispatches to the first
 # match — adding a stack means registering one more pair here, not adding a
 # branch to detect_stack() or to any caller. `generic` must stay last — it's
-# the catch-all (see docs/hermes-agent-improvements-plan.md, "stack profiles",
-# Stage 2) that lets migite run on any project, not just Rails: review.sh
+# the catch-all that lets migite run on any project, not just Rails: review.sh
 # skips rubocop/rspec entirely when $STACK == "generic", and migite-plan uses
 # a generic file-glob set instead of the Rails-MVC EXPLORE_AREAS.
 STACK_PROFILES=(rails generic)
@@ -382,9 +381,10 @@ spawn_langgraph() {
   [[ -f "$script" ]] || error "LangGraph script not found: $script"
   [[ -x "$MIGITE_PYTHON" ]] || error "Python not found at $MIGITE_PYTHON — set MIGITE_PYTHON"
 
-  # Preflight: verify langgraph + anthropic are installed in the target Python
-  if ! "$MIGITE_PYTHON" -c "import langgraph, anthropic" 2>/dev/null; then
-    error "Python dependencies missing. Run: $MIGITE_PYTHON -m pip install langgraph anthropic"
+  # Preflight: verify langgraph is installed in the target Python. (The
+  # `anthropic` SDK is NOT required — every model call shells out to `claude`.)
+  if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
+    error "Python dependencies missing. Run: $MIGITE_PYTHON -m pip install langgraph"
   fi
 
   local agent_log="$LOG_DIR/$TIMESTAMP-${suffix}-agent.log"

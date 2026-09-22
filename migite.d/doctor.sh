@@ -45,8 +45,8 @@ run_doctor() {
   ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT" 2>/dev/null || echo "unknown")"
   local doc_dev_log_base="${DEV_LOG_BASE:-$HOME/dev-log}"
 
-  # ── Stack detection — read-only, never errors since Stage 2 (generic is the
-  # catch-all) — see docs/hermes-agent-improvements-plan.md "stack profiles".
+  # ── Stack detection — read-only, never errors (generic is the catch-all
+  # profile, see STACK_PROFILES in helpers.sh).
   detect_stack
   echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
 
@@ -180,16 +180,16 @@ run_doctor() {
   fi
 
   # ── helpers.sh size watch (informational) ───────────────────────────────────
-  # Hermes treats ~2,000 lines / ~300 lines-per-function as its own signal to
-  # split a facade file. Not enforced here — just surfaced so migite.d/helpers.sh
-  # growth doesn't go unnoticed the way it did for Hermes before that threshold
-  # existed. Never adds to $issues; this can't fail doctor, only inform it.
+  # ~2,000 lines is a reasonable signal that a shared-helpers file should be
+  # split by concern. Not enforced here — just surfaced so migite.d/helpers.sh
+  # growth doesn't go unnoticed. Never adds to $issues; this can't fail doctor,
+  # only inform it.
   local helpers_file="$MIGITE_HOME/migite.d/helpers.sh"
   if [[ -f "$helpers_file" ]]; then
     local helpers_lines
     helpers_lines=$(wc -l < "$helpers_file" | tr -d ' ')
     if [[ "$helpers_lines" -ge 2000 ]]; then
-      echo "⚠ helpers.sh is $helpers_lines lines — at Hermes' own ~2,000-line split trigger, worth a look"
+      echo "⚠ helpers.sh is $helpers_lines lines — past the ~2,000-line split trigger, worth a look"
     else
       echo "ℹ helpers.sh: $helpers_lines lines (split trigger: ~2,000)"
     fi

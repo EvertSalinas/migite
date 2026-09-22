@@ -108,7 +108,7 @@ migite/                   ← wherever you clone this repo
 
 `~/.local/bin/` holds symlinks to every top-level file above except README.md, docs/, and migite-improvements.md. `migite.d/` is not symlinked separately — `migite` resolves its own real path (through the symlink) to find `migite.d/` alongside it, so the directory just needs to stay next to `migite` in this repo.
 
-**Gemfile-subdirectory detection.** `migite` always `cd`s to `$REPO_ROOT` right after computing it, so `git diff` and every other command run from a consistent directory regardless of where `migite` was invoked from — but Bundler only searches upward from cwd for a `Gemfile`, never into subdirectories. When the actual Ruby app lives one level down (e.g. a `rails-app/` folder alongside other tooling in the same repo), `detect_stack()` finds it (via the `rails` stack profile's `stack_rails_app_root`) and sets `$APP_ROOT`; every `bundle_exec` call then `cd`s there first, and `strip_app_prefix()` rewrites the repo-root-relative paths `git diff` produces into `$APP_ROOT`-relative ones before handing them to rubocop/rspec. `resolve_path()` absolutizes user-supplied file paths (`--audit`, `--blueprint`, `--intake`, `--amend-file`, `--attach`) before that `cd`, so they still resolve correctly afterward even if given relative to wherever you ran `migite` from. `rails` and `generic` are the two registered stack profiles today — see [`--stack` values](#-stack-values) above and `docs/hermes-agent-improvements-plan.md` for the plan to add more.
+**Gemfile-subdirectory detection.** `migite` always `cd`s to `$REPO_ROOT` right after computing it, so `git diff` and every other command run from a consistent directory regardless of where `migite` was invoked from — but Bundler only searches upward from cwd for a `Gemfile`, never into subdirectories. When the actual Ruby app lives one level down (e.g. a `rails-app/` folder alongside other tooling in the same repo), `detect_stack()` finds it (via the `rails` stack profile's `stack_rails_app_root`) and sets `$APP_ROOT`; every `bundle_exec` call then `cd`s there first, and `strip_app_prefix()` rewrites the repo-root-relative paths `git diff` produces into `$APP_ROOT`-relative ones before handing them to rubocop/rspec. `resolve_path()` absolutizes user-supplied file paths (`--audit`, `--blueprint`, `--intake`, `--amend-file`, `--attach`) before that `cd`, so they still resolve correctly afterward even if given relative to wherever you ran `migite` from. `rails` and `generic` are the two registered stack profiles today — see [`--stack` values](#stack-values) below; adding one means registering a `stack_<name>_detect` / `stack_<name>_app_root` pair in `STACK_PROFILES` (`migite.d/helpers.sh`) and, if it has lint/test tooling, teaching `review.sh` and `implement.sh` the equivalent commands.
 
 ---
 
@@ -123,7 +123,7 @@ migite/                   ← wherever you clone this repo
 | `git` | Branch detection, diff scoping |
 | `bundle` | Rubocop + rspec |
 | Python 3.11+ | LangGraph agent scripts |
-| `langgraph`, `anthropic` Python packages | Plan and review agents |
+| `langgraph` Python package | Plan and review agents (every model call shells out to `claude`, so the `anthropic` SDK is not needed) |
 
 ### Files expected
 
@@ -162,7 +162,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
 # 4. Install Python dependencies (one-time)
-pip3 install langgraph anthropic
+pip3 install langgraph
 ```
 
 If you use asdf for Python version management, set `MIGITE_PYTHON` to the full binary path:
@@ -267,6 +267,7 @@ migite doctor --repo ~/Code/some-other-repo
 | `spike` | Investigation or proof of concept |
 | `config` | Infrastructure, environment, or gem changes |
 
+<a id="stack-values"></a>
 ### `--stack` values
 
 | Value | When it's used |
@@ -274,8 +275,9 @@ migite doctor --repo ~/Code/some-other-repo
 | `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down. Runs rubocop/rspec via `bundle_exec`. |
 | `generic` | Auto-detected fallback for any repo with no recognized stack. Skips rubocop/rspec/`bundle` entirely; plan and review still run against the diff using general engineering judgment, with generic (language-agnostic) explore-area globs instead of Rails' MVC split. |
 
-Pass `--stack <value>` to override auto-detection. See `docs/hermes-agent-improvements-plan.md`
-("stack profiles") for the plan to add more stacks beyond these two.
+Pass `--stack <value>` to override auto-detection. Stacks are registered in `STACK_PROFILES`
+(`migite.d/helpers.sh`); the [Roadmap](#roadmap) covers making them data-driven so `node`,
+`python`, etc. can be added without bash.
 
 For amend mode, intake mode, blueprint mode, audit mode, the full phase-by-phase breakdown, output files, the commit gate, the Testing Plan requirement, and resuming a run, see **[docs/migite.md](./docs/migite.md)**.
 
@@ -319,7 +321,7 @@ No — it never runs `git commit` at any point, including at the commit gate's `
 No. Every phase shells out to the `claude` CLI, which shares your existing Claude Code auth — see [Requirements](#requirements).
 
 **Does migite work on non-Ruby/Rails projects?**
-Not yet. `migite` itself hardcodes Ruby/Rails tooling (`bundle`, rubocop, rspec, `Gemfile` detection) throughout `migite.d/*.sh` — see [Roadmap](#roadmap). `migite-blueprint` is the exception; it already infers/accepts any stack for new-project definition.
+Partly. Any repo without a `Gemfile` auto-detects as the `generic` stack: plan, implement, review, knowledge capture, and the PR description all run, but rubocop/rspec (and the auto-heal loop that depends on them) are skipped, and the planner's explorers use language-agnostic globs instead of the Rails MVC split. What's missing is running the *equivalent* toolchain for other stacks (`npm run lint`/`jest`, `ruff`/`pytest`, ...) — see [Roadmap](#roadmap). `migite-explore` is fully language-agnostic (it discovers files via `git ls-files`), and `migite-blueprint` infers/accepts any stack; `migite-audit` and `migite-pr-review` are still Rails-specific in their checklists.
 
 **Can I resume a run if I close the terminal or a phase fails partway through?**
 Yes — just re-run the same `migite --jira <ticket>` (or same task/intake) command. It picks up from whatever already exists: an existing `intake.md` is reused with no editor, an existing `plan.md` offers `[u]se existing` or `[r]edo`. See [Resuming a run](./docs/migite.md#resuming-a-run).
@@ -338,7 +340,7 @@ The heal loop's job is to deliver clean input to the reviewer, not to replace th
 Not yet built, roughly in the order they're likely to land:
 
 - **Per-run usage summary.** Print a token/cost summary (and wall-clock time) at the end of each `migite` run — today there's no visibility into what a run actually cost across its ~15-20 model calls.
-- **Stack-agnostic beyond `migite-blueprint`.** `migite-blueprint` already infers/accepts any stack (see [docs/standalone-tools.md](./docs/standalone-tools.md)); `migite` itself still hardcodes Ruby/Rails tooling (`bundle`, rubocop, rspec, `Gemfile` detection) throughout `migite.d/*.sh`. Generalizing this means detecting and running the equivalent toolchain per stack (`npm run lint`/`jest`, `ruff`/`pytest`, `go vet`/`go test`, etc.) instead of one hardcoded path.
+- **Stack profiles as data, with real toolchains.** `migite` already detects `rails` vs `generic` (see [`--stack` values](#stack-values)), and `generic` runs the whole pipeline minus lint/test. The next step is describing a stack as data — detect rule, lint, autofix, test, test-glob, explorer areas — so `node` (`npm run lint`/`jest`), `python` (`ruff`/`pytest`), `go` (`go vet`/`go test`) become config blocks rather than new bash function pairs, and `migite-audit`/`migite-pr-review` can drop their Rails-only checklists.
 - **Support AI agents other than Claude.** Right now every phase shells out to `claude`. Making the agent backend pluggable (e.g. Codex, opencode) would decouple the orchestration logic (phases, gates, vault, resolvers) from any one CLI.
 - **One-line installer.** Replace the manual clone-and-symlink dance in [Installation](#installation) with a script that does it in one command.
 - **CI on this repo.** No GitHub Actions yet — at minimum, run `migite_paths.py --self-test` on push/PR so the path-resolver logic (org/ticket detection) can't silently regress.
