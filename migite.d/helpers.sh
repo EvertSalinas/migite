@@ -510,6 +510,45 @@ tooling_failed() {
   return 1
 }
 
+# review_verdict <review.md> — echoes one of: needs_fixes | ready | unknown
+# Anchors on the "## Verdict" heading instead of grepping the whole file for
+# keywords. The review format puts "## Brakeman: PASS" / "## Rubocop: PASS"
+# lines dozens of lines ABOVE the verdict, so `grep -m1 'PASS\|NEEDS FIXES...'`
+# matched those first and the commit-gate banner showed APPROVED on reviews
+# whose actual verdict was NEEDS FIXES (7 of 20 real reviews in the vault when
+# this was found). Handles every shape seen in practice: the verdict on the
+# heading line ("## Verdict: NEEDS FIXES", with or without ** bold), or on the
+# first non-empty line under a bare "## Verdict" heading, with or without a
+# trailing " — contingent on ..." clause.
+review_verdict() {
+  local file="$1"
+  [[ -f "$file" ]] || { echo "unknown"; return; }
+  local line
+  line=$(awk '
+    !found && /^#+[[:space:]]*[Vv]erdict/ {
+      found = 1
+      rest = $0
+      sub(/^#+[[:space:]]*[Vv]erdict[[:space:]]*:?[[:space:]]*/, "", rest)
+      if (rest ~ /[^[:space:]*_]/) { print rest; exit }
+      next
+    }
+    found && NF { print; exit }
+  ' "$file")
+  # No "Verdict" heading at all — one older shape puts the verdict itself as a
+  # heading ("# NEEDS FIXES"). Accept a heading that IS a verdict keyword, but
+  # never a keyword buried in prose, which is the trap this helper exists to avoid.
+  if [[ -z "$line" ]]; then
+    line=$(grep -m1 -E '^#+[[:space:]]*\**(NEEDS (FIXES|CHANGES)|READY TO (COMMIT|MERGE)|APPROVED)' "$file" || true)
+  fi
+  if echo "$line" | grep -qE 'NEEDS (FIXES|CHANGES)'; then
+    echo "needs_fixes"
+  elif echo "$line" | grep -qE 'READY TO (COMMIT|MERGE)|APPROVED'; then
+    echo "ready"
+  else
+    echo "unknown"
+  fi
+}
+
 # run_rubocop_check <files> <log> [autocorrect=false]
 # Runs rubocop over <files> (space-separated, from git diff) and tees to <log>;
 # writes a fallback message instead of running anything if <files> is empty.
@@ -554,17 +593,14 @@ show_commit_context() {
     echo -e "  ${RED}${BOLD}⚠ Ruby version error — bundle exec could not run. Fix .tool-versions before approving.${RESET}"
   fi
 
-  # Review verdict
+  # Review verdict — anchored on the "## Verdict" heading via review_verdict,
+  # never a whole-file keyword grep (see that helper for why).
   if [[ -f "${REVIEW_FILE:-}" ]]; then
-    local verdict_line
-    verdict_line=$(grep -m1 'NEEDS FIXES\|APPROVED\|PASS\|READY TO COMMIT' "$REVIEW_FILE" 2>/dev/null || echo "")
-    if echo "$verdict_line" | grep -q 'NEEDS FIXES'; then
-      echo -e "  Verdict: ${RED}${BOLD}NEEDS FIXES${RESET}"
-    elif echo "$verdict_line" | grep -qE 'APPROVED|PASS|READY TO COMMIT'; then
-      echo -e "  Verdict: ${GREEN}${BOLD}APPROVED${RESET}"
-    else
-      echo -e "  Verdict: ${YELLOW}unknown — check $REVIEW_FILE${RESET}"
-    fi
+    case "$(review_verdict "$REVIEW_FILE")" in
+      needs_fixes) echo -e "  Verdict: ${RED}${BOLD}NEEDS FIXES${RESET}" ;;
+      ready)       echo -e "  Verdict: ${GREEN}${BOLD}READY TO COMMIT${RESET}" ;;
+      *)           echo -e "  Verdict: ${YELLOW}unknown — check $REVIEW_FILE${RESET}" ;;
+    esac
   fi
 
   # Spec failures / DB connection issues

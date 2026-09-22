@@ -480,7 +480,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | Signal | Source |
 |--------|--------|
 | Tooling error | `No version is set for command`, `Bundler::GitError`, `not yet checked out`, or a missing gem in either log — the tool never ran, so all results below are untrustworthy |
-| Verdict | Extracted from review.md: `NEEDS FIXES` / `APPROVED` / `PASS` / `READY TO COMMIT` |
+| Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`helpers.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |
 
