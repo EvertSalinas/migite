@@ -185,6 +185,7 @@ Add that export to `~/.zshrc` to make it permanent.
 | `MIGITE_ORG` | unset | Forces the vault "org" bucket a repo files under (`$DEV_LOG_BASE/<org>/<repo>/...`). Unset, it's auto-detected as the name of the directory directly containing the repo — `~/Code/Acme/foo` → `Acme` — so any org/client folder name works without configuration. Falls back to `Personal` only if the repo has no meaningful parent directory |
 | `LOG_DIR` | `~/.dev-workflow/logs` | Per-run logs |
 | `MAX_HEAL_ATTEMPTS` | `3` | Phase 2.5 auto-heal retry cap |
+| `MIGITE_PROMPT_INLINE_MAX` | `100000` | Interactive-phase prompts larger than this many bytes are passed to `claude` as a pointer to the prompt file instead of inline on the command line (Linux caps one argv string at 128 KB; the implement prompt includes all of `knowledge.md`) |
 | `MIGITE_PERMISSION_MODE` | unset | Permission mode passed to `claude --print` — but only inside three standalone tools: `migite-explore`, `migite-audit`, `migite-pr-review`. Omitted (fail closed) when unset. `migite` itself, `migite-plan`, `migite-review`, and `migite-blueprint` don't read this variable at all — see [Permission failures](./docs/troubleshooting.md#troubleshooting-permissions) |
 | `EDITOR` | `vim` | Opens intake template and other manual-edit prompts |
 

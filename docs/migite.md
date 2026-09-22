@@ -391,7 +391,7 @@ this repo's [`templates/commit.md`](../templates/commit.md) (`deliver.sh` reads 
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement
 
-A background `claude --print` pass reviews the full run (including the migite script itself) and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run — no generic suggestions.
+A background `claude --print` pass (Sonnet 5) reviews the full run and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run — no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs — a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt — since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to Sonnet 5 as well.
 
 ---
 

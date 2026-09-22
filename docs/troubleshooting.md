@@ -38,6 +38,14 @@ three tools that read it):
 export MIGITE_PERMISSION_MODE=acceptEdits
 ```
 
+### Running migite from inside a Claude Code session
+
+Claude Code sets `CLAUDECODE` in its own terminal sessions, and a nested `claude` refuses to
+start while it's set. Every migite call site strips it — the Python agents drop it from the
+subprocess environment, and all bash launches go through `claude_cmd()` (`helpers.sh`), which
+is `env -u CLAUDECODE claude "$@"`. If you add a new `claude` invocation, use `claude_cmd`, not
+`claude` directly.
+
 Note that **brakeman is not part of migite**. If you're seeing brakeman runs, they come from your
 `~/.claude/CLAUDE.md`, a project CLAUDE.md, or a skill — migite never invokes it.
 

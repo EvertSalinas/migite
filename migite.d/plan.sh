@@ -74,7 +74,7 @@ JIRA_FETCH_FAILED: <short reason>"
       local JIRA_FETCH_TMP
       JIRA_FETCH_TMP=$(mktemp)
       printf '%s' "$JIRA_FETCH_PROMPT" \
-        | env -u CLAUDECODE claude --print --permission-mode bypassPermissions \
+        | claude_cmd --print --permission-mode bypassPermissions \
             --allowedTools "mcp__claude_ai_Atlassian__getJiraIssue mcp__claude_ai_Atlassian__getAccessibleAtlassianResources" \
             --model claude-sonnet-5 --output-format text \
         > "$JIRA_FETCH_TMP" 2>/dev/null || true
@@ -205,8 +205,9 @@ JIRA_FETCH_FAILED: <short reason>"
     local TASK_TEMPLATE="$MIGITE_HOME/templates/${TASK_TYPE}.md"
     [[ -f "$TASK_TEMPLATE" ]] || error "Template not found: $TASK_TEMPLATE"
     cp "$TASK_TEMPLATE" "$INTAKE_FILE"
-    [[ -n "$TASK" ]] && sed -i '' "s|<!-- one sentence.*-->|$TASK|" "$INTAKE_FILE"
-    [[ -n "$JIRA_TICKET" ]] && sed -i '' "s|<!-- ticket ID or N/A -->|${JIRA_URL:-$JIRA_TICKET}|" "$INTAKE_FILE"
+    # Literal substitution — never sed with user text in the expression (see fill_intake_field)
+    [[ -n "$TASK" ]] && fill_intake_field "$INTAKE_FILE" '<!-- one sentence.*-->' "$TASK"
+    [[ -n "$JIRA_TICKET" ]] && fill_intake_field "$INTAKE_FILE" '<!-- ticket ID or N/A -->' "${JIRA_URL:-$JIRA_TICKET}"
     log "Created intake from template: $TASK_TYPE"
 
     ${EDITOR:-vim} "$INTAKE_FILE"
@@ -447,7 +448,7 @@ JIRA_FETCH_FAILED: <short reason>"
         _refine_tmp=$(mktemp)
         printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
           "$(cat "$PLAN_FILE")" "$_plan_feedback" \
-          | env -u CLAUDECODE claude --print --model claude-sonnet-5 --output-format text \
+          | claude_cmd --print --model claude-sonnet-5 --output-format text \
           > "$_refine_tmp" 2>/dev/null
         if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
           mv "$_refine_tmp" "$PLAN_FILE"

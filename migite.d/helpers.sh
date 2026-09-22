@@ -216,6 +216,25 @@ write_prompt() {
   echo "$prompt_file"
 }
 
+# Every `claude` launch below runs under `env -u CLAUDECODE`. Claude Code sets
+# that variable in its own sessions, and a nested `claude` refuses to start
+# while it's set — the Python agents and the Jira fetch already strip it, but
+# run_phase/heal_run/thinking didn't, so knowledge capture, self-improvement,
+# amendments, and the heal loop all failed whenever migite was launched from
+# inside a Claude Code terminal. One wrapper, used everywhere, so it can't
+# drift again.
+claude_cmd() {
+  env -u CLAUDECODE claude "$@"
+}
+
+# Interactive prompts above this many bytes are handed to Claude as a pointer
+# to the prompt file instead of inline on the command line. Linux caps a
+# single argv string at 128 KB; the implement prompt is knowledge.md + plan +
+# command file and knowledge.md grows without bound, so this will be hit on a
+# long-lived repo. Below the cap the prompt stays inline, where it shows up as
+# the session's first message and is easier to eyeball.
+MIGITE_PROMPT_INLINE_MAX="${MIGITE_PROMPT_INLINE_MAX:-100000}"
+
 # run_phase <label> <output_file> <prompt> [permission_mode]
 # Opens an interactive Claude Code session in a split pane with the prompt pre-loaded.
 # permission_mode defaults to bypassPermissions.
@@ -227,6 +246,15 @@ run_phase() {
   local permission_mode="${4:-bypassPermissions}"
   local prompt_file
   prompt_file=$(write_prompt "$label" "$prompt")
+
+  # What actually goes on the command line: the prompt itself, or a pointer to it.
+  local prompt_arg_file="$prompt_file"
+  if [[ ${#prompt} -gt $MIGITE_PROMPT_INLINE_MAX ]]; then
+    prompt_arg_file="$LOG_DIR/$TIMESTAMP-prompt-${label// /-}-pointer.txt"
+    printf 'Your task brief for this session is in the file %s (%d bytes — too large to pass inline). Read that file IN FULL before doing anything else, then follow its instructions exactly as if they had been given to you directly.' \
+      "$prompt_file" "${#prompt}" > "$prompt_arg_file"
+    warn "Prompt is ${#prompt} bytes (> MIGITE_PROMPT_INLINE_MAX=$MIGITE_PROMPT_INLINE_MAX) — passing as a file pointer"
+  fi
 
   echo ""
   echo -e "${CYAN}  Starting interactive session: ${BOLD}$label${RESET}"
@@ -245,7 +273,7 @@ run_phase() {
     orig_pane=$(tmux display-message -p '#{pane_id}')
     {
       echo "#!/usr/bin/env bash"
-      printf 'claude --permission-mode %s -- "$(cat '"'"'%s'"'"')"\n' "$permission_mode" "$prompt_file"
+      printf 'env -u CLAUDECODE claude --permission-mode %s -- "$(cat '"'"'%s'"'"')"\n' "$permission_mode" "$prompt_arg_file"
       printf 'exit_code=$?\n'
       printf 'if [[ $exit_code -ne 0 ]]; then\n'
       printf '  echo ""\n'
@@ -272,7 +300,7 @@ run_phase() {
     tmux select-pane -t "$orig_pane" 2>/dev/null || true
     notify "$label" "Session done — continuing workflow"
   else
-    claude --permission-mode "$permission_mode" -- "$(cat "$prompt_file")"
+    claude_cmd --permission-mode "$permission_mode" -- "$(cat "$prompt_arg_file")"
   fi
 }
 
@@ -294,7 +322,7 @@ thinking() {
   echo -e "  ${CYAN}Prompt log: ${prompt_file}${RESET}"
 
   # shellcheck disable=SC2086
-  printf '%s' "$prompt" | claude --print $extra_flags > "$outfile" &
+  printf '%s' "$prompt" | claude_cmd --print $extra_flags > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -326,7 +354,7 @@ heal_run() {
   echo ""
   echo -e "${CYAN}  Auto-healing: ${BOLD}$label${RESET}"
 
-  printf '%s' "$prompt" | claude --print --permission-mode bypassPermissions > "$outfile" &
+  printf '%s' "$prompt" | claude_cmd --print --permission-mode bypassPermissions > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -525,6 +553,26 @@ tooling_failed() {
     return 0
   fi
   return 1
+}
+
+# fill_intake_field <file> <regex> <value> — replaces the first match of
+# <regex> (awk extended regex) in <file> with <value>, taken LITERALLY.
+# Replaces the old `sed -i "s|<placeholder>|$TASK|"`, which spliced user text
+# straight into a sed expression: a task description containing `|` aborted
+# the run, and one containing `&` or `\` silently wrote garbage into the
+# intake's Title field. The value travels through the environment, not `-v`,
+# because awk -v processes backslash escapes and would mangle it too.
+fill_intake_field() {
+  local file="$1" pattern="$2" value="$3"
+  local tmp
+  tmp=$(mktemp)
+  MIGITE_FILL_VALUE="$value" awk -v pat="$pattern" '
+    !done && match($0, pat) {
+      $0 = substr($0, 1, RSTART - 1) ENVIRON["MIGITE_FILL_VALUE"] substr($0, RSTART + RLENGTH)
+      done = 1
+    }
+    { print }
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 # review_verdict <review.md> — echoes one of: needs_fixes | ready | unknown

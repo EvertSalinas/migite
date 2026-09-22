@@ -228,7 +228,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
         _amend_refine_tmp=$(mktemp)
         printf 'Here is the current amendment document:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the amendment to address the feedback. Keep the same structure and format. Output only the revised amendment document — no preamble.' \
           "$(cat "$AMENDMENT_FILE")" "$_amend_gate_feedback" \
-          | env -u CLAUDECODE claude --print --model claude-sonnet-5 --output-format text \
+          | claude_cmd --print --model claude-sonnet-5 --output-format text \
           > "$_amend_refine_tmp" 2>/dev/null
         if [[ -s "$_amend_refine_tmp" ]]; then
           mv "$_amend_refine_tmp" "$AMENDMENT_FILE"

@@ -73,7 +73,9 @@ Output ONLY the bullet points, no preamble. Each bullet starts with '- '.
 End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
 
   local KNOWLEDGE_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-knowledge.txt"
-  thinking "Extracting knowledge" "$KNOWLEDGE_LOG" "$KNOWLEDGE_PROMPT"
+  # Pinned to Sonnet — unpinned, this ran on whatever the user's default model
+  # was (possibly Opus) on every single task.
+  thinking "Extracting knowledge" "$KNOWLEDGE_LOG" "$KNOWLEDGE_PROMPT" "--model claude-sonnet-5 --output-format text"
 
   # Append entry to knowledge file
   {
@@ -153,6 +155,25 @@ EOF
     success "Created improvements file: $IMPROVEMENTS_FILE"
   fi
 
+  # The full bash source (~110 KB) is only worth sending when the run was
+  # eventful — a plan rejected, a commit-gate loop, or a heal attempt — because
+  # that's when there's a concrete script behaviour to point at. A quiet run
+  # gets a function index instead, which is enough to name the right helper.
+  local RUN_EVENTFUL=false
+  if [[ "${PLAN_GATE_ATTEMPTS:-1}" -gt 1 || "${COMMIT_GATE_ATTEMPTS:-0}" -gt 0 || "${HEAL_ATTEMPT:-0}" -gt 0 ]]; then
+    RUN_EVENTFUL=true
+  fi
+  local SCRIPT_BLOCK
+  if [[ "$RUN_EVENTFUL" == "true" ]]; then
+    SCRIPT_BLOCK="## Current migite script (entrypoint + sourced phase files under migite.d/)
+$(cat "$MIGITE_HOME/migite")
+
+$(for f in "$MIGITE_HOME"/migite.d/*.sh; do echo "### $(basename "$f")"; cat "$f"; echo; done)"
+  else
+    SCRIPT_BLOCK="## migite script — function index (full source omitted: this run had no gate rejections or heal attempts)
+$(for f in "$MIGITE_HOME"/migite "$MIGITE_HOME"/migite.d/*.sh; do echo "### $(basename "$f")"; grep -nE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) *\{' "$f" | sed 's/() *{.*//'; echo; done)"
+  fi
+
   local IMPROVEMENTS_PROMPT="You are reviewing a completed migite workflow run to identify specific, actionable improvements to the migite script itself.
 
 ## Run context
@@ -162,6 +183,7 @@ EOF
 - Date: $DATE
 - Plan gate attempts: $PLAN_GATE_ATTEMPTS
 - Commit gate attempts: $COMMIT_GATE_ATTEMPTS
+- Auto-heal attempts: ${HEAL_ATTEMPT:-0}
 
 ## Rubocop results
 $(cat "$RUBOCOP_LOG")
@@ -175,10 +197,7 @@ $(cat "$IMPLEMENTATION_FILE")
 ## Review
 $(cat "$REVIEW_FILE")
 
-## Current migite script (entrypoint + sourced phase files under migite.d/)
-$(cat "$MIGITE_HOME/migite")
-
-$(for f in "$MIGITE_HOME"/migite.d/*.sh; do echo "### $(basename "$f")"; cat "$f"; echo; done)
+$SCRIPT_BLOCK
 
 Based on what actually happened in this run, identify 0–3 specific, actionable improvements to the migite script. Be very selective — only include things grounded in what happened this run.
 
@@ -199,7 +218,7 @@ If nothing in this run warrants an improvement note, output nothing.
 Output ONLY the bullet points, no preamble. Each bullet starts with '- '."
 
   local IMPROVEMENTS_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-improvements.txt"
-  thinking "Self-improvement" "$IMPROVEMENTS_LOG" "$IMPROVEMENTS_PROMPT"
+  thinking "Self-improvement" "$IMPROVEMENTS_LOG" "$IMPROVEMENTS_PROMPT" "--model claude-sonnet-5 --output-format text"
 
   if grep -q '[^[:space:]]' "$IMPROVEMENTS_LOG" 2>/dev/null; then
     {
