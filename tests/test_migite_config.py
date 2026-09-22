@@ -70,15 +70,66 @@ class DefaultsTest(_Isolated):
     def test_model_roles_resolve_through_tiers(self):
         cfg = self.load()
         self.assertEqual(cfg.model("explore"), "claude-haiku-4-5-20251001")
-        self.assertEqual(cfg.model("think"), "claude-sonnet-5")
-        self.assertEqual(cfg.model("critic"), "claude-opus-5")
-        self.assertEqual(cfg.model("verdict"), "claude-opus-5")
+        # Default tiering: drafters are never weaker than their critic; the calls that
+        # do the actual finding sit on the strong tier.
+        self.assertEqual(cfg.model("think"), "claude-opus-5-5")
+        self.assertEqual(cfg.model("critic"), "claude-opus-5-5")
+        self.assertEqual(cfg.model("verdict"), "claude-opus-5-5")
+        self.assertEqual(cfg.model("explore_refine"), "claude-opus-5-5")
+        self.assertEqual(cfg.model("review_correctness"), "claude-opus-5-5")
+        self.assertEqual(cfg.model("review_security"), "claude-opus-5-5")
+        self.assertEqual(cfg.model("review_test_coverage"), "claude-sonnet-5")
+        self.assertEqual(cfg.model("review_testing_plan"), "claude-sonnet-5")
+        self.assertEqual(cfg.model("audit_area"), "claude-sonnet-5")
         self.assertEqual(cfg.model("knowledge"), "claude-sonnet-5")
         with self.assertRaises(KeyError):
             cfg.model("nonexistent_role")
 
     def test_every_role_has_a_tier(self):
         self.assertTrue(set(migite_config.ROLE_TIERS.values()) <= {"fast", "standard", "strong"})
+
+    def test_effort_defaults_to_none_everywhere(self):
+        cfg = self.load()
+        self.assertTrue(all(v is None for v in cfg.efforts_by_role().values()))
+        with self.assertRaises(KeyError):
+            cfg.effort("nonexistent_role")
+
+
+class EffortTest(_Isolated):
+    def test_tier_effort_reaches_every_role_in_the_tier(self):
+        self.write_repo({"models": {"effort": {"strong": "xhigh", "standard": "medium"}}})
+        cfg = self.load()
+        self.assertEqual(cfg.effort("critic"), "xhigh")
+        self.assertEqual(cfg.effort("think"), "xhigh")
+        self.assertEqual(cfg.effort("knowledge"), "medium")
+        self.assertIsNone(cfg.effort("explore"))   # fast tier left at none
+
+    def test_role_effort_beats_tier(self):
+        self.write_repo({"models": {"effort": {"strong": "high"}, "roles_effort": {"critic": "max", "knowledge": "low"}}})
+        cfg = self.load()
+        self.assertEqual(cfg.effort("critic"), "max")
+        self.assertEqual(cfg.effort("verdict"), "high")
+        self.assertEqual(cfg.effort("knowledge"), "low")
+
+    def test_invalid_effort_level_is_an_error(self):
+        self.write_repo({"models": {"effort": {"strong": "turbo"}}})
+        with self.assertRaises(migite_config.ConfigError):
+            self.load()
+        self.write_repo({"models": {"roles_effort": {"critic": "turbo"}}})
+        with self.assertRaises(migite_config.ConfigError):
+            self.load()
+
+    def test_unknown_role_in_roles_effort_is_an_error(self):
+        self.write_repo({"models": {"roles_effort": {"planner": "high"}}})
+        with self.assertRaises(migite_config.ConfigError):
+            self.load()
+
+    def test_effort_exported_to_shell(self):
+        self.write_repo({"models": {"effort": {"strong": "xhigh"}, "roles_effort": {"knowledge": "low"}}})
+        out = migite_config.to_shell(self.load())
+        self.assertIn("MIGITE_CFG_EFFORT_CRITIC=xhigh", out)
+        self.assertIn("MIGITE_CFG_EFFORT_KNOWLEDGE=low", out)
+        self.assertIn("MIGITE_CFG_EFFORT_EXPLORE=''", out)
 
 
 class PrecedenceTest(_Isolated):
@@ -210,7 +261,7 @@ class ShellExportTest(_Isolated):
         self.assertIn("MIGITE_CFG_HEAL_FULL_SUITE_FALLBACK=true", out)
         self.assertIn("MIGITE_CFG_BUDGET_MAX_USD_PER_RUN=2.5", out)
         self.assertIn("MIGITE_CFG_MODEL_CRITIC=pinned", out)
-        self.assertIn("MIGITE_CFG_MODEL_VERDICT=claude-opus-5", out)
+        self.assertIn("MIGITE_CFG_MODEL_VERDICT=claude-opus-5-5", out)
         self.assertIn("MIGITE_CFG_PROMPTS_DIR=''", out)      # None → empty string
         self.assertNotIn("MIGITE_CFG_MODELS_ROLES=", out)     # roles dict is exported per role, not raw
         # Every line must be a valid shell assignment
@@ -236,6 +287,7 @@ class CliTest(_Isolated):
         self.assertEqual(alt.stdout.strip(), "cli-strong")
         self.assertEqual(self.run_cli("get", "models.strong").stdout.strip(), "cli-strong")
         self.assertEqual(self.run_cli("get", "model:critic").stdout.strip(), "cli-strong")
+        self.assertEqual(self.run_cli("get", "effort:critic").stdout.strip(), "")   # none → empty
         self.assertEqual(self.run_cli("get", "prompts.dir").returncode, 1)   # unset → exit 1
         show = self.run_cli("show")
         self.assertIn("cli-strong", show.stdout)
@@ -261,6 +313,18 @@ class CliTest(_Isolated):
         self.assertIn("gates:", (self.repo / ".migite.yml").read_text())
         self.assertEqual(self.run_cli("init").returncode, 1)
         self.assertEqual(self.run_cli("init", "--force").returncode, 0)
+
+    def test_init_user_writes_to_xdg_config_and_is_then_loaded(self):
+        r = self.run_cli("init", "--user")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        target = self.home / ".config" / "migite" / "config.yml"
+        self.assertTrue(target.is_file())
+        self.assertIn("personal migite defaults", target.read_text())
+        self.assertEqual(self.run_cli("init", "--user").returncode, 1)   # refuses to overwrite
+        if HAVE_YAML:
+            cfg = self.load()
+            self.assertEqual(cfg.files, [target])
+            self.assertEqual(cfg.warnings, [])   # the starter is valid and default-equivalent
 
 
 if __name__ == "__main__":

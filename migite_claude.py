@@ -38,6 +38,8 @@ LEDGER_ENV = "MIGITE_USAGE_LEDGER"
 DEFAULT_TIMEOUT = 600
 THINKING_TIMEOUT = 900
 DEFAULT_PERMISSION_MODE: str | None = None   # None/"none" = don't pass --permission-mode
+# role -> --effort level, filled by configure_from(cfg). call_claude(role=...) looks it up.
+ROLE_EFFORT: dict[str, str | None] = {}
 SCHEMA_VERSION = 1
 
 
@@ -56,12 +58,22 @@ def configure(*, timeout: int | None = None, thinking_timeout: int | None = None
 
 
 def configure_from(cfg) -> None:
-    """configure() straight from a migite_config.Config."""
+    """configure() straight from a migite_config.Config, plus the per-role effort table."""
+    global ROLE_EFFORT
     configure(
         timeout=cfg.get("models.timeout_seconds"),
         thinking_timeout=cfg.get("models.thinking_timeout_seconds"),
         permission_mode=os.environ.get("MIGITE_PERMISSION_MODE") or cfg.get("permissions.headless") or "none",
     )
+    ROLE_EFFORT = dict(cfg.efforts_by_role())
+
+
+def effort_flag(model: str, effort: str | None) -> list[str]:
+    """`--effort <level>` for this call, or [] when unset/"none" — and always [] for a
+    Haiku model, which rejects the flag."""
+    if not effort or effort == "none" or "haiku" in model:
+        return []
+    return ["--effort", effort]
 
 
 class ClaudeError(RuntimeError):
@@ -121,7 +133,7 @@ def _usage_from(envelope: dict | None, *, tool: str, label: str, model: str,
     rec.cost_usd = float(envelope.get("total_cost_usd") or 0.0)
     rec.duration_ms = int(envelope.get("duration_ms") or elapsed_ms)
     # The CLI reports the model it actually used under modelUsage; prefer that
-    # over what we asked for (aliases like claude-sonnet-5 resolve to a dated id).
+    # over what we asked for (an alias such as "opus" resolves to a concrete id).
     model_usage = envelope.get("modelUsage") or {}
     if not model and len(model_usage) == 1:
         rec.model = next(iter(model_usage))
@@ -146,13 +158,16 @@ def record(rec: UsageRecord, ledger: str | None = None) -> None:
 def call_claude(prompt: str, model: str, *, thinking: bool = False, timeout: int | None = None,
                 label: str = "", tool: str = "", schema: dict | None = None,
                 permission_mode: str | None = None, allowed_tools: list[str] | None = None,
-                ledger: str | None = None) -> CallResult:
+                ledger: str | None = None, role: str = "", effort: str | None = None) -> CallResult:
     """Run `claude --print` headlessly and return text + structured output + usage.
 
+    `effort` (or the configured effort for `role`, see configure_from) becomes
+    `--effort <level>`; never sent for Haiku, which rejects it.
     Raises ClaudeError on non-zero exit, timeout, or an envelope with is_error.
     Falls back to treating stdout as plain text if the CLI didn't return the
     JSON envelope, so an older CLI still works (with empty usage)."""
     cmd = ["claude", "--print", "--output-format", "json", "--model", model]
+    cmd += effort_flag(model, effort if effort is not None else ROLE_EFFORT.get(role))
     if schema is not None:
         cmd += ["--json-schema", json.dumps(schema)]
     effective_permission = permission_mode if permission_mode is not None else DEFAULT_PERMISSION_MODE

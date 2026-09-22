@@ -76,7 +76,7 @@ JIRA_FETCH_FAILED: <short reason>"
       printf '%s' "$JIRA_FETCH_PROMPT" \
         | claude_print "jira-fetch" --permission-mode bypassPermissions \
             --allowedTools "mcp__claude_ai_Atlassian__getJiraIssue mcp__claude_ai_Atlassian__getAccessibleAtlassianResources" \
-            --model "$(cfg_model jira)" \
+            $(cfg_model_flags jira) \
         > "$JIRA_FETCH_TMP" 2>/dev/null || true
 
       if [[ -s "$JIRA_FETCH_TMP" ]] && ! grep -q '^JIRA_FETCH_FAILED' "$JIRA_FETCH_TMP"; then
@@ -451,7 +451,7 @@ JIRA_FETCH_FAILED: <short reason>"
         _refine_tmp=$(mktemp)
         printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
           "$(cat "$PLAN_FILE")" "$_plan_feedback" \
-          | claude_print "plan-refine" --model "$(cfg_model plan_refine)" \
+          | claude_print "plan-refine" $(cfg_model_flags plan_refine) \
           > "$_refine_tmp" 2>/dev/null || true
         if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
           mv "$_refine_tmp" "$PLAN_FILE"

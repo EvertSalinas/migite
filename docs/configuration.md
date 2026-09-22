@@ -57,11 +57,20 @@ visible but not fatal.
 ## `migite config`
 
 ```bash
-migite config              # effective configuration, with the source of every value
-migite config --init       # write a commented starter .migite.yml (all defaults) into the repo
-migite config --validate   # exit 1 on errors, print warnings
-migite doctor              # also validates the config and lists the files it loaded
+migite config --init --user   # once: write ~/.config/migite/config.yml — your defaults for every repo
+migite config --init          # per repo: write .migite.yml into the current repo (commit it)
+migite config                 # effective configuration, with the source of every value
+migite config --validate      # exit 1 on errors, print warnings
+migite doctor                 # also validates the config and lists the files it loaded
 ```
+
+**Getting started.** Run `migite config --init --user`, open the file, and delete every line you
+are not changing — each value in the starter is the built-in default, so an empty file and no
+file behave identically. Typical first edits: `vault.base` if your vault is not `~/dev-log`,
+`ui.editor`, and `models.effort.strong: xhigh`. Then, in a repo that needs something different
+(a strict commit gate, a prompt override, `stack: generic` on a monorepo), run `migite config
+--init` there and keep only those keys. `migite config` at any time prints what won and from
+which file. Both commands refuse to overwrite an existing file unless you pass `--force`.
 
 `migite config` output ends with the resolved model for every call-site role and which layer
 pinned it — the quickest way to see what a change to `models:` actually did.
@@ -93,36 +102,56 @@ every tool has a role; each role has a default tier.
 
 ```yaml
 models:
-  fast: claude-haiku-4-5-20251001   # tier: file exploration, audit areas
-  standard: claude-sonnet-5         # tier: synthesis, review dimensions, knowledge, amendments
-  strong: claude-opus-5             # tier: architecture critic, verdicts, adversarial challenge
+  fast: claude-haiku-4-5-20251001   # tier: file exploration
+  standard: claude-sonnet-5         # tier: lenses, analysts, audit areas, checklist review, knowledge, amendments
+  strong: claude-opus-5-5           # tier: plan synthesis/refine, critic, correctness + security review, verdicts
   roles:                            # optional — pin one call site without moving its tier
-    critic: claude-opus-5
-    knowledge: claude-haiku-4-5-20251001
+    think: claude-sonnet-5
+    review_security: claude-opus-5-5
+  effort:                           # --effort per tier: low | medium | high | xhigh | max | none
+    fast: none                      # none = don't pass the flag (CLI default). Haiku never receives it.
+    standard: none
+    strong: none
+  roles_effort:                     # optional — per-role effort override
+    critic: max
   timeout_seconds: 600              # per headless call
   thinking_timeout_seconds: 900     # for the calls marked as thinking-heavy (synthesis, critic)
 ```
 
+The default tiering follows one rule: **a drafter is never weaker than the critic whose findings it
+must apply**, and the calls that do the actual finding (plan synthesis, correctness and security
+review) sit on the strong tier, while checklist work and extraction stay standard.
+
 | Role | Default tier | Where |
 |---|---|---|
-| `explore` | fast | `migite-plan` — the 7 parallel codebase explorers |
-| `think` | standard | `migite-plan` — synthesis, refine, testing plan |
+| `explore` | fast | `migite-plan` — the 7 parallel codebase explorers (grounding, capped at 14 files each) |
+| `think` | **strong** | `migite-plan` — synthesis, refine, testing plan: the highest-leverage text in the run |
 | `critic` | strong | `migite-plan` — architecture critic |
-| `review` | standard | `migite-review` — the 4 specialist reviewers |
-| `verdict` | strong | `migite-review` — structured verdict synthesis |
+| `review_correctness`, `review_security` | **strong** | `migite-review` — the two reviewers where a miss costs the most |
+| `review_test_coverage`, `review_testing_plan` | standard | `migite-review` — checklist dimensions |
+| `verdict` | strong | `migite-review` — structured verdict synthesis (decides the gate) |
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
 | `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
-| `lens`, `explore_refine` | standard | `migite-explore` lenses and refine |
-| `explore_synth`, `challenge` | strong | `migite-explore` synthesis and adversarial challenge |
+| `lens` | standard | `migite-explore` lenses |
+| `explore_synth`, `challenge`, `explore_refine` | strong | `migite-explore` synthesis, adversarial challenge, and the revision that applies it |
 | `analyst`, `extract` | standard | `migite-blueprint` analysts, milestone/knowledge extraction |
 | `blueprint_synth` | strong | `migite-blueprint` synthesis |
-| `audit_area` | fast | `migite-audit` per-layer auditors |
+| `audit_area` | standard | `migite-audit` per-layer auditors (Haiku misses subtle auth / N+1 issues) |
 | `audit_synth` | standard | `migite-audit` report synthesis |
-| `pr_review` | standard | `migite-pr-review` reviewers |
+| `pr_review_correctness`, `pr_review_security` | strong | `migite-pr-review` reviewers |
+| `pr_review_test_coverage`, `pr_review_conventions_and_migrations` | standard | `migite-pr-review` reviewers |
 | `pr_verdict` | strong | `migite-pr-review` verdict |
 
 Changing a tier moves every role in it; pinning a role moves only that call. An unknown role
-name under `roles:` is an error.
+name under `roles:` or `roles_effort:` is an error.
+
+**Effort.** `models.effort.<tier>` (or `models.roles_effort.<role>`) becomes `--effort <level>` on
+every headless call for that tier/role. `none` (the default everywhere) passes no flag, so the
+CLI's own default applies — today's behaviour. On Sonnet 5 and Opus 5.5 effort is the first
+quality/cost lever: `xhigh` is the recommended setting for coding work, `low` for cheap subagents.
+Haiku 4.5 rejects the flag and never receives it, whatever the fast tier says. To go back to the
+pre-2026-09 cheaper tiering, pin `think`, `explore_refine`, `review_correctness`, and
+`review_security` to `claude-sonnet-5` and `audit_area` to the Haiku id.
 
 <a id="stack"></a>
 ### `stack`
@@ -256,5 +285,6 @@ Phases use `cfg <key>`, `cfg_model <role>`, `prompt_path <name>`, `template_path
 
 The Python agents and standalone tools call `migite_config.load(repo_root)` themselves, so they
 work identically when invoked directly. `migite_paths.detect_org` consults `vault.org` after the
-`MIGITE_ORG` env var. `migite_claude.configure_from(cfg)` applies timeouts and the headless
-permission mode to every subsequent model call.
+`MIGITE_ORG` env var. `migite_claude.configure_from(cfg)` applies timeouts, the headless
+permission mode, and the per-role effort table to every subsequent model call; bash call sites
+use `cfg_model_flags <role>`, which emits `--model` plus `--effort` when configured.

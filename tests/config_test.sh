@@ -35,8 +35,12 @@ _cfg_reset_env() {
     test "$(cfg not.a.key fallback)" = "fallback"
   check "cfg_model: explore → fast tier (haiku)" \
     test "$(cfg_model explore)" = "claude-haiku-4-5-20251001"
-  check "cfg_model: verdict → strong tier (opus)" \
-    test "$(cfg_model verdict)" = "claude-opus-5"
+  check "cfg_model: verdict → strong tier (opus 5.5)" \
+    test "$(cfg_model verdict)" = "claude-opus-5-5"
+  check "cfg_model: think → strong tier by default (drafter no weaker than critic)" \
+    test "$(cfg_model think)" = "claude-opus-5-5"
+  check "cfg_model_flags: no effort configured → --model only" \
+    test "$(cfg_model_flags knowledge)" = "--model claude-sonnet-5"
   check "prompt_path: falls back to the repo copy when no override dir" \
     test "$(prompt_path plan)" = "$MIGITE_HOME/prompts/plan.md"
   check "load_migite_config: no files → MIGITE_CFG_FILES empty" \
@@ -46,7 +50,8 @@ _cfg_reset_env() {
 # ── repo file + env override + prompt override ───────────────────────────────
 cat > "$cfg_dir/repo/.migite.json" <<'EOF'
 {"vault": {"base": "/vault/from/file", "org": "Acme"},
- "models": {"strong": "file-strong", "roles": {"knowledge": "pinned-knowledge"}},
+ "models": {"strong": "file-strong", "roles": {"knowledge": "pinned-knowledge", "explore": "claude-haiku-4-5-20251001"},
+            "effort": {"strong": "xhigh", "fast": "high"}, "roles_effort": {"knowledge": "low"}},
  "heal": {"max_attempts": 7, "full_suite_fallback": false},
  "gates": {"commit": {"policy": "strict"}},
  "permissions": {"headless": "acceptEdits", "interactive": "acceptEdits"},
@@ -85,8 +90,16 @@ echo "custom plan prompt" > "$cfg_dir/repo/.migite/prompts/plan.md"
     test "$(cfg_model critic)" = "file-strong"
   check "cfg_model: role pin wins over its tier (knowledge)" \
     test "$(cfg_model knowledge)" = "pinned-knowledge"
-  check "cfg_model: unpinned role in another tier unchanged (think → sonnet)" \
-    test "$(cfg_model think)" = "claude-sonnet-5"
+  check "cfg_model: unpinned role in another tier unchanged (amend → sonnet)" \
+    test "$(cfg_model amend)" = "claude-sonnet-5"
+  check "cfg_model_flags: tier effort → --model X --effort xhigh (critic)" \
+    test "$(cfg_model_flags critic)" = "--model file-strong --effort xhigh"
+  check "cfg_model_flags: role effort beats tier (knowledge → low)" \
+    test "$(cfg_model_flags knowledge)" = "--model pinned-knowledge --effort low"
+  check "cfg_model_flags: never sends --effort to a Haiku model even when the fast tier sets one" \
+    test "$(cfg_model_flags explore)" = "--model claude-haiku-4-5-20251001"
+  check "cfg_model_flags: role with no effort anywhere → --model only (amend)" \
+    test "$(cfg_model_flags amend)" = "--model claude-sonnet-5"
   check "prompt_path: prompts.dir override (relative to repo root) wins when the file exists" \
     test "$(prompt_path plan)" = "$cfg_dir/repo/.migite/prompts/plan.md"
   check "prompt_path: override dir without the file falls back to the repo copy" \

@@ -15,7 +15,7 @@ file actually exists — with no config files, or JSON ones, migite runs without
 Python API:
     cfg = migite_config.load(repo_root)
     cfg.get("gates.commit.policy")     -> "lenient"
-    cfg.model("critic")                -> "claude-opus-5"   (role -> tier -> model id)
+    cfg.model("critic")                -> "claude-opus-5-5"   (role -> tier -> model id)
     cfg.prompt_path("plan", migite_home) -> Path
     cfg.source("models.strong")        -> "defaults" | "<file>" | "env:VAR"
 
@@ -52,8 +52,13 @@ DEFAULTS: dict[str, Any] = {
     "models": {
         "fast": "claude-haiku-4-5-20251001",
         "standard": "claude-sonnet-5",
-        "strong": "claude-opus-5",
-        "roles": {},                     # optional per-role override: {"critic": "claude-opus-5", ...}
+        "strong": "claude-opus-5-5",
+        "roles": {},                     # optional per-role override: {"critic": "claude-opus-5-5", ...}
+        # --effort per tier (low | medium | high | xhigh | max | none). none = don't pass the flag,
+        # so the CLI's own default applies. Haiku 4.5 does not accept --effort; it is never sent for
+        # a haiku model regardless of these values.
+        "effort": {"fast": "none", "standard": "none", "strong": "none"},
+        "roles_effort": {},              # optional per-role effort override: {"critic": "max", ...}
         "timeout_seconds": 600,
         "thinking_timeout_seconds": 900,
     },
@@ -96,23 +101,50 @@ DEFAULTS: dict[str, Any] = {
 }
 
 # Which model tier each call site uses by default. `models.roles.<role>` overrides the tier.
+# The mapping follows one rule: a drafter is never weaker than the critic whose findings it
+# must apply, and the calls that do the actual finding (plan synthesis, correctness and
+# security review) sit on the strong tier while checklist work and extraction stay standard.
 ROLE_TIERS: dict[str, str] = {
     # migite-plan
-    "explore": "fast", "think": "standard", "critic": "strong",
-    # migite-review
-    "review": "standard", "verdict": "strong",
+    "explore": "fast",            # 7 parallel explorers: grounding, capped at 14 files each
+    "think": "strong",            # plan synthesis + refine + testing plan: highest-leverage text in the run
+    "critic": "strong",           # architecture critic
+    # migite-review — one role per dimension, plus the verdict
+    "review_correctness": "strong",
+    "review_security": "strong",
+    "review_test_coverage": "standard",
+    "review_testing_plan": "standard",
+    "verdict": "strong",          # structured verdict synthesis: decides the gate
     # migite bash phases
     "knowledge": "standard", "improve": "standard", "amend": "standard",
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
     # migite-explore
-    "lens": "standard", "explore_synth": "strong", "challenge": "strong", "explore_refine": "standard",
+    "lens": "standard", "explore_synth": "strong", "challenge": "strong",
+    "explore_refine": "strong",   # the reviser should not be weaker than the challenger
     # migite-blueprint
     "analyst": "standard", "blueprint_synth": "strong", "extract": "standard",
     # migite-audit
-    "audit_area": "fast", "audit_synth": "standard",
-    # migite-pr-review
-    "pr_review": "standard", "pr_verdict": "strong",
+    "audit_area": "standard",     # Haiku misses subtle auth / N+1 issues; audits are rare
+    "audit_synth": "standard",
+    # migite-pr-review — one role per dimension, plus the verdict
+    "pr_review_correctness": "strong",
+    "pr_review_security": "strong",
+    "pr_review_test_coverage": "standard",
+    "pr_review_conventions_and_migrations": "standard",
+    "pr_verdict": "strong",
 }
+
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "none")
+
+
+def default_model(role: str) -> str:
+    """The built-in default model for a role (DEFAULTS tier via ROLE_TIERS), with no
+    config files or env consulted. The ONLY sanctioned way for a script to name a
+    model outside a loaded Config — module-level constants in the tools use this so
+    there is exactly one place a model id is written down."""
+    if role not in ROLE_TIERS:
+        raise KeyError(f"unknown model role {role!r}; known: {', '.join(sorted(ROLE_TIERS))}")
+    return str(DEFAULTS["models"][ROLE_TIERS[role]])
 
 # Environment variables that override file values (env > files). Keeps every
 # variable migite documented before the config file existed working unchanged.
@@ -128,6 +160,9 @@ ENV_OVERRIDES: dict[str, str] = {
 }
 
 ENUMS: dict[str, tuple[str, ...]] = {
+    "models.effort.fast": EFFORT_LEVELS,
+    "models.effort.standard": EFFORT_LEVELS,
+    "models.effort.strong": EFFORT_LEVELS,
     "gates.commit.policy": ("lenient", "strict"),
     "permissions.interactive": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
     "permissions.heal": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
@@ -156,12 +191,18 @@ logs:
   dir: ~/.dev-workflow/logs  # LOG_DIR
 
 models:
-  fast: claude-haiku-4-5-20251001   # explorers, audit areas
-  standard: claude-sonnet-5         # synthesis, review dimensions, knowledge, amendments
-  strong: claude-opus-5             # architecture critic, verdicts, adversarial challenge
-  # roles:                          # pin one call site without changing its tier
-  #   critic: claude-opus-5
-  #   knowledge: claude-haiku-4-5-20251001
+  fast: claude-haiku-4-5-20251001   # explorers
+  standard: claude-sonnet-5         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments
+  strong: claude-opus-5-5           # plan synthesis/refine, critic, correctness + security review, verdicts
+  # roles:                          # pin one call site without changing its tier (see docs/configuration.md for the list)
+  #   think: claude-sonnet-5
+  #   review_security: claude-opus-5-5
+  effort:                           # --effort per tier: low | medium | high | xhigh | max | none (none = CLI default)
+    fast: none                      # Haiku 4.5 never receives --effort regardless
+    standard: none
+    strong: none
+  # roles_effort:                   # per-role effort override
+  #   critic: max
   timeout_seconds: 600
   thinking_timeout_seconds: 900
 
@@ -223,7 +264,7 @@ def _flatten(d: dict, prefix: str = "") -> dict[str, Any]:
         key = f"{prefix}.{k}" if prefix else k
         # An EMPTY mapping is a leaf too — otherwise `stacks: {node: {}}` would
         # flatten to nothing and an unknown section could never be flagged.
-        if isinstance(v, dict) and v and key != "models.roles":
+        if isinstance(v, dict) and v and key not in ("models.roles", "models.roles_effort"):
             out.update(_flatten(v, key))
         else:
             out[key] = v
@@ -296,13 +337,18 @@ def _coerce(key: str, value: Any, source: str) -> Any:
         raise ConfigError(f"{key} must be true or false (got {value!r} from {source})")
     if key in ENUMS and str(value) not in ENUMS[key]:
         raise ConfigError(f"{key} must be one of {', '.join(ENUMS[key])} (got {value!r} from {source})")
-    if key == "models.roles":
+    if key in ("models.roles", "models.roles_effort"):
         if not isinstance(value, dict):
-            raise ConfigError(f"models.roles must be a mapping of role -> model id (from {source})")
+            raise ConfigError(f"{key} must be a mapping of role -> value (from {source})")
         unknown = sorted(set(value) - set(ROLE_TIERS))
         if unknown:
-            raise ConfigError(f"models.roles has unknown role(s): {', '.join(unknown)} (from {source}). "
+            raise ConfigError(f"{key} has unknown role(s): {', '.join(unknown)} (from {source}). "
                               f"Known: {', '.join(sorted(ROLE_TIERS))}")
+        if key == "models.roles_effort":
+            bad = sorted(str(v) for v in value.values() if str(v) not in EFFORT_LEVELS)
+            if bad:
+                raise ConfigError(f"models.roles_effort values must be one of {', '.join(EFFORT_LEVELS)} "
+                                  f"(got {', '.join(bad)} from {source})")
         return {k: str(v) for k, v in value.items()}
     return value
 
@@ -337,6 +383,18 @@ class Config:
 
     def models_by_role(self) -> dict[str, str]:
         return {role: self.model(role) for role in ROLE_TIERS}
+
+    def effort(self, role: str) -> str | None:
+        """--effort level for a role: models.roles_effort.<role>, else models.effort.<tier>.
+        Returns None when the resolved value is "none" (don't pass the flag)."""
+        if role not in ROLE_TIERS:
+            raise KeyError(f"unknown model role {role!r}; known: {', '.join(sorted(ROLE_TIERS))}")
+        overrides = self.get("models.roles_effort") or {}
+        level = overrides.get(role) or self.get(f"models.effort.{ROLE_TIERS[role]}") or "none"
+        return None if level == "none" else str(level)
+
+    def efforts_by_role(self) -> dict[str, str | None]:
+        return {role: self.effort(role) for role in ROLE_TIERS}
 
     def expanded_path(self, key: str) -> Path | None:
         v = self.get(key)
@@ -420,6 +478,7 @@ def load(repo_root: str | Path | None = None, *, env: Mapping[str, str] | None =
         flat = _flatten(loaded)
         for key, value in flat.items():
             if key not in known and not key.startswith("models.roles"):
+                # (models.roles and models.roles_effort are open mappings validated in _coerce)
                 warnings.append(f"{path}: unknown key '{key}' (ignored)")
                 continue
             coerced = _coerce(key, value, str(path))
@@ -456,11 +515,13 @@ def _shell_value(v: Any) -> str:
 def to_shell(cfg: Config) -> str:
     lines = []
     for key, value in sorted(cfg.flat().items()):
-        if key == "models.roles":
+        if key in ("models.roles", "models.roles_effort"):
             continue
         lines.append(f"{_shell_key(key)}={shlex.quote(_shell_value(value))}")
     for role, model in sorted(cfg.models_by_role().items()):
         lines.append(f"MIGITE_CFG_MODEL_{role.upper()}={shlex.quote(model)}")
+    for role, level in sorted(cfg.efforts_by_role().items()):
+        lines.append(f"MIGITE_CFG_EFFORT_{role.upper()}={shlex.quote(level or '')}")
     lines.append("MIGITE_CFG_FILES=" + shlex.quote(" ".join(str(p) for p in cfg.files)))
     lines.append("MIGITE_CFG_WARNINGS=" + shlex.quote("\n".join(cfg.warnings)))
     return "\n".join(lines) + "\n"
@@ -469,7 +530,7 @@ def to_shell(cfg: Config) -> str:
 def show(cfg: Config) -> str:
     rows = []
     for key, value in sorted(cfg.flat().items()):
-        if key == "models.roles":
+        if key in ("models.roles", "models.roles_effort"):
             value = json.dumps(value) if value else "{}"
         rows.append((key, _shell_value(value) or "(unset)", cfg.source(key)))
     width = max(len(r[0]) for r in rows)
@@ -482,7 +543,9 @@ def show(cfg: Config) -> str:
     for role, model in sorted(cfg.models_by_role().items()):
         tier = ROLE_TIERS[role]
         pinned = " (pinned)" if role in (cfg.get("models.roles") or {}) else f" ({tier})"
-        out.append(f"    {role:<16} {model}{pinned}")
+        eff = cfg.effort(role)
+        eff_note = f"  effort={eff}" if eff else ""
+        out.append(f"    {role:<38} {model}{pinned}{eff_note}")
     out.append("")
     out.append("  files: " + (", ".join(str(p) for p in cfg.files) if cfg.files else "(none — defaults + env only)"))
     for w in cfg.warnings:
@@ -509,16 +572,26 @@ def main() -> None:
         p.add_argument("--repo-root", dest="repo_root", default=argparse.SUPPRESS)
     subparsers["get"].add_argument("key")
     subparsers["init"].add_argument("--force", action="store_true")
+    subparsers["init"].add_argument("--user", action="store_true",
+                                    help="write ~/.config/migite/config.yml (your personal defaults) instead of <repo>/.migite.yml")
     args = ap.parse_args()
 
     if args.command == "init":
-        root = Path(args.repo_root or ".")
-        target = root / ".migite.yml"
+        if args.user:
+            base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "migite"
+            base.mkdir(parents=True, exist_ok=True)
+            target = base / "config.yml"
+            header = ("# ~/.config/migite/config.yml — your personal migite defaults, applied to every repo.\n"
+                      "# A repo's .migite.yml overrides these key by key; env vars override both.\n\n")
+        else:
+            target = Path(args.repo_root or ".") / ".migite.yml"
+            header = ""
         if target.exists() and not args.force:
             print(f"✘ {target} already exists (use --force to overwrite)", file=sys.stderr)
             sys.exit(1)
-        target.write_text(STARTER_TEMPLATE)
+        target.write_text(header + STARTER_TEMPLATE)
         print(f"✔ wrote {target}")
+        print("  Every value is a default — delete what you don't change. `migite config` shows the effective result.")
         return
 
     try:
@@ -536,6 +609,8 @@ def main() -> None:
     elif args.command == "get":
         if args.key.startswith("model:"):
             print(cfg.model(args.key.split(":", 1)[1]))
+        elif args.key.startswith("effort:"):
+            print(cfg.effort(args.key.split(":", 1)[1]) or "")
         else:
             v = cfg.get(args.key)
             if v is None:

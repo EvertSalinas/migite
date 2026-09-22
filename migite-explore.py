@@ -31,14 +31,14 @@ import migite_paths
 
 # ── Models ──────────────────────────────────────────────────────────────────────
 # Exploration quality is the entire product here - there is no implementation
-# phase downstream to catch a shallow read, so lenses use Sonnet rather than
-# Haiku. Synthesis and the adversarial challenge use Opus. Built-in defaults;
-# main() replaces them from the config (roles lens / explore_synth / challenge /
-# explore_refine).
-LENS_MODEL      = "claude-sonnet-5"
-SYNTH_MODEL     = "claude-opus-5"
-CHALLENGE_MODEL = "claude-opus-5"
-REFINE_MODEL    = "claude-sonnet-5"
+# phase downstream to catch a shallow read, so lenses use the standard tier
+# rather than fast; synthesis, the adversarial challenge, and the refine that
+# applies it use the strong tier. Defaults from migite_config's single table;
+# main() replaces them from the loaded config.
+LENS_MODEL      = migite_config.default_model("lens")
+SYNTH_MODEL     = migite_config.default_model("explore_synth")
+CHALLENGE_MODEL = migite_config.default_model("challenge")
+REFINE_MODEL    = migite_config.default_model("explore_refine")
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
@@ -141,10 +141,10 @@ EXPLORE_LENSES = [
 
 # ── Claude call ─────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str, thinking: bool = False, label: str = "") -> str:
+def call_claude(prompt: str, model: str, thinking: bool = False, label: str = "", role: str = "") -> str:
     """Shared wrapper (migite_claude): JSON envelope, usage ledger, CLAUDECODE
-    stripping, timeouts and headless permission mode from the config."""
-    return migite_claude.call_claude(prompt, model, thinking=thinking, tool="migite-explore", label=label).text
+    stripping, timeouts, headless permission mode and per-role --effort from the config."""
+    return migite_claude.call_claude(prompt, model, thinking=thinking, tool="migite-explore", label=label, role=role).text
 
 
 def run_cmd(cmd: str, cwd: str, timeout: int = 60) -> str:
@@ -375,7 +375,7 @@ Rules:
 Output findings only. No preamble."""
 
     try:
-        findings = call_claude(prompt, model=LENS_MODEL, label=f"lens:{lens}")
+        findings = call_claude(prompt, model=LENS_MODEL, label=f"lens:{lens}", role="lens")
     except Exception as e:
         findings = f"UNKNOWN: lens failed - {e}"
     return {"lens_reports": [f"### {lens}\n{findings}"]}
@@ -517,7 +517,7 @@ Honesty requirements:
 
 Output only the document."""
 
-    draft = call_claude(prompt, model=SYNTH_MODEL, thinking=True, label="synthesize_exploration")
+    draft = call_claude(prompt, model=SYNTH_MODEL, thinking=True, label="synthesize_exploration", role="explore_synth")
     return {"exploration_draft": draft}
 
 
@@ -568,7 +568,7 @@ If the document is sound on every axis, output exactly:
 Output findings only. No preamble."""
 
     try:
-        findings = call_claude(prompt, model=CHALLENGE_MODEL, thinking=True, label="challenge_assumptions")
+        findings = call_claude(prompt, model=CHALLENGE_MODEL, thinking=True, label="challenge_assumptions", role="challenge")
     except Exception as e:
         findings = f"🔴 **Critical** - challenge pass failed: {e}"
     return {"challenges": findings}
@@ -603,7 +603,7 @@ Preserve these formatting rules:
 Output only the revised document."""
 
     try:
-        refined = call_claude(prompt, model=REFINE_MODEL, thinking=True, label="refine_exploration")
+        refined = call_claude(prompt, model=REFINE_MODEL, thinking=True, label="refine_exploration", role="explore_refine")
     except Exception as e:
         print(f"    ⚠ Refine failed ({e}) - keeping draft", flush=True)
         return {"exploration_final": state["exploration_draft"]}
@@ -660,7 +660,7 @@ workstream must respect or resolve>
 Produce one block per workstream, in sequence order. Output only the delimited blocks."""
 
     try:
-        raw = call_claude(prompt, model=REFINE_MODEL, label="extract_workstreams")
+        raw = call_claude(prompt, model=REFINE_MODEL, label="extract_workstreams", role="explore_refine")
     except Exception as e:
         print(f"    ⚠ Workstream extraction failed: {e}", flush=True)
         raw = ""

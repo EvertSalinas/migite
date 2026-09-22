@@ -21,9 +21,9 @@ import migite_claude
 import migite_config
 import migite_paths
 
-# Built-in defaults; main() replaces them from the config (roles audit_area / audit_synth).
-EXPLORE_MODEL = "claude-haiku-4-5-20251001"
-THINK_MODEL   = "claude-sonnet-5"
+# Defaults from migite_config's single table; main() replaces them from the loaded config.
+EXPLORE_MODEL = migite_config.default_model("audit_area")
+THINK_MODEL   = migite_config.default_model("audit_synth")
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
@@ -98,9 +98,9 @@ AUDIT_AREAS = [
 
 # ── Claude call ─────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str, label: str = "") -> str:
-    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions."""
-    return migite_claude.call_claude(prompt, model, tool="migite-audit", label=label).text
+def call_claude(prompt: str, model: str, label: str = "", role: str = "") -> str:
+    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return migite_claude.call_claude(prompt, model, tool="migite-audit", label=label, role=role).text
 
 
 # ── File reading ─────────────────────────────────────────────────────────────────
@@ -196,7 +196,7 @@ If nothing found output exactly: ✅ No issues in {area}.
 No preamble. Findings only."""
 
     try:
-        result = call_claude(prompt, model=EXPLORE_MODEL, label=f"audit:{area}")
+        result = call_claude(prompt, model=EXPLORE_MODEL, label=f"audit:{area}", role="audit_area")
     except Exception as e:
         result = f"🔴 **Critical** — audit failed for {area}: {e}"
     return {"findings": [f"### {area}\n{result}"]}
@@ -241,7 +241,7 @@ Date: {today}
 Output only the report."""
 
     try:
-        report = call_claude(prompt, model=THINK_MODEL, label="synthesize_report")
+        report = call_claude(prompt, model=THINK_MODEL, label="synthesize_report", role="audit_synth")
     except Exception as e:
         report = f"# Codebase Audit — {state['repo_name']}\n\nSynthesis failed: {e}"
     return {"report": report}

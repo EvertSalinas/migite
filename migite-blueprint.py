@@ -31,10 +31,10 @@ import migite_claude
 import migite_config
 import migite_paths
 
-# Built-in defaults; main() replaces them from the config (roles analyst / blueprint_synth / extract).
-ANALYST_MODEL = "claude-sonnet-5"  # parallel analysts — pure reasoning, no file scanning
-SYNTH_MODEL   = "claude-opus-5"    # blueprint synthesis — most consequential call in the tool
-EXTRACT_MODEL = "claude-sonnet-5"  # milestone + knowledge extraction
+# Defaults from migite_config's single table; main() replaces them from the loaded config.
+ANALYST_MODEL = migite_config.default_model("analyst")          # parallel analysts — pure reasoning
+SYNTH_MODEL   = migite_config.default_model("blueprint_synth")  # most consequential call in the tool
+EXTRACT_MODEL = migite_config.default_model("extract")          # milestone + knowledge extraction
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
@@ -137,9 +137,9 @@ Be direct. Name specific risks, not categories. Under 450 words.""",
 
 # ── Claude call ───────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str, label: str = "") -> str:
-    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions."""
-    return migite_claude.call_claude(prompt, model, tool="migite-blueprint", label=label).text
+def call_claude(prompt: str, model: str, label: str = "", role: str = "") -> str:
+    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return migite_claude.call_claude(prompt, model, tool="migite-blueprint", label=label, role=role).text
 
 
 def apply_config(repo_root: str | None) -> None:
@@ -218,7 +218,7 @@ Lint/format tool:
 Package manager:
 Inferred: <yes|no>"""
     try:
-        stack = call_claude(prompt, model=ANALYST_MODEL, label="determine_stack")
+        stack = call_claude(prompt, model=ANALYST_MODEL, label="determine_stack", role="analyst")
     except Exception as e:
         stack = f"Language: unknown\nFramework: unknown\n(stack inference failed: {e})"
     first_line = stack.splitlines()[0] if stack else "(empty)"
@@ -252,7 +252,7 @@ def analyze_dimension(state: DimensionInput) -> dict:
 
 {state['analyst_prompt']}"""
     try:
-        result = call_claude(prompt, model=ANALYST_MODEL, label=f"analyst:{dim}")
+        result = call_claude(prompt, model=ANALYST_MODEL, label=f"analyst:{dim}", role="analyst")
     except Exception as e:
         result = f"Analysis failed: {e}"
     return {"analyses": [f"### {dim}\n{result}"]}
@@ -337,7 +337,7 @@ Key files: <comma-separated list of the main files/directories this milestone wi
 Output only the blueprint document. No preamble or meta-commentary."""
 
     try:
-        blueprint = call_claude(prompt, model=SYNTH_MODEL, label="synthesize_blueprint")
+        blueprint = call_claude(prompt, model=SYNTH_MODEL, label="synthesize_blueprint", role="blueprint_synth")
     except Exception as e:
         blueprint = f"# Blueprint: {state['project_name']}\nDate: {state['today']}\n\nSynthesis failed: {e}"
     return {"blueprint": blueprint}
@@ -393,7 +393,7 @@ naming conventions, authorization model, N+1 risks, gem choices>
 Produce one block per milestone. Output only the delimited blocks."""
 
     try:
-        milestones_raw = call_claude(prompt, model=EXTRACT_MODEL, label="extract_milestones")
+        milestones_raw = call_claude(prompt, model=EXTRACT_MODEL, label="extract_milestones", role="extract")
     except Exception as e:
         milestones_raw = f"Milestone extraction failed: {e}"
     return {"milestones_raw": milestones_raw}
@@ -433,7 +433,7 @@ Produce a knowledge.md with these sections (markdown bullets, concise):
 Under 600 words total. Output only the knowledge.md content — no preamble."""
 
     try:
-        knowledge = call_claude(prompt, model=EXTRACT_MODEL, label="extract_knowledge_seed")
+        knowledge = call_claude(prompt, model=EXTRACT_MODEL, label="extract_knowledge_seed", role="extract")
     except Exception as e:
         knowledge = f"Knowledge seed extraction failed: {e}"
     return {"knowledge_seed": knowledge}

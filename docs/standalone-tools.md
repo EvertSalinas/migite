@@ -6,9 +6,12 @@ Reference for the four tools that run independently of `migite`. See the
 All four read the same layered configuration as `migite`
 ([docs/configuration.md](./configuration.md)): `vault.base` / `vault.org` for output paths,
 `models` for every call (roles `lens`, `explore_synth`, `challenge`, `explore_refine`, `analyst`,
-`blueprint_synth`, `extract`, `audit_area`, `audit_synth`, `pr_review`, `pr_verdict`),
-`models.timeout_seconds`, and `permissions.headless`. The "Models used" notes below describe the
-defaults. Every call is metered in the usage ledger when `MIGITE_USAGE_LEDGER` is set.
+`blueprint_synth`, `extract`, `audit_area`, `audit_synth`, `pr_review_<dimension>`, `pr_verdict`),
+`models.effort` / `models.roles_effort` for `--effort`, `models.timeout_seconds`, and
+`permissions.headless`. The "Models used" notes below describe the original defaults; the current
+default tiering (Opus 5.5 for the strong tier, Sonnet for audit areas and explore refine on the
+strong tier) is in [docs/configuration.md](./configuration.md#models). Every call is metered in
+the usage ledger when `MIGITE_USAGE_LEDGER` is set.
 
 ## Contents
 
@@ -25,7 +28,7 @@ defaults. Every call is metered in the usage ledger when `MIGITE_USAGE_LEDGER` i
 
 Defines a new project from a brief before any code exists. Runs 5 parallel specialist analysts
 (domain model, user roles & flows, API surface, tech conventions, risks), synthesises a complete
-blueprint with Opus 5, then extracts sequenced milestone intake files and a knowledge.md seed.
+blueprint with Opus 5.5, then extracts sequenced milestone intake files and a knowledge.md seed.
 
 **Stack-agnostic:** a new project has no code yet for the tool to read, so it determines a
 stack up front — either taken verbatim from `--stack`, or inferred from the brief (its own
@@ -84,7 +87,7 @@ migite-blueprint --from-blueprint ./output/blueprint.md
 ```
 
 **Models used:** `claude-sonnet-5` for stack inference (when `--stack` isn't given), the 5 parallel
-analysts, milestone extraction, and knowledge-seed extraction; `claude-opus-5` for blueprint
+analysts, milestone extraction, and knowledge-seed extraction; `claude-opus-5-5` for blueprint
 synthesis (the most consequential call — shapes everything downstream).
 
 **Default output:** `~/dev-log/Personal/<project-name>/blueprint/` (or `~/dev-log/$MIGITE_ORG/<project-name>/blueprint/` if `MIGITE_ORG` is set), where
@@ -146,11 +149,11 @@ load_context   (git ls-files → keyword rank → shared repo context)
     ├── lens: constraints         (contracts, compat, tooling, docs)
     └── lens: approaches          (2-3 distinct options, no winner picked)
          │
-    synthesize_exploration   (Opus 5 — the feasibility document)
+    synthesize_exploration   (Opus 5.5 — the feasibility document)
          │
-    challenge_assumptions    (Opus 5 — adversarial: attacks the document)
+    challenge_assumptions    (Opus 5.5 — adversarial: attacks the document)
          │
-    refine_exploration       (Sonnet 5 — incorporates the challenges)
+    refine_exploration       (Opus 5.5 — incorporates the challenges; the reviser is no weaker than the challenger)
          │
     extract_workstreams      (Sonnet 5 — only with --intakes)
          │
@@ -178,7 +181,7 @@ that), since it's repeated in full on every one of those ~9 calls, not read once
 
 The **challenge pass** is what separates this from a plan. Feasibility documents fail in
 predictable ways — missed touchpoints, underestimated effort, hand-waved hard parts, a confident
-verdict from thin evidence. A second Opus 5 pass attacks the draft on seven axes and the document
+verdict from thin evidence. A second Opus 5.5 pass attacks the draft on seven axes and the document
 is revised against those findings.
 
 **What it produces:**
@@ -230,7 +233,7 @@ migite --intake intake-01-extract-provider-adapter.md \
 <a id="re-extracting-intakes"></a>
 ### Re-extracting intakes (`--from-exploration`)
 
-A full run is ~9 model calls (10 with `--intakes`), two of them Opus 5 with extended thinking.
+A full run is ~9 model calls (10 with `--intakes`), two of them Opus 5.5 with extended thinking.
 Re-extraction is **one Sonnet 5 call** — it reads an existing `exploration.md` and regenerates
 only the workstream intakes.
 
@@ -256,7 +259,7 @@ Warns if the document has no `## Workstreams` section rather than silently produ
 If a repo `knowledge.md` exists in the vault, it is injected into every lens automatically on full runs.
 
 **Models used:** `claude-sonnet-5` for the 6 lenses (exploration quality is the whole product —
-there is no implementation phase downstream to catch a shallow read), `claude-opus-5` for both
+there is no implementation phase downstream to catch a shallow read), `claude-opus-5-5` for both
 synthesis and the adversarial challenge, `claude-sonnet-5` for refinement and workstream extraction.
 
 **Default output:** no `--jira`/`--name` — `~/dev-log/<org>/<repo>/exploration-<slug>-<date>/`.
@@ -357,4 +360,4 @@ in that case. `--jira` only affects the output path when it parses as a ticket k
 URL — a free-text value is still passed into the review as reference context, just without
 grouping the output under a ticket folder.
 
-**Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5` for the final verdict. This tool is read-only — it never commits anything, there's no gate to approve.
+**Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5-5` for the final verdict. This tool is read-only — it never commits anything, there's no gate to approve.

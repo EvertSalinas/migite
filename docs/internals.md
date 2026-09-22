@@ -57,7 +57,10 @@ migite-review \
 
 `--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades.
 
-**Models used:** `claude-sonnet-5` for the 4 parallel review dimensions, `claude-opus-5` for `synthesize_verdict`.
+**Models used (defaults):** one config role per dimension — `review_correctness` and
+`review_security` on the strong tier (`claude-opus-5-5`), `review_test_coverage` and
+`review_testing_plan` on the standard tier (`claude-sonnet-5`) — and `verdict` (strong) for
+`synthesize_verdict`. See [docs/configuration.md](./configuration.md#models).
 
 `synthesize_verdict` is given `prompts/review.md` as the output format (resolved the same way as
 `migite-plan`'s prompts; hard error if missing). It runs as a **schema-validated structured

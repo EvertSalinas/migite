@@ -140,6 +140,7 @@ Runs on macOS and Linux (bash 4+). Desktop notifications use `osascript` on macO
 
 - Vault root: `~/dev-log/` — plain markdown files, created automatically on first run. No note-taking app required; point `DEV_LOG_BASE` at an existing Obsidian vault (or anywhere else) if you have one and want the `[[wikilinks]]` to resolve.
 - Intake templates and the PR-description prompt ship in this repo's [`templates/`](./templates) directory — `migite.d/plan.sh` and `migite.d/deliver.sh` read them via `$MIGITE_HOME`.
+- Configuration (optional): `~/.config/migite/config.yml` for your defaults and `<repo>/.migite.yml` per project — both created with `migite config --init [--user]`, see [Configuration](#configuration). Without them migite runs on built-in defaults.
 - The four phase prompts (`plan`, `implement`, `review`, `architecture_critic`) ship in [`prompts/`](./prompts). `migite`, `migite-plan`, and `migite-review` resolve them relative to their own real path and **fail loudly if one is missing** — nothing under `~/.claude/` is required. If you also want them as Claude Code slash commands, symlink them (see [Installation](#installation), step 5).
 
 ---
@@ -175,7 +176,17 @@ source ~/.zshrc
 # 4. Install Python dependencies (one-time)
 pip3 install langgraph
 
-# 5. (Optional) expose the phase prompts as Claude Code slash commands too
+# 5. Create your personal config (applies to every repo; a repo's .migite.yml
+#    overrides it key by key; env vars override both). Every value in the file
+#    is a default — delete the lines you don't change.
+migite config --init --user     # writes ~/.config/migite/config.yml
+$EDITOR ~/.config/migite/config.yml
+migite config                   # shows the effective result and where each value came from
+#    Per-repo settings (strict commit gate, prompt overrides, a stack override):
+#    cd <repo> && migite config --init   → .migite.yml, commit it with the repo.
+#    YAML files need PyYAML: pip3 install pyyaml   (.json files work without it)
+
+# 6. (Optional) expose the phase prompts as Claude Code slash commands too
 #    (/plan, /implement, /review, /architecture_critic). The repo copy is the
 #    source of truth; these are written for the headless pipeline, so as slash
 #    commands they output the document rather than writing files themselves.
@@ -203,11 +214,16 @@ Migite reads a layered configuration — **flags > env vars > `$MIGITE_CONFIG` >
 so nothing changes until you write a file. Full reference: **[docs/configuration.md](./docs/configuration.md)**.
 
 ```bash
-migite config --init    # write a commented starter .migite.yml with every default
-migite config           # show the effective config and where each value came from
+migite config --init --user   # once: ~/.config/migite/config.yml — your defaults for every repo
+migite config --init          # per repo: .migite.yml — commit it with the project
+migite config                 # show the effective config and where each value came from
+migite config --validate      # exit 1 on errors (bad YAML, invalid value), warn on unknown keys
 ```
 
-The most useful knobs: `models` (three tiers + per-role pins), `gates.commit.policy: strict`
+Both starter files contain every setting at its default with a comment, so the usual workflow is
+to delete everything you don't change. See [Installation](#installation) step 5.
+
+The most useful knobs: `models` (three tiers — Haiku 4.5 / Sonnet 5 / Opus 5.5 — plus per-role pins and `--effort` per tier), `gates.commit.policy: strict`
 (refuse `y` over a NEEDS FIXES verdict; `Y` overrides and is logged), `permissions.*`,
 `heal.full_suite_fallback`, `prompts.dir` / `templates.dir` per-project prompt overrides, and
 `budget.max_usd_per_run`. YAML files need PyYAML (`pip install pyyaml`); `.migite.json` works without it.
@@ -381,5 +397,5 @@ Not yet built, roughly in the order they're likely to land:
 - **Stack profiles as data, with real toolchains.** `migite` already detects `rails` vs `generic` (see [`--stack` values](#stack-values)), and `generic` runs the whole pipeline minus lint/test. The next step is describing a stack as data — detect rule, lint, autofix, test, test-glob, explorer areas — so `node` (`npm run lint`/`jest`), `python` (`ruff`/`pytest`), `go` (`go vet`/`go test`) become config blocks rather than new bash function pairs, and `migite-audit`/`migite-pr-review` can drop their Rails-only checklists.
 - **Support AI agents other than Claude.** Right now every phase shells out to `claude`. Making the agent backend pluggable (e.g. Codex, opencode) would decouple the orchestration logic (phases, gates, vault, resolvers) from any one CLI.
 - **One-line installer.** Replace the manual clone-and-symlink dance in [Installation](#installation) with a script that does it in one command.
-- **CI on this repo.** No GitHub Actions yet — at minimum, run `migite_paths.py --self-test` on push/PR so the path-resolver logic (org/ticket detection) can't silently regress.
+- **CI hardening.** `.github/workflows/ci.yml` runs the Python unit tests, the resolver self-test, the bash suite (against the fake `claude`), and shellcheck at error severity on every push. Next: promote shellcheck warnings to blocking once triaged, and add a smoke run of `migite-plan`/`migite-review` against the fake CLI.
 - **Stack profiles in the config file.** `.migite.yml` now covers models, gates, permissions, heal, prompt/template overrides, budget and UI (see [docs/configuration.md](./docs/configuration.md)); `stack:` can only pick between the two bash-registered profiles. The remaining step is a `stacks:` block describing detect/lint/autofix/test/globs as data.

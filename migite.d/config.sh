@@ -45,8 +45,10 @@ load_migite_config() {
 }
 
 # cfg_model <role> — resolved model id for a call-site role (see ROLE_TIERS in
-# migite_config.py). Falls back to a sane tier default if config wasn't loaded
-# (e.g. helpers exercised standalone in tests).
+# migite_config.py). When the config hasn't been loaded into this shell (helpers
+# exercised standalone, e.g. in tests), ask the resolver for the built-in default
+# instead of keeping a second hand-maintained copy of the tier table here — the
+# previous `case` block drifted from migite_config.py every time a model changed.
 cfg_model() {
   local role="$1" var
   var="MIGITE_CFG_MODEL_$(echo "$role" | tr '[:lower:]' '[:upper:]')"
@@ -54,11 +56,24 @@ cfg_model() {
     echo "${!var}"
     return
   fi
-  case "$role" in
-    explore|audit_area) echo "claude-haiku-4-5-20251001" ;;
-    critic|verdict|challenge|explore_synth|blueprint_synth|pr_verdict) echo "claude-opus-5" ;;
-    *) echo "claude-sonnet-5" ;;
-  esac
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" get "model:$role"
+}
+
+# cfg_model_flags <role> — `--model <id>` plus `--effort <level>` when the config
+# sets one for the role's tier (models.effort) or the role itself
+# (models.roles_effort). Never emits --effort for a Haiku model, which rejects
+# the flag. Use this in place of `--model "$(cfg_model role)"` so every bash
+# call site gets the effort setting for free.
+cfg_model_flags() {
+  local role="$1" model level var
+  model="$(cfg_model "$role")"
+  var="MIGITE_CFG_EFFORT_$(echo "$role" | tr '[:lower:]' '[:upper:]')"
+  level="${!var:-}"
+  if [[ -n "$level" && "$level" != "none" && "$model" != *haiku* ]]; then
+    printf -- '--model %s --effort %s' "$model" "$level"
+  else
+    printf -- '--model %s' "$model"
+  fi
 }
 
 # cfg <dotted.key> [default] — one config value as exported by load_migite_config.
@@ -122,7 +137,11 @@ run_config_command() {
       echo ""
       ;;
     *)
-      echo "Usage: migite config [--init [--force] | --validate]" >&2
+      echo "Usage: migite config [--init [--user] [--force] | --validate]" >&2
+      echo "  (no args)         effective configuration for this repo, with the source of every value" >&2
+      echo "  --init            write a starter <repo>/.migite.yml with every default" >&2
+      echo "  --init --user     write a starter ~/.config/migite/config.yml (personal defaults for all repos)" >&2
+      echo "  --validate        exit 1 on errors, print warnings" >&2
       return 1
       ;;
   esac

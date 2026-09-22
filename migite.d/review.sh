@@ -292,7 +292,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
           local testing_plan_tmp
           testing_plan_tmp=$(mktemp)
-          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "--model $(cfg_model testing_plan)"
+          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "$(cfg_model_flags testing_plan)"
           if [[ -s "$testing_plan_tmp" ]]; then
             mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
             sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
