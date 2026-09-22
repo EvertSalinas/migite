@@ -24,6 +24,13 @@ DEV_LOG_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
 LOG_DIR="${LOG_DIR:-$HOME/.dev-workflow/logs}"
 DATE=$(date +%Y-%m-%d)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+# Per-run usage ledger: one JSONL line per headless `claude --print` call
+# (tokens, cost, duration, model, label). Written by migite_claude.py from
+# both the Python agents and bash's claude_print; summarised at exit by
+# print_usage_summary into <scratchpad>/usage.json. Exported so the agents
+# (and the tmux wrapper scripts, which re-export it) inherit it.
+MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
+export MIGITE_USAGE_LEDGER
 MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
 # Python binary for LangGraph agent scripts. Override via env if your setup differs.
 # Resolved dynamically (not pinned to a specific asdf patch version) so an asdf Python
@@ -95,6 +102,8 @@ for _prompt in plan implement review architecture_critic; do
   [[ -f "$MIGITE_HOME/prompts/$_prompt.md" ]] || error "Prompt file missing: $MIGITE_HOME/prompts/$_prompt.md — is the migite checkout intact?"
 done
 unset _prompt
+# Print what the run spent on the way out — success, gate abort, or error alike.
+trap print_usage_summary EXIT
 # `bundle` is only required for the `rails` stack — checked after detect_stack,
 # once we know which stack this repo actually is.
 
@@ -287,5 +296,6 @@ echo -e "    plan.md            → planning output"
 echo -e "    implementation.md  → implementation notes"
 echo -e "    review.md          → review verdict"
 echo -e "    pr-description.md  → ready to paste into GitHub"
+echo -e "    plan.json / review.json / usage.json → machine-readable envelopes"
 echo -e "  Vault (read-only mirror): ${CYAN}$TASK_DIR${RESET}"
 echo ""

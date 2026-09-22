@@ -58,8 +58,64 @@ migite-review \
 **Models used:** `claude-sonnet-5` for the 4 parallel review dimensions, `claude-opus-5` for `synthesize_verdict`.
 
 `synthesize_verdict` is given `prompts/review.md` as the output format (resolved the same way as
-`migite-plan`'s prompts; hard error if missing). That format puts `## Verdict: READY TO COMMIT` or
-`## Verdict: NEEDS FIXES` on one line directly under the title, which is what `review_verdict()`
-in `helpers.sh` parses for the commit-gate banner.
+`migite-plan`'s prompts; hard error if missing). It runs as a **schema-validated structured
+call** (`claude --json-schema`, see `REVIEW_SCHEMA`): the model returns `{verdict, reason,
+findings[], document}`, `document` becomes `review.md`, and the rest becomes `review.json`. If
+the structured call fails or returns something malformed, it falls back to a plain text call and
+derives the verdict from the document with the same anchored rule `helpers.sh`'s
+`review_verdict()` uses (`source: "markdown"` in the envelope).
+
+<a id="machine-readable"></a>
+## Machine-readable envelopes and the usage ledger
+
+Every headless model call goes through **`migite_claude.py`** (imported by `migite-plan` and
+`migite-review`; reached from bash via `claude_print` in `helpers.sh`, which pipes the CLI's JSON
+through `migite_claude.py extract`). It always runs `claude --print --output-format json`, so
+each call yields the CLI envelope — `result`, `usage`, `total_cost_usd`, `duration_ms`, and with
+`--json-schema` a validated `structured_output` — and appends one line to the run's ledger
+(`$MIGITE_USAGE_LEDGER`, default `~/.dev-workflow/logs/<ts>-usage.jsonl`):
+
+```json
+{"ts": "...", "tool": "migite-plan", "label": "explore:models", "model": "claude-haiku-4-5-20251001",
+ "input_tokens": 10, "output_tokens": 39, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 23624,
+ "cost_usd": 0.0475, "duration_ms": 1407, "ok": true}
+```
+
+If the CLI doesn't return the envelope (older version, plain-text error) the wrapper passes stdout
+through untouched with zero usage, so nothing downstream changes. Note the
+`cache_creation_input_tokens`: every headless call re-sends Claude Code's own system context
+(~23k tokens in testing), which is a large share of a run's cost and is why the summary prints it.
+
+**`plan.json`** (beside `plan.md`, written by `migite-plan`):
+
+| Field | Meaning |
+|---|---|
+| `critic.clean`, `critic.critical/warning/note` | Whether the architecture critic returned the clean signal, and its 🔴/🟡/🟢 counts |
+| `open_questions` | Number of `### N.` entries under `## Open questions` |
+| `plan_headings` | The plan's `## ` headings, in order |
+| `synth_retries` | 0 or 1 — whether synthesis needed the stub retry |
+| `refine_status` | `no_concerns` / `applied` / `applied_after_retry` / `kept_draft` |
+| `explorers.count`, `explorers.failed[]` | How many explorers ran and which failed |
+| `usage` | This tool's calls from the ledger, summed |
+
+**`review.json`** (beside `review.md`, written by `migite-review`):
+
+| Field | Meaning |
+|---|---|
+| `verdict` | `needs_fixes` / `ready` / `unknown` — **what the commit gate reads** (`review_verdict()` prefers this over parsing the markdown) |
+| `verdict_label`, `reason` | The model's exact verdict string and its one-line justification |
+| `findings[]` | `{severity, dimension, file, line, problem, fix}` from the structured call (empty in the markdown fallback) |
+| `counts` | Per-severity totals (from `findings[]`, or 🔴/🟡/🟢 counts in the fallback) |
+| `dimensions` | Per-reviewer 🔴/🟡/🟢 counts and a `failed` flag |
+| `source` | `structured` or `markdown` |
+| `usage` | This tool's calls from the ledger, summed |
+
+Both envelopes carry `schema_version`, `tool`, `generated_at`, `base_branch`, and `outputs` paths.
+Bash reads them with `json_field <file> <dotted.key>`; mirror them to the vault with `sync_json`
+(never `sync_artifact`, whose frontmatter stamp would corrupt JSON).
+
+**`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
+report too) and summarises the ledger by model and by tool. Interactive sessions (`run_phase`:
+implement, gate fixes, PR description) are not metered — the CLI only emits usage in `--print` mode.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

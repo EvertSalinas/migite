@@ -24,7 +24,10 @@ if [[ -z "${MIGITE_PYTHON:-}" ]]; then
   fi
 fi
 export MIGITE_PYTHON
+export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_claude.py resolve it from here
 DATE="${DATE:-$(date +%Y-%m-%d)}"
+# Never let a test run append to a real ledger; tests that need one set their own.
+unset MIGITE_USAGE_LEDGER
 
 # shellcheck source=../migite.d/helpers.sh
 source "$REPO_ROOT/migite.d/helpers.sh"

@@ -110,10 +110,14 @@ run_review() {
   )
   [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
 
-  rm -f "$REVIEW_SENTINEL"
+  # review.json is removed before every run so a stale envelope can never
+  # outlive the review.md it described (review_verdict prefers it when present).
+  local REVIEW_JSON="${REVIEW_FILE%.md}.json"
+  rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
   spawn_langgraph "Reviewing" "review" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
   [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
   sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
+  sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
   success "Review written to $REVIEW_FILE"
 
   # migite-review only reads — it doesn't touch files — so the rubocop sweep
@@ -157,10 +161,11 @@ run_review() {
       fi
     fi
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
-    rm -f "$REVIEW_SENTINEL"
+    rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
     spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
     sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
+    sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
     # Reuse the sweep above instead of re-running rubocop a second time.
     RUBOCOP_FINAL_LOG="$RUBOCOP_LOG"
     RUBOCOP_FINAL_OFFENSES=0
@@ -178,9 +183,12 @@ run_review() {
         break
         ;;
       e|E)
-        # Direct edit of review.md — annotate, strike findings, add context
+        # Direct edit of review.md — annotate, strike findings, add context.
+        # The hand-edited markdown is now the source of truth, so drop the
+        # envelope; review_verdict falls back to parsing the document.
         ${EDITOR:-vim} "$REVIEW_FILE"
         sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
+        rm -f "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
         ;;
       f|F)
         # Build a fix prompt from the current review findings
@@ -229,7 +237,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
           local testing_plan_tmp
           testing_plan_tmp=$(mktemp)
-          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "--model claude-sonnet-5 --output-format text"
+          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "--model claude-sonnet-5"
           if [[ -s "$testing_plan_tmp" ]]; then
             mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
             sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"

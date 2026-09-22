@@ -255,6 +255,76 @@ claude_cmd() {
   env -u CLAUDECODE claude "$@"
 }
 
+# claude_print <label> [claude flags...] — headless call, prompt on stdin,
+# result TEXT on stdout. Always runs `--output-format json` under the hood and
+# pipes the envelope through migite_claude.py `extract`, which prints the
+# `result` and appends one usage line (tokens, cost, duration, model) to
+# $MIGITE_USAGE_LEDGER. Callers must NOT pass --output-format themselves.
+# Falls back to passing stdout through untouched if the CLI didn't return the
+# JSON envelope (older CLI, plain-text error), so nothing downstream changes.
+claude_print() {
+  local label="$1"; shift
+  local raw rc=0 xrc=0
+  raw=$(mktemp)
+  claude_cmd --print --output-format json "$@" > "$raw" || rc=$?
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" extract --tool migite --label "$label" --exit-code "$rc" < "$raw" || xrc=$?
+  rm -f "$raw"
+  return "$xrc"
+}
+
+# json_field <file.json> <dotted.key> — prints one value; exit 1 if the file,
+# key, or JSON is missing/invalid. Bash-side reader for plan.json/review.json/
+# usage.json so no call site has to parse JSON with grep.
+json_field() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 1
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" field "$file" "$key" 2>/dev/null
+}
+
+# sync_json <file.json> <vault-dest> — mirror a JSON artifact to the vault.
+# NOT sync_artifact: stamp_file would prepend markdown frontmatter and corrupt it.
+sync_json() {
+  local file="$1" vault_dest="$2"
+  [[ -f "$file" ]] || return 0
+  mkdir -p "$(dirname "$vault_dest")"
+  cp "$file" "$vault_dest"
+}
+
+# run_cost_so_far — "<N> calls, $X.XX" from the run's usage ledger, or exit 1
+# when there's no ledger yet. Headless calls only (interactive sessions aren't
+# metered — see print_usage_summary).
+run_cost_so_far() {
+  [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 1
+  local tmp calls cost
+  tmp=$(mktemp)
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+  calls=$(json_field "$tmp" total.calls || echo 0)
+  cost=$(json_field "$tmp" total.cost_usd || echo 0)
+  rm -f "$tmp"
+  printf '%s calls, $%.2f' "$calls" "$cost"
+}
+
+# print_usage_summary — end-of-run table of every headless model call (by
+# model: calls, tokens, time, cost), written to <scratchpad>/usage.json and
+# mirrored to the vault when a task dir is known. Runs from migite's EXIT trap
+# so an aborted run still reports what it spent. Guarded to run once.
+print_usage_summary() {
+  [[ "${_USAGE_SUMMARY_PRINTED:-}" == "1" ]] && return 0
+  _USAGE_SUMMARY_PRINTED=1
+  [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 0
+  echo ""
+  echo -e "${BOLD}── Usage ───────────────────────────────────────${RESET}"
+  if [[ -n "${SCRATCHPAD_DIR:-}" && -d "$SCRATCHPAD_DIR" ]]; then
+    local out="$SCRATCHPAD_DIR/usage.json"
+    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
+    [[ -n "${TASK_DIR:-}" ]] && sync_json "$out" "$TASK_DIR/usage.json"
+  else
+    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" summary --ledger "$MIGITE_USAGE_LEDGER" || true
+  fi
+  echo -e "  Ledger: ${CYAN}$MIGITE_USAGE_LEDGER${RESET}"
+  echo -e "${BOLD}────────────────────────────────────────────────${RESET}"
+}
+
 # Interactive prompts above this many bytes are handed to Claude as a pointer
 # to the prompt file instead of inline on the command line. Linux caps a
 # single argv string at 128 KB; the implement prompt is knowledge.md + plan +
@@ -350,7 +420,7 @@ thinking() {
   echo -e "  ${CYAN}Prompt log: ${prompt_file}${RESET}"
 
   # shellcheck disable=SC2086
-  printf '%s' "$prompt" | claude_cmd --print $extra_flags > "$outfile" &
+  printf '%s' "$prompt" | claude_print "$label" $extra_flags > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -382,7 +452,7 @@ heal_run() {
   echo ""
   echo -e "${CYAN}  Auto-healing: ${BOLD}$label${RESET}"
 
-  printf '%s' "$prompt" | claude_cmd --print --permission-mode bypassPermissions > "$outfile" &
+  printf '%s' "$prompt" | claude_print "$label" --permission-mode bypassPermissions > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -429,6 +499,9 @@ spawn_langgraph() {
     orig_pane=$(tmux display-message -p '#{pane_id}')
     {
       echo "#!/usr/bin/env bash"
+      # tmux panes inherit the tmux SERVER's environment, not this shell's —
+      # re-export the ledger path so the agent's usage lands in this run's file.
+      [[ -n "${MIGITE_USAGE_LEDGER:-}" ]] && printf 'export MIGITE_USAGE_LEDGER=%q\n' "$MIGITE_USAGE_LEDGER"
       local cmd
       cmd="$(printf '%q' "$MIGITE_PYTHON") $(printf '%q' "$script")"
       local arg
@@ -623,6 +696,18 @@ fill_intake_field() {
 review_verdict() {
   local file="$1"
   [[ -f "$file" ]] || { echo "unknown"; return; }
+  # Prefer the machine-readable envelope migite-review writes beside review.md
+  # (a schema-validated enum, not prose). review.sh deletes review.json before
+  # every review run and when review.md is hand-edited at the gate, so a
+  # present review.json is always current. Fall through to parsing the
+  # markdown when it's absent or malformed.
+  local json="${file%.md}.json" v
+  if [[ -s "$json" ]]; then
+    v=$(json_field "$json" verdict || true)
+    case "$v" in
+      needs_fixes|ready) echo "$v"; return ;;
+    esac
+  fi
   local line
   line=$(awk '
     !found && /^#+[[:space:]]*[Vv]erdict/ {
@@ -703,6 +788,18 @@ show_commit_context() {
       ready)       echo -e "  Verdict: ${GREEN}${BOLD}READY TO COMMIT${RESET}" ;;
       *)           echo -e "  Verdict: ${YELLOW}unknown — check $REVIEW_FILE${RESET}" ;;
     esac
+    # Finding counts from review.json (typed, from the structured verdict call)
+    local review_json="${REVIEW_FILE%.md}.json"
+    if [[ -s "$review_json" ]]; then
+      local n_crit n_warn n_note reason
+      n_crit=$(json_field "$review_json" counts.critical || echo "?")
+      n_warn=$(json_field "$review_json" counts.warning || echo "?")
+      n_note=$(json_field "$review_json" counts.note || echo "?")
+      local crit_color="$GREEN"; [[ "$n_crit" != "0" ]] && crit_color="$RED"
+      echo -e "  Findings: ${crit_color}${BOLD}${n_crit} critical${RESET} · ${n_warn} warnings · ${n_note} notes"
+      reason=$(json_field "$review_json" reason || true)
+      [[ -n "$reason" ]] && echo -e "  Reason:  ${reason}" | fold -s -w 96 | sed '2,$s/^/           /'
+    fi
   fi
 
   # Spec failures / tooling failures (via tooling_failed — one pattern list)
@@ -725,6 +822,12 @@ show_commit_context() {
     echo -e "  Rubocop: ${RED}${BOLD}$RUBOCOP_FINAL_OFFENSES offense(s) remain${RESET}"
   elif [[ -n "${RUBOCOP_FINAL_LOG:-}" && -f "$RUBOCOP_FINAL_LOG" ]]; then
     echo -e "  Rubocop: ${GREEN}clean${RESET}"
+  fi
+
+  # Running total from the usage ledger (headless calls only)
+  local cost_line
+  if cost_line=$(run_cost_so_far); then
+    echo -e "  Cost:    ${cost_line} so far (headless calls only)"
   fi
 
   echo -e "${BOLD}────────────────────────────────────────────${RESET}"
