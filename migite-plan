@@ -45,6 +45,26 @@ EXPLORE_AREAS = [
     ("routes_config",      ["config/routes.rb", "config/application.rb", "config/initializers/*.rb"]),
 ]
 
+# Used when --stack generic (no recognized stack profile — see detect_stack in
+# helpers.sh): one broad area instead of Rails' MVC-shaped split, since a
+# generic repo has no convention to organize exploration areas around.
+_GENERIC_SOURCE_EXTENSIONS = (
+    "py", "js", "jsx", "ts", "tsx", "go", "rb", "java", "kt", "rs",
+    "c", "cc", "cpp", "h", "hpp", "cs", "php", "swift",
+)
+GENERIC_EXPLORE_AREAS = [
+    ("source", [f"**/*.{ext}" for ext in _GENERIC_SOURCE_EXTENSIONS]),
+]
+
+# Directory components excluded from every glob's file listing — vendored/
+# build-artifact trees that would otherwise dominate a generic repo's
+# unscoped "**/*.<ext>" glob (Rails' EXPLORE_AREAS patterns are already
+# scoped to app/spec/db/config, so this mainly matters for GENERIC_EXPLORE_AREAS).
+EXCLUDE_DIR_COMPONENTS = {
+    "node_modules", "vendor", ".venv", "venv", "dist", "build", "target",
+    "coverage", "tmp", "log", "__pycache__", ".next", ".cache", ".git",
+}
+
 STOP_WORDS = {
     "this", "that", "with", "from", "have", "been", "will", "when", "where", "what",
     "which", "their", "there", "they", "also", "into", "more", "some", "than", "then",
@@ -103,6 +123,18 @@ def call_claude(prompt: str, model: str = THINK_MODEL, thinking: bool = False) -
 
 def extract_headings(text: str) -> set[str]:
     return {line.strip() for line in text.splitlines() if line.strip().startswith("#")}
+
+
+def looks_like_stub(text: str, min_headings: int = 3, min_chars: int = 400) -> bool:
+    """
+    True if `text` reads as a one-line confirmation/narrative ("Plan written to
+    Obsidian...", "Revised plan written... all findings addressed...") instead of an
+    actual multi-section plan document — an observed failure mode for both
+    synthesize_plan and refine_plan. The plan template requires at least six `##`
+    sections (Summary/Scope/Approach/Test plan/Risks/Out of scope at minimum), so a
+    genuine plan is never this short or this bare; a stub reliably has zero headings.
+    """
+    return len(extract_headings(text)) < min_headings or len(text) < min_chars
 
 
 # ── File discovery helpers ──────────────────────────────────────────────────────
@@ -193,7 +225,10 @@ def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: 
     all_files: list[str] = []
     for pattern in patterns:
         all_files.extend(glob.glob(f"{repo_root}/{pattern}", recursive=True))
-    all_files = sorted(set(all_files))
+    all_files = sorted(
+        f for f in set(all_files)
+        if not EXCLUDE_DIR_COMPONENTS & set(Path(f).relative_to(repo_root).parts)
+    )
 
     listing = "\n".join(f.replace(f"{repo_root}/", "") for f in all_files) or "(none)"
 
@@ -263,6 +298,7 @@ class PlanState(TypedDict):
     repo_root: str
     base_branch: str
     task_type: str
+    stack: str
     plan_output: str
     critic_output: str
     testing_plan_output: str
@@ -292,7 +328,8 @@ def load_context(state: PlanState) -> dict:
 
 
 def route_to_explorers(state: PlanState) -> list[Send]:
-    print(f"  ▶ Fanning out {len(EXPLORE_AREAS)} explorers in parallel", flush=True)
+    areas = GENERIC_EXPLORE_AREAS if state.get("stack") == "generic" else EXPLORE_AREAS
+    print(f"  ▶ Fanning out {len(areas)} explorers in parallel (stack={state.get('stack', 'rails')})", flush=True)
     return [
         Send("explore", {
             "area": area,
@@ -303,7 +340,7 @@ def route_to_explorers(state: PlanState) -> list[Send]:
             "repo_root": state["repo_root"],
             "base_branch": state["base_branch"],
         })
-        for area, patterns in EXPLORE_AREAS
+        for area, patterns in areas
     ]
 
 
@@ -395,6 +432,28 @@ These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
 Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
 
     draft = call_claude(prompt, model=THINK_MODEL, thinking=True)
+
+    # Guard against the model returning a one-line stub confirmation ("Plan written
+    # to Obsidian...") instead of the actual document — observed in practice, and
+    # nothing downstream (critic, refine, write_outputs) can recover from a broken
+    # draft, so this must be caught here rather than propagating garbage.
+    if looks_like_stub(draft):
+        print("  ⚠ Synthesis returned a stub instead of a plan document — retrying once", flush=True)
+        retry_prompt = prompt + (
+            "\n\nYour previous output was not a plan document — it read as a short "
+            "confirmation sentence instead of the actual multi-section plan. Output "
+            "the FULL plan document itself, with real section headings, not a "
+            "one-line description of what you would write."
+        )
+        draft = call_claude(retry_prompt, model=THINK_MODEL, thinking=True)
+        if looks_like_stub(draft):
+            raise RuntimeError(
+                "migite-plan: synthesis produced a stub instead of an actual plan "
+                "document twice in a row — aborting rather than passing broken "
+                f"content downstream (last output: {len(draft)} chars, "
+                f"{len(extract_headings(draft))} headings)."
+            )
+
     return {"plan_draft": draft}
 
 
@@ -441,13 +500,18 @@ Formatting rules to preserve and enforce in the revised output:
 Output only the revised plan document."""
     refined = call_claude(prompt, model=THINK_MODEL, thinking=True)
 
-    # Guard against the model returning a narrative recap of its changes instead of
-    # the actual plan document (observed failure: it describes the edits in prose
-    # rather than emitting them). A genuine revision keeps most of the draft's
-    # headings since the instructions say to preserve structure — a summary won't.
+    # Guard against the model returning a narrative recap of its changes, or a bare
+    # stub confirmation sentence, instead of the actual plan document (both observed
+    # in practice). The heading-overlap check alone has a blind spot: `if
+    # draft_headings and ...` silently no-ops whenever plan_draft itself has zero
+    # `#`-headings, which can't be distinguished from a genuinely broken refine
+    # output — that gap is exactly how a stub slipped through here even with this
+    # check in place. looks_like_stub() examines `refined` directly and has no such
+    # blind spot, so it's checked unconditionally alongside the overlap ratio.
     draft_headings = extract_headings(state["plan_draft"])
     kept = len(draft_headings & extract_headings(refined))
-    if draft_headings and kept / len(draft_headings) < 0.6:
+    overlap_regressed = bool(draft_headings) and (kept / len(draft_headings) < 0.6)
+    if overlap_regressed or looks_like_stub(refined):
         print("  ⚠ Refine output didn't preserve plan structure — retrying once", flush=True)
         retry_prompt = prompt + (
             "\n\nYour previous output was not the plan document — it read as a summary "
@@ -456,7 +520,8 @@ Output only the revised plan document."""
         )
         refined = call_claude(retry_prompt, model=THINK_MODEL, thinking=True)
         kept = len(draft_headings & extract_headings(refined))
-        if kept / len(draft_headings) < 0.6:
+        overlap_regressed = bool(draft_headings) and (kept / len(draft_headings) < 0.6)
+        if overlap_regressed or looks_like_stub(refined):
             print("  ⚠ Refine still failed structure check — keeping pre-refine plan; "
                   "see architecture-critic.md for the findings that weren't applied", flush=True)
             return {"plan_final": state["plan_draft"]}
@@ -561,6 +626,7 @@ def main() -> None:
     ap.add_argument("--sentinel",      required=True, help="Sentinel file to touch on success")
     ap.add_argument("--base-branch",   default=None, help="Branch explorers diff against (default: auto-detect origin/HEAD, then main/master/develop)")
     ap.add_argument("--task-type",     default="feature")
+    ap.add_argument("--stack",         default="rails", help="Detected project stack (rails, generic, ...) — selects explore-area globs")
     ap.add_argument("--knowledge",     default="", help="Path to knowledge.md (optional)")
     ap.add_argument("--audit",         default="", help="Path to audit.md (optional)")
     ap.add_argument("--blueprint",     default="", help="Path to blueprint.md (optional)")
@@ -603,6 +669,7 @@ def main() -> None:
             "repo_root":  args.repo_root,
             "base_branch": base_branch,
             "task_type":  args.task_type,
+            "stack":      args.stack,
             "plan_output":   args.plan_output,
             "critic_output": args.critic_output,
             "testing_plan_output": args.testing_plan_output,

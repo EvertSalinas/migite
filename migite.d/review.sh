@@ -3,10 +3,15 @@
 # the commit gate.
 #
 # Sourced by migite. run_review expects PLAN_FILE, IMPLEMENTATION_FILE,
-# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME to be
+# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME, STACK to be
 # set, and sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
 # RUBY_VERSION_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
 # self-improvement prompt and by show_commit_context.
+#
+# When $STACK == "generic" (no recognized stack profile matched — see
+# detect_stack in helpers.sh), rubocop/rspec are skipped entirely, both here
+# and in the commit-gate re-run loop; the LangGraph review still runs against
+# the plan + diff, just without tooling logs.
 
 run_review() {
   echo ""
@@ -14,47 +19,57 @@ run_review() {
 
   resume_from_vault "$REVIEW_FILE" "$REVIEW_VAULT"
 
-  echo ""
-  log "Running rubocop on changed Ruby files..."
   RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rubocop.txt"
+  RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rspec.txt"
   local RUBOCOP_FINAL_LOG=""
   RUBOCOP_FINAL_OFFENSES=0
   RUBY_VERSION_ERROR=false
-  CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' || true)
-  if [[ -n "$CHANGED_RUBY" ]]; then
-    # One sweep: autocorrect and check in the same rubocop invocation, rather
-    # than check → autocorrect → recheck as three separate runs.
-    run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
-    if grep -q 'No version is set for command' "$RUBOCOP_LOG"; then
-      warn "Ruby version not set — bundle exec could not run rubocop. Fix .tool-versions before proceeding."
-      RUBY_VERSION_ERROR=true
-    elif grep -qE '[1-9][0-9]* offense' "$RUBOCOP_LOG"; then
-      warn "Rubocop offenses remain after autocorrect — Claude will address them in review"
-    else
-      success "Rubocop clean"
-    fi
-  else
-    warn "No Ruby files changed — skipping rubocop"
-    echo "No Ruby files changed." > "$RUBOCOP_LOG"
-  fi
-
-  echo ""
-  log "Running specs on changed files..."
-  RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rspec.txt"
   local CHANGED_SPECS
-  CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec.rb' || true)
-  if [[ -n "$CHANGED_SPECS" ]]; then
-    # shellcheck disable=SC2086
-    bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
+
+  if [[ "$STACK" == "generic" ]]; then
+    echo ""
+    warn "Generic stack — no lint/test tooling configured, skipping rubocop/rspec"
+    CHANGED_RUBY=""
+    CHANGED_SPECS=""
+    echo "Generic stack — no lint tooling configured." > "$RUBOCOP_LOG"
+    echo "Generic stack — no test tooling configured." > "$RSPEC_LOG"
   else
-    warn "No spec files changed — running full suite"
-    bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
-  fi
-  if grep -q 'No version is set for command' "$RSPEC_LOG"; then
-    warn "Ruby version not set — bundle exec could not run rspec. Fix .tool-versions before proceeding."
-    RUBY_VERSION_ERROR=true
-  elif grep -q '0 examples' "$RSPEC_LOG" && grep -qi 'connection\|ConnectionBad' "$RSPEC_LOG"; then
-    warn "DB connection failed — 0 examples ran. Fix the database connection before proceeding."
+    echo ""
+    log "Running rubocop on changed Ruby files..."
+    CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' || true)
+    if [[ -n "$CHANGED_RUBY" ]]; then
+      # One sweep: autocorrect and check in the same rubocop invocation, rather
+      # than check → autocorrect → recheck as three separate runs.
+      run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
+      if grep -q 'No version is set for command' "$RUBOCOP_LOG"; then
+        warn "Ruby version not set — bundle exec could not run rubocop. Fix .tool-versions before proceeding."
+        RUBY_VERSION_ERROR=true
+      elif grep -qE '[1-9][0-9]* offense' "$RUBOCOP_LOG"; then
+        warn "Rubocop offenses remain after autocorrect — Claude will address them in review"
+      else
+        success "Rubocop clean"
+      fi
+    else
+      warn "No Ruby files changed — skipping rubocop"
+      echo "No Ruby files changed." > "$RUBOCOP_LOG"
+    fi
+
+    echo ""
+    log "Running specs on changed files..."
+    CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec.rb' || true)
+    if [[ -n "$CHANGED_SPECS" ]]; then
+      # shellcheck disable=SC2086
+      bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
+    else
+      warn "No spec files changed — running full suite"
+      bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+    fi
+    if grep -q 'No version is set for command' "$RSPEC_LOG"; then
+      warn "Ruby version not set — bundle exec could not run rspec. Fix .tool-versions before proceeding."
+      RUBY_VERSION_ERROR=true
+    elif grep -q '0 examples' "$RSPEC_LOG" && grep -qi 'connection\|ConnectionBad' "$RSPEC_LOG"; then
+      warn "DB connection failed — 0 examples ran. Fix the database connection before proceeding."
+    fi
   fi
 
   # Detect files in the diff not mentioned in implementation notes — warn before review
@@ -108,18 +123,24 @@ run_review() {
   # Commit gate — [y] commit / [f] Claude fixes / [n] you fix / [q] abort
   COMMIT_GATE_ATTEMPTS=0
   _rerun_checks_and_review() {
-    log "Re-running checks..."
-    CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' || true)
-    CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec\.rb' || true)
-    if [[ -n "$CHANGED_RUBY" ]]; then
-      # One autocorrect sweep — no separate check-then-fix-then-recheck round trip.
-      run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
-    fi
-    if [[ -n "$CHANGED_SPECS" ]]; then
-      # shellcheck disable=SC2086
-      bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
+    if [[ "$STACK" == "generic" ]]; then
+      log "Generic stack — no lint/test tooling to re-run"
+      CHANGED_RUBY=""
+      CHANGED_SPECS=""
     else
-      bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+      log "Re-running checks..."
+      CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' || true)
+      CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec\.rb' || true)
+      if [[ -n "$CHANGED_RUBY" ]]; then
+        # One autocorrect sweep — no separate check-then-fix-then-recheck round trip.
+        run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
+      fi
+      if [[ -n "$CHANGED_SPECS" ]]; then
+        # shellcheck disable=SC2086
+        bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
+      else
+        bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+      fi
     fi
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
     rm -f "$REVIEW_SENTINEL"
