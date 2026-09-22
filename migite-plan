@@ -24,11 +24,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 import migite_claude
+import migite_config
 import migite_paths
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 # Haiku for fast file analysis; Sonnet for plan synthesis; Opus for the critic
 # (one high-stakes call where missed architectural findings are most costly).
+# These are the built-in defaults; main() replaces them from the config
+# (models.fast/standard/strong, or models.roles.{explore,think,critic}).
 EXPLORE_MODEL = "claude-haiku-4-5-20251001"
 THINK_MODEL   = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
@@ -37,7 +40,9 @@ CRITIC_MODEL  = "claude-opus-5"
 # the ~/.local/bin symlink to the real checkout. Missing files are a hard error
 # in main() — the old "read if exists else ''" silently ran the planner with no
 # plan format at all on a fresh machine.
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+MIGITE_HOME = Path(__file__).resolve().parent
+PROMPTS_DIR = MIGITE_HOME / "prompts"
+# Defaults; main() re-resolves them through the config so `prompts.dir` can override per project.
 PLAN_CMD_PATH = PROMPTS_DIR / "plan.md"
 CRITIC_CMD_PATH = PROMPTS_DIR / "architecture_critic.md"
 
@@ -690,6 +695,22 @@ def main() -> None:
     ap.add_argument("--task-file",     default="", help="Path to task.md — supplementary details on top of --intake (optional)")
     ap.add_argument("--jira-context",  default="", help="Path to a pre-fetched Jira ticket summary (optional)")
     args = ap.parse_args()
+
+    # Layered config: models, timeouts, headless permission mode, prompt overrides.
+    global EXPLORE_MODEL, THINK_MODEL, CRITIC_MODEL, PLAN_CMD_PATH, CRITIC_CMD_PATH
+    try:
+        cfg = migite_config.load(args.repo_root)
+    except migite_config.ConfigError as e:
+        print(f"  ✘ migite-plan: config error: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    EXPLORE_MODEL = cfg.model("explore")
+    THINK_MODEL   = cfg.model("think")
+    CRITIC_MODEL  = cfg.model("critic")
+    migite_claude.configure_from(cfg)
+    PLAN_CMD_PATH   = cfg.prompt_path("plan", MIGITE_HOME, args.repo_root)
+    CRITIC_CMD_PATH = cfg.prompt_path("architecture_critic", MIGITE_HOME, args.repo_root)
 
     intake     = Path(args.intake).read_text()
     knowledge  = Path(args.knowledge).read_text()   if args.knowledge  and Path(args.knowledge).exists()  else ""

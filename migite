@@ -20,17 +20,14 @@
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
+# Bootstrap defaults only. The real values come from load_migite_config
+# (migite.d/config.sh) once the repo root is known: flags > env > $MIGITE_CONFIG
+# > <repo>/.migite.yml > ~/.config/migite/config.yml > defaults. `migite config`
+# prints the effective result; `migite config --init` writes a starter file.
 DEV_LOG_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
 LOG_DIR="${LOG_DIR:-$HOME/.dev-workflow/logs}"
 DATE=$(date +%Y-%m-%d)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-# Per-run usage ledger: one JSONL line per headless `claude --print` call
-# (tokens, cost, duration, model, label). Written by migite_claude.py from
-# both the Python agents and bash's claude_print; summarised at exit by
-# print_usage_summary into <scratchpad>/usage.json. Exported so the agents
-# (and the tmux wrapper scripts, which re-export it) inherit it.
-MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
-export MIGITE_USAGE_LEDGER
 MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
 # Python binary for LangGraph agent scripts. Override via env if your setup differs.
 # Resolved dynamically (not pinned to a specific asdf patch version) so an asdf Python
@@ -70,14 +67,15 @@ MIGITE_HOME="$(cd "$(dirname "$_migite_real")" && pwd)"
 unset _migite_real
 # Phase prompts ship in this repo's prompts/ directory (plan.md, implement.md,
 # review.md, architecture_critic.md) — migite-plan and migite-review resolve
-# their own the same way. They used to live in ~/.claude/commands/ and were
-# read with "if exists else ''", so a fresh machine silently ran with no plan
-# or review format at all. Existence is checked in Setup below (after the
-# doctor dispatch, which must not depend on it).
-IMPLEMENT_CMD_PATH="$MIGITE_HOME/prompts/implement.md"
+# their own the same way, and `prompts.dir` in .migite.yml can override any of
+# them per project. They used to live in ~/.claude/commands/ and were read with
+# "if exists else ''", so a fresh machine silently ran with no plan or review
+# format at all. IMPLEMENT_CMD_PATH is resolved after the config is loaded.
+IMPLEMENT_CMD_PATH=""
 
 # ── Phases ────────────────────────────────────────────────────────────────────
 source "$MIGITE_HOME/migite.d/helpers.sh"
+source "$MIGITE_HOME/migite.d/config.sh"
 source "$MIGITE_HOME/migite.d/doctor.sh"
 source "$MIGITE_HOME/migite.d/amend.sh"
 source "$MIGITE_HOME/migite.d/plan.sh"
@@ -94,16 +92,16 @@ if [[ "${1:-}" == "doctor" ]]; then
   exit $?
 fi
 
+# `migite config [--init | --validate]` — show/create/check the layered config.
+if [[ "${1:-}" == "config" ]]; then
+  shift
+  run_config_command "$@"
+  exit $?
+fi
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
-mkdir -p "$LOG_DIR"
 require_cmd claude
 require_cmd git
-for _prompt in plan implement review architecture_critic; do
-  [[ -f "$MIGITE_HOME/prompts/$_prompt.md" ]] || error "Prompt file missing: $MIGITE_HOME/prompts/$_prompt.md — is the migite checkout intact?"
-done
-unset _prompt
-# Print what the run spent on the way out — success, gate abort, or error alike.
-trap print_usage_summary EXIT
 # `bundle` is only required for the `rails` stack — checked after detect_stack,
 # once we know which stack this repo actually is.
 
@@ -257,6 +255,26 @@ REPO_NAME=$(basename "$REPO_ROOT")
 # (e.g. a monorepo's app/ dir) — otherwise git diff's repo-root-relative paths
 # get re-resolved against the wrong cwd.
 cd "$REPO_ROOT"
+
+# ── Load configuration (needs REPO_ROOT for <repo>/.migite.yml) ──────────────
+load_migite_config "$REPO_ROOT"
+mkdir -p "$LOG_DIR"
+# Per-run usage ledger: one JSONL line per headless `claude --print` call
+# (tokens, cost, duration, model, label). Written by migite_claude.py from
+# both the Python agents and bash's claude_print; summarised at exit by
+# print_usage_summary into <scratchpad>/usage.json. Exported so the agents
+# (and the tmux wrapper scripts, which re-export it) inherit it.
+MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
+export MIGITE_USAGE_LEDGER
+# --stack on the command line beats `stack:` in the config, which beats auto-detection.
+[[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
+IMPLEMENT_CMD_PATH="$(prompt_path implement)"
+for _prompt in plan implement review architecture_critic; do
+  [[ -f "$(prompt_path "$_prompt")" ]] || error "Prompt file missing: $(prompt_path "$_prompt") — is the migite checkout intact?"
+done
+unset _prompt
+# Print what the run spent on the way out — success, gate abort, or error alike.
+[[ "$(cfg budget.print_summary true)" == "true" ]] && trap print_usage_summary EXIT
 
 # Detects the project's stack ($STACK) and sets $APP_ROOT/$APP_REL_PATH — the
 # directory holding the Gemfile, which isn't always $REPO_ROOT (e.g. a

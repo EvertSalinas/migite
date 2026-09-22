@@ -80,6 +80,7 @@ migite/                   ← wherever you clone this repo
 ├── migite                ← workflow orchestrator entrypoint (bash) — config, arg parsing, phase sequencing
 ├── migite.d/              ← phase fragments sourced by migite, in run order
 │   ├── helpers.sh         ← output/prompt helpers + shared DRY helpers (sync_artifact, run_rubocop_check, detect_stack + stack profiles, bundle_exec, resolve_path, ...)
+│   ├── config.sh          ← load_migite_config (evals migite_config.py env), cfg / cfg_model / prompt_path, use_tmux, `migite config`
 │   ├── amend.sh           ← --amend mode (scope a delta against an already-built task)
 │   ├── plan.sh            ← Phase 1 (plan) + Phase 1.5 (TDD red phase)
 │   ├── implement.sh       ← Phase 2 (implement, staged or single-session) + Phase 2.5 auto-heal loop
@@ -97,6 +98,7 @@ migite/                   ← wherever you clone this repo
 ├── migite-pr-review.py   ← LangGraph PR review agent (Python)
 ├── migite_paths.py       ← shared run-directory resolver (id/name → vault folder)
 ├── migite_claude.py      ← shared `claude --print` wrapper: JSON envelopes, structured output, usage ledger
+├── migite_config.py      ← layered config resolver (.migite.yml / ~/.config/migite) — see docs/configuration.md
 ├── migite-improvements.md ← self-improvement notes appended after each run
 ├── prompts/              ← phase prompts, resolved via $MIGITE_HOME — hard error if missing
 │   ├── plan.md           ← plan format + type routing, injected into migite-plan's synthesis
@@ -159,7 +161,7 @@ for f in migite migite-plan migite-review \
           migite-explore migite-explore.py \
           migite-audit migite-audit.py \
           migite-pr-review migite-pr-review.py \
-          migite_paths.py migite_claude.py; do
+          migite_paths.py migite_claude.py migite_config.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 chmod +x "$MIGITE_SRC"/migite "$MIGITE_SRC"/migite-blueprint \
@@ -195,6 +197,22 @@ Add that export to `~/.zshrc` to make it permanent.
 
 <a id="configuration"></a>
 ## Configuration
+
+Migite reads a layered configuration — **flags > env vars > `$MIGITE_CONFIG` > `<repo>/.migite.yml`
+> `~/.config/migite/config.yml` > defaults** — and every default equals the pre-config behaviour,
+so nothing changes until you write a file. Full reference: **[docs/configuration.md](./docs/configuration.md)**.
+
+```bash
+migite config --init    # write a commented starter .migite.yml with every default
+migite config           # show the effective config and where each value came from
+```
+
+The most useful knobs: `models` (three tiers + per-role pins), `gates.commit.policy: strict`
+(refuse `y` over a NEEDS FIXES verdict; `Y` overrides and is logged), `permissions.*`,
+`heal.full_suite_fallback`, `prompts.dir` / `templates.dir` per-project prompt overrides, and
+`budget.max_usd_per_run`. YAML files need PyYAML (`pip install pyyaml`); `.migite.json` works without it.
+
+The environment variables below all still work and beat the files:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -308,6 +326,7 @@ For amend mode, intake mode, blueprint mode, audit mode, the full phase-by-phase
 | Doc | Covers |
 |-----|--------|
 | [docs/migite.md](./docs/migite.md) | `migite` usage modes (amend/intake/blueprint/audit), all phases, active memory injection, tmux integration, output files, the commit gate banner, the Testing Plan requirement, resuming a run |
+| [docs/configuration.md](./docs/configuration.md) | `.migite.yml` / `~/.config/migite/config.yml`: precedence, every key, model roles, strict gate, env-var mapping |
 | [docs/standalone-tools.md](./docs/standalone-tools.md) | `migite-blueprint`, `migite-explore`, `migite-audit`, `migite-pr-review` |
 | [docs/internals.md](./docs/internals.md) | The internal `migite-plan` / `migite-review` LangGraph scripts `migite` calls directly |
 | [docs/vault-structure.md](./docs/vault-structure.md) | Full `~/dev-log/` directory tree and org resolution |
@@ -363,4 +382,4 @@ Not yet built, roughly in the order they're likely to land:
 - **Support AI agents other than Claude.** Right now every phase shells out to `claude`. Making the agent backend pluggable (e.g. Codex, opencode) would decouple the orchestration logic (phases, gates, vault, resolvers) from any one CLI.
 - **One-line installer.** Replace the manual clone-and-symlink dance in [Installation](#installation) with a script that does it in one command.
 - **CI on this repo.** No GitHub Actions yet — at minimum, run `migite_paths.py --self-test` on push/PR so the path-resolver logic (org/ticket detection) can't silently regress.
-- **Config file support.** Configuration today is env-var only (`DEV_LOG_BASE`, `MIGITE_ORG`, `MIGITE_PYTHON`, ...). An optional `.migiterc`/`migite.yml` would let settings live with a project instead of only in shell profiles.
+- **Stack profiles in the config file.** `.migite.yml` now covers models, gates, permissions, heal, prompt/template overrides, budget and UI (see [docs/configuration.md](./docs/configuration.md)); `stack:` can only pick between the two bash-registered profiles. The remaining step is a `stacks:` block describing detect/lint/autofix/test/globs as data.

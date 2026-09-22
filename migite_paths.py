@@ -58,6 +58,14 @@ def detect_org(repo_root: str) -> str:
     env_org = os.environ.get("MIGITE_ORG")
     if env_org:
         return env_org
+    # vault.org from .migite.yml / ~/.config/migite/config.yml (env above still wins)
+    try:
+        import migite_config
+        cfg_org = migite_config.load(repo_root).get("vault.org")
+        if cfg_org:
+            return str(cfg_org)
+    except Exception:
+        pass
     return Path(repo_root).resolve().parent.name or "Personal"
 
 

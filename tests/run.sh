@@ -26,28 +26,38 @@ fi
 export MIGITE_PYTHON
 export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_claude.py resolve it from here
 DATE="${DATE:-$(date +%Y-%m-%d)}"
+TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d-%H%M%S)}"
+# Helpers like write_prompt/thinking write into $LOG_DIR — give tests a throwaway one
+# so nothing lands in the real ~/.dev-workflow/logs and set -u never trips on it.
+LOG_DIR="$(mktemp -d)"
+export LOG_DIR
 # Never let a test run append to a real ledger; tests that need one set their own.
 unset MIGITE_USAGE_LEDGER
 
 # shellcheck source=../migite.d/helpers.sh
 source "$REPO_ROOT/migite.d/helpers.sh"
+# shellcheck source=../migite.d/config.sh
+source "$REPO_ROOT/migite.d/config.sh"
 
-TOTAL=0
-FAILURES=()
 CLEANUP_DIRS=()
-trap 'for d in "${CLEANUP_DIRS[@]:-}"; do [[ -n "$d" ]] && rm -rf "$d"; done' EXIT
+# Results go through a FILE, not shell variables: test files may run blocks in
+# ( subshells ) to isolate environment changes, and a counter incremented there
+# would never reach this shell — a failing check inside one would print ✘ and
+# the run would still report success.
+RESULTS_FILE="$(mktemp)"
+trap 'for d in "${CLEANUP_DIRS[@]:-}" "$LOG_DIR"; do [[ -n "$d" ]] && rm -rf "$d"; done; rm -f "$RESULTS_FILE"' EXIT
 
 # check <label> <command...> — runs <command>, records pass/fail by its exit
 # code. Prefer `test`/`[[` expressions or a function reference as <command>,
 # e.g.: check "detect_base_branch: falls back to main" test "$got" = "main"
 check() {
   local label="$1"; shift
-  TOTAL=$((TOTAL + 1))
   if "$@"; then
     echo "  ✔ $label"
+    echo "PASS	$label" >> "$RESULTS_FILE"
   else
     echo "  ✘ $label"
-    FAILURES+=("$label")
+    echo "FAIL	$label" >> "$RESULTS_FILE"
   fi
 }
 
@@ -80,11 +90,11 @@ for test_file in "$SCRIPT_DIR"/*_test.sh; do
 done
 
 echo ""
-if [[ ${#FAILURES[@]} -gt 0 ]]; then
-  echo "${#FAILURES[@]}/$TOTAL check(s) FAILED:"
-  for f in "${FAILURES[@]}"; do
-    echo "  - $f"
-  done
+TOTAL=$(wc -l < "$RESULTS_FILE" | tr -d ' ')
+FAILED=$(grep -c '^FAIL	' "$RESULTS_FILE" || true)
+if [[ "$FAILED" -gt 0 ]]; then
+  echo "$FAILED/$TOTAL check(s) FAILED:"
+  grep '^FAIL	' "$RESULTS_FILE" | cut -f2- | sed 's/^/  - /'
   exit 1
 fi
 echo "All $TOTAL checks passed."

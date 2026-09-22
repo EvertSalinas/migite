@@ -75,7 +75,7 @@ End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
   local KNOWLEDGE_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-knowledge.txt"
   # Pinned to Sonnet — unpinned, this ran on whatever the user's default model
   # was (possibly Opus) on every single task.
-  thinking "Extracting knowledge" "$KNOWLEDGE_LOG" "$KNOWLEDGE_PROMPT" "--model claude-sonnet-5"
+  thinking "Extracting knowledge" "$KNOWLEDGE_LOG" "$KNOWLEDGE_PROMPT" "--model $(cfg_model knowledge)"
 
   # Append entry to knowledge file
   {
@@ -132,7 +132,7 @@ $(cat "$REVIEW_FILE")
 
 Jira ticket reference: $TICKET_SUFFIX
 
-$(cat "$MIGITE_HOME/templates/commit.md" | sed "s|\\[PR_FILE\\]|$PR_FILE|g")"
+$(cat "$(template_path commit)" | sed "s|\\[PR_FILE\\]|$PR_FILE|g")"
 
   run_phase "PR description" "$PR_FILE" "$PR_PROMPT"
   sync_artifact "$PR_FILE" "$TASK_DIR/pr-description.md"
@@ -218,7 +218,7 @@ If nothing in this run warrants an improvement note, output nothing.
 Output ONLY the bullet points, no preamble. Each bullet starts with '- '."
 
   local IMPROVEMENTS_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-improvements.txt"
-  thinking "Self-improvement" "$IMPROVEMENTS_LOG" "$IMPROVEMENTS_PROMPT" "--model claude-sonnet-5"
+  thinking "Self-improvement" "$IMPROVEMENTS_LOG" "$IMPROVEMENTS_PROMPT" "--model $(cfg_model improve)"
 
   if grep -q '[^[:space:]]' "$IMPROVEMENTS_LOG" 2>/dev/null; then
     {

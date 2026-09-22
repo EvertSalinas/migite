@@ -3,6 +3,13 @@
 Reference for the four tools that run independently of `migite`. See the
 [README](../README.md) for the "which tool for which situation" table.
 
+All four read the same layered configuration as `migite`
+([docs/configuration.md](./configuration.md)): `vault.base` / `vault.org` for output paths,
+`models` for every call (roles `lens`, `explore_synth`, `challenge`, `explore_refine`, `analyst`,
+`blueprint_synth`, `extract`, `audit_area`, `audit_synth`, `pr_review`, `pr_verdict`),
+`models.timeout_seconds`, and `permissions.headless`. The "Models used" notes below describe the
+defaults. Every call is metered in the usage ledger when `MIGITE_USAGE_LEDGER` is set.
+
 ## Contents
 
 - [`migite-blueprint`](#migite-blueprint)

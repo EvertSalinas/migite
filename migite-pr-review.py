@@ -19,8 +19,11 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_claude
+import migite_config
 import migite_paths
 
+# Built-in defaults; main() replaces them from the config (roles pr_review / pr_verdict).
 REVIEW_MODEL  = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
 
@@ -78,25 +81,9 @@ PR_REVIEW_DIMENSIONS = [
 
 # ── Claude call ──────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = REVIEW_MODEL) -> str:
-    import time
-    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
-    permission_mode = os.environ.get("MIGITE_PERMISSION_MODE", "")
-    if permission_mode:
-        cmd += ["--permission-mode", permission_mode]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
-    t0 = time.monotonic()
-    try:
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=600)
-    except subprocess.TimeoutExpired:
-        elapsed = time.monotonic() - t0
-        raise RuntimeError(f"claude --print timed out after {elapsed:.0f}s (limit=600s, model={model})")
-    elapsed = time.monotonic() - t0
-    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {r.returncode})", flush=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"claude --print failed (exit {r.returncode}, {elapsed:.1f}s): {r.stderr[:300]}")
-    return r.stdout.strip()
+def call_claude(prompt: str, model: str, label: str = "") -> str:
+    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions."""
+    return migite_claude.call_claude(prompt, model, tool="migite-pr-review", label=label).text
 
 
 def run_cmd(cmd: str, cwd: str, timeout: int = 60) -> str:
@@ -262,7 +249,7 @@ If no issues found: ✅ No issues in {dim}.
 No preamble. Findings only."""
 
     try:
-        result = call_claude(prompt)
+        result = call_claude(prompt, model=REVIEW_MODEL, label=f"review:{dim}")
     except Exception as e:
         result = f"🔴 **Critical** — reviewer failed: {e}"
     return {"findings": [f"### {dim}\n{result}"]}
@@ -316,7 +303,7 @@ NEEDS CHANGES — one or more issues must be fixed before merging
 Output only the review document."""
 
     try:
-        verdict = call_claude(prompt, model=CRITIC_MODEL)
+        verdict = call_claude(prompt, model=CRITIC_MODEL, label="synthesize_verdict")
     except Exception as e:
         verdict = (
             f"# PR Review: {state['branch']}\nDate: {today}\n\n"
@@ -369,6 +356,19 @@ def main() -> None:
     ap.add_argument("--skip-tests", action="store_true", help="Skip rubocop + rspec")
     ap.add_argument("--jira",       default="", help="Jira ticket key or URL (optional — groups this review under the ticket's existing folder)")
     args = ap.parse_args()
+
+    global REVIEW_MODEL, CRITIC_MODEL, VAULT_BASE
+    try:
+        cfg = migite_config.load(args.repo_root)
+    except migite_config.ConfigError as e:
+        print(f"✘ config error: {e}", file=sys.stderr)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    REVIEW_MODEL = cfg.model("pr_review")
+    CRITIC_MODEL = cfg.model("pr_verdict")
+    VAULT_BASE   = str(cfg.expanded_path("vault.base"))
+    migite_claude.configure_from(cfg)
 
     if not args.base:
         args.base = migite_paths.detect_base_branch(args.repo_root)

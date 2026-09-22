@@ -338,7 +338,10 @@ Tooling failures — Ruby version unset, a git-sourced gem not checked out, rspe
 `tooling_failed <log>` helper wherever a rubocop/rspec log is inspected (Phase 3, the commit-gate
 re-checks, and the banner). When it fires, `TOOLING_ERROR` carries the message into the banner.
 
-**Known inconsistency:** Phase 2.5 skips rspec (and says so) when no spec files changed, but Phase 3's review and its commit-gate re-checks still fall back to running the full suite in that case — the older behavior Phase 2.5 was specifically changed to avoid, for the same reason (it requires a live DB and verifies nothing relevant to the diff). Phase 3 hasn't been brought in line with that fix yet.
+**Phase 3's full-suite fallback is configurable.** By default (`heal.full_suite_fallback: true`)
+Phase 3 and the commit-gate re-checks still run the whole rspec suite when no spec files changed —
+the pre-config behaviour. Set it to `false` in `.migite.yml` to make Phase 3 consistent with Phase
+2.5 (skip rspec and say so); the full suite needs a live DB and verifies nothing about the diff.
 
 <a id="phase-3-review"></a>
 ### Phase 3 — Review (LangGraph)
@@ -372,7 +375,14 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 | `n` | Manual fix — migite pauses and waits for you to press Enter when ready, then re-runs checks and re-review |
 | `q` | Abort the workflow |
 
-Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-run the full review afterwards through the same helper — there's no cap on how many times you can loop through this, and no confirmation beyond the single `y` keypress required to approve over a `NEEDS FIXES` verdict or remaining rubocop offenses. You always get a fresh verdict before committing if you choose `f` or `n`, but nothing currently stops `y` from being pressed on the first pass regardless of what the banner says.
+Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-run the full review afterwards through the same helper — there's no cap on how many times you can loop through this.
+
+**What `y` may approve over is a config choice** (`gates.commit.policy`, see
+[docs/configuration.md](./configuration.md#gates)). With the default `lenient`, `y` approves on
+the first pass regardless of what the banner says. With `strict`, `y` is refused while a
+`NEEDS FIXES` verdict (read from `review.json`), spec failures, a tooling error, or remaining
+rubocop offenses stand — the blockers are listed — and only a capital `Y` approves anyway,
+appending the blockers to `gate-overrides.md` beside the review so the override is on record.
 
 <a id="phase-3-5-knowledge"></a>
 ### Phase 3.5 — Knowledge capture
@@ -446,6 +456,7 @@ copy never lags behind.
 | `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
 | `usage.json` | End-of-run summary of every headless model call (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
+| `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
 | `.plan.done` | Sentinel written by migite-plan on success |
 | `.review.done` | Sentinel written by migite-review on success |
 | `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo |

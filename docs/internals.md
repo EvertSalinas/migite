@@ -32,8 +32,10 @@ migite-plan \
 
 Reads `prompts/plan.md` (plan format + type routing, injected into `synthesize_plan`) and
 `prompts/architecture_critic.md` (the critic checklist) from the directory the script really
-lives in (`Path(__file__).resolve().parent`, so the `~/.local/bin` symlink is followed). Either
-file missing is a hard exit-1 — never a silent empty prompt.
+lives in (`Path(__file__).resolve().parent`, so the `~/.local/bin` symlink is followed), unless
+`prompts.dir` in the config overrides one. Either file missing is a hard exit-1 — never a silent
+empty prompt. Models come from the config roles `explore` / `think` / `critic`
+([docs/configuration.md](./configuration.md#models)).
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure (no sentinel written).
 

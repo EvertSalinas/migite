@@ -21,6 +21,7 @@ error()   { echo -e "${RED}✘ $1${RESET}" >&2; exit 1; }
 # notify <subtitle> <message> — desktop notification, best effort. macOS via
 # osascript, Linux via notify-send, silent no-op anywhere else. Never fails the run.
 notify() {
+  [[ "${MIGITE_CFG_UI_NOTIFY:-auto}" == "off" ]] && return 0
   if command -v osascript &>/dev/null; then
     osascript -e "display notification \"$2\" with title \"Migite\" subtitle \"$1\" sound name \"Glass\"" 2>/dev/null || true
   elif command -v notify-send &>/dev/null; then
@@ -266,7 +267,14 @@ claude_print() {
   local label="$1"; shift
   local raw rc=0 xrc=0
   raw=$(mktemp)
-  claude_cmd --print --output-format json "$@" > "$raw" || rc=$?
+  # permissions.headless from the config applies unless the caller passed its own
+  # --permission-mode (the Jira fetch does, with a scoped tool allowlist).
+  local -a perm=()
+  local headless="${MIGITE_CFG_PERMISSIONS_HEADLESS:-none}"
+  if [[ "$headless" != "none" && " $* " != *" --permission-mode "* ]]; then
+    perm=(--permission-mode "$headless")
+  fi
+  claude_cmd --print --output-format json "${perm[@]}" "$@" > "$raw" || rc=$?
   "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" extract --tool migite --label "$label" --exit-code "$rc" < "$raw" || xrc=$?
   rm -f "$raw"
   return "$xrc"
@@ -335,13 +343,13 @@ MIGITE_PROMPT_INLINE_MAX="${MIGITE_PROMPT_INLINE_MAX:-100000}"
 
 # run_phase <label> <output_file> <prompt> [permission_mode]
 # Opens an interactive Claude Code session in a split pane with the prompt pre-loaded.
-# permission_mode defaults to bypassPermissions.
-# When done, type /exit to close the pane and return to the workflow.
+# permission_mode defaults to `permissions.interactive` from the config
+# (bypassPermissions unless changed). When done, type /exit to return to the workflow.
 run_phase() {
   local label="$1"
   local outfile="$2"
   local prompt="$3"
-  local permission_mode="${4:-bypassPermissions}"
+  local permission_mode="${4:-${MIGITE_CFG_PERMISSIONS_INTERACTIVE:-bypassPermissions}}"
   local prompt_file
   prompt_file=$(write_prompt "$label" "$prompt")
 
@@ -361,7 +369,10 @@ run_phase() {
   echo -e "  ${YELLOW}Type /exit when done to return here${RESET}"
   echo ""
 
-  if [[ -n "${TMUX:-}" ]]; then
+  local -a perm_flag=()
+  [[ "$permission_mode" != "none" ]] && perm_flag=(--permission-mode "$permission_mode")
+
+  if use_tmux; then
     # Strip everything except alphanumeric and dash — parens/spaces break tmux sh -c parsing
     local safe_label
     safe_label=$(printf '%s' "$label" | tr -cs 'a-zA-Z0-9' '-')
@@ -371,7 +382,7 @@ run_phase() {
     orig_pane=$(tmux display-message -p '#{pane_id}')
     {
       echo "#!/usr/bin/env bash"
-      printf 'env -u CLAUDECODE claude --permission-mode %s -- "$(cat '"'"'%s'"'"')"\n' "$permission_mode" "$prompt_arg_file"
+      printf 'env -u CLAUDECODE claude %s -- "$(cat '"'"'%s'"'"')"\n' "${perm_flag[*]}" "$prompt_arg_file"
       printf 'exit_code=$?\n'
       printf 'if [[ $exit_code -ne 0 ]]; then\n'
       printf '  echo ""\n'
@@ -398,7 +409,7 @@ run_phase() {
     tmux select-pane -t "$orig_pane" 2>/dev/null || true
     notify "$label" "Session done — continuing workflow"
   else
-    claude_cmd --permission-mode "$permission_mode" -- "$(cat "$prompt_arg_file")"
+    claude_cmd "${perm_flag[@]}" -- "$(cat "$prompt_arg_file")"
   fi
 }
 
@@ -452,7 +463,10 @@ heal_run() {
   echo ""
   echo -e "${CYAN}  Auto-healing: ${BOLD}$label${RESET}"
 
-  printf '%s' "$prompt" | claude_print "$label" --permission-mode bypassPermissions > "$outfile" &
+  local heal_perm="${MIGITE_CFG_PERMISSIONS_HEAL:-bypassPermissions}"
+  local -a heal_flag=()
+  [[ "$heal_perm" != "none" ]] && heal_flag=(--permission-mode "$heal_perm")
+  printf '%s' "$prompt" | claude_print "$label" "${heal_flag[@]}" > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -492,7 +506,7 @@ spawn_langgraph() {
   echo -e "${CYAN}  Starting LangGraph agent: ${BOLD}$label${RESET}"
   echo -e "  ${CYAN}Log: $agent_log${RESET}"
 
-  if [[ -n "${TMUX:-}" ]]; then
+  if use_tmux; then
     local channel="migite-${TIMESTAMP}-${suffix}"
     local wrapper="$LOG_DIR/$TIMESTAMP-wrapper-${suffix}.sh"
     local orig_pane
@@ -824,10 +838,17 @@ show_commit_context() {
     echo -e "  Rubocop: ${GREEN}clean${RESET}"
   fi
 
-  # Running total from the usage ledger (headless calls only)
+  # Running total from the usage ledger (headless calls only), with the soft budget cap
   local cost_line
   if cost_line=$(run_cost_so_far); then
     echo -e "  Cost:    ${cost_line} so far (headless calls only)"
+    local cap="${MIGITE_CFG_BUDGET_MAX_USD_PER_RUN:-}"
+    if [[ -n "$cap" ]]; then
+      local spent="${cost_line##*\$}"
+      if awk -v s="$spent" -v c="$cap" 'BEGIN { exit !(s > c) }'; then
+        echo -e "  ${RED}${BOLD}⚠ Over budget: \$${spent} spent, budget.max_usd_per_run is \$${cap}${RESET}"
+      fi
+    fi
   fi
 
   echo -e "${BOLD}────────────────────────────────────────────${RESET}"

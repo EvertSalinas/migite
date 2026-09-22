@@ -19,7 +19,6 @@ import argparse
 import operator
 import os
 import re
-import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -28,8 +27,11 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_claude
+import migite_config
 import migite_paths
 
+# Built-in defaults; main() replaces them from the config (roles analyst / blueprint_synth / extract).
 ANALYST_MODEL = "claude-sonnet-5"  # parallel analysts — pure reasoning, no file scanning
 SYNTH_MODEL   = "claude-opus-5"    # blueprint synthesis — most consequential call in the tool
 EXTRACT_MODEL = "claude-sonnet-5"  # milestone + knowledge extraction
@@ -135,22 +137,25 @@ Be direct. Name specific risks, not categories. Under 450 words.""",
 
 # ── Claude call ───────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = ANALYST_MODEL) -> str:
-    import time
-    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
-    t0 = time.monotonic()
+def call_claude(prompt: str, model: str, label: str = "") -> str:
+    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions."""
+    return migite_claude.call_claude(prompt, model, tool="migite-blueprint", label=label).text
+
+
+def apply_config(repo_root: str | None) -> None:
+    global ANALYST_MODEL, SYNTH_MODEL, EXTRACT_MODEL, VAULT_BASE
     try:
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=600)
-    except subprocess.TimeoutExpired:
-        elapsed = time.monotonic() - t0
-        raise RuntimeError(f"claude --print timed out after {elapsed:.0f}s (limit=600s, model={model})")
-    elapsed = time.monotonic() - t0
-    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {r.returncode})", flush=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"claude --print failed (exit {r.returncode}, {elapsed:.1f}s): {r.stderr[:300]}")
-    return r.stdout.strip()
+        cfg = migite_config.load(repo_root)
+    except migite_config.ConfigError as e:
+        print(f"✘ config error: {e}", file=sys.stderr)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    ANALYST_MODEL = cfg.model("analyst")
+    SYNTH_MODEL   = cfg.model("blueprint_synth")
+    EXTRACT_MODEL = cfg.model("extract")
+    VAULT_BASE    = str(cfg.expanded_path("vault.base"))
+    migite_claude.configure_from(cfg)
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -213,7 +218,7 @@ Lint/format tool:
 Package manager:
 Inferred: <yes|no>"""
     try:
-        stack = call_claude(prompt, model=ANALYST_MODEL)
+        stack = call_claude(prompt, model=ANALYST_MODEL, label="determine_stack")
     except Exception as e:
         stack = f"Language: unknown\nFramework: unknown\n(stack inference failed: {e})"
     first_line = stack.splitlines()[0] if stack else "(empty)"
@@ -247,7 +252,7 @@ def analyze_dimension(state: DimensionInput) -> dict:
 
 {state['analyst_prompt']}"""
     try:
-        result = call_claude(prompt, model=ANALYST_MODEL)
+        result = call_claude(prompt, model=ANALYST_MODEL, label=f"analyst:{dim}")
     except Exception as e:
         result = f"Analysis failed: {e}"
     return {"analyses": [f"### {dim}\n{result}"]}
@@ -332,7 +337,7 @@ Key files: <comma-separated list of the main files/directories this milestone wi
 Output only the blueprint document. No preamble or meta-commentary."""
 
     try:
-        blueprint = call_claude(prompt, model=SYNTH_MODEL)
+        blueprint = call_claude(prompt, model=SYNTH_MODEL, label="synthesize_blueprint")
     except Exception as e:
         blueprint = f"# Blueprint: {state['project_name']}\nDate: {state['today']}\n\nSynthesis failed: {e}"
     return {"blueprint": blueprint}
@@ -388,7 +393,7 @@ naming conventions, authorization model, N+1 risks, gem choices>
 Produce one block per milestone. Output only the delimited blocks."""
 
     try:
-        milestones_raw = call_claude(prompt, model=EXTRACT_MODEL)
+        milestones_raw = call_claude(prompt, model=EXTRACT_MODEL, label="extract_milestones")
     except Exception as e:
         milestones_raw = f"Milestone extraction failed: {e}"
     return {"milestones_raw": milestones_raw}
@@ -428,7 +433,7 @@ Produce a knowledge.md with these sections (markdown bullets, concise):
 Under 600 words total. Output only the knowledge.md content — no preamble."""
 
     try:
-        knowledge = call_claude(prompt, model=EXTRACT_MODEL)
+        knowledge = call_claude(prompt, model=EXTRACT_MODEL, label="extract_knowledge_seed")
     except Exception as e:
         knowledge = f"Knowledge seed extraction failed: {e}"
     return {"knowledge_seed": knowledge}
@@ -543,6 +548,9 @@ def main() -> None:
                                                             "or 'Next.js + TypeScript + Postgres'. If omitted, "
                                                             "inferred from the brief.")
     args = ap.parse_args()
+
+    # No repo is required for a blueprint; look for .migite.yml in the current directory.
+    apply_config(os.getcwd())
 
     if args.from_blueprint:
         try:

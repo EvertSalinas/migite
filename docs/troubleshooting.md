@@ -3,18 +3,20 @@
 <a id="troubleshooting-permissions"></a>
 ### Permission failures running bundler / rubocop / rspec / brakeman
 
-`MIGITE_PERMISSION_MODE` is **not** honored uniformly — coverage is currently partial:
+Permission modes are set in one place — the `permissions` block of the config
+([docs/configuration.md](./configuration.md#permissions)) — and apply uniformly:
 
-| Component | Behaviour |
-|---|---|
-| `migite-explore`, `migite-audit`, `migite-pr-review` (Python) | Read `MIGITE_PERMISSION_MODE`; pass `--permission-mode <value>` to `claude --print` when set, omit it entirely when unset |
-| `migite-plan`, `migite-review` (Python, invoked internally by `migite`) | Don't read the variable at all |
-| `migite-blueprint.py` (Python) | Doesn't read the variable at all |
-| `migite`'s own interactive sessions (`run_phase`) and heal-loop fixes (`heal_run`) | Hardcode `bypassPermissions`, unconditionally — the variable has no effect here |
-| `migite`'s background `claude --print` calls (`thinking()` — knowledge capture, self-improvement, amendment generation/refine) | Pass no `--permission-mode` flag at all, regardless of the variable |
+| Key | Default | Applies to |
+|---|---|---|
+| `permissions.interactive` | `bypassPermissions` | `run_phase` sessions: implement, gate fixes, PR description |
+| `permissions.heal` | `bypassPermissions` | the auto-heal loop's headless fixes |
+| `permissions.headless` | `none` (no flag) | every other headless call in every tool: plan, review, knowledge, amendments, explore, audit, blueprint, pr-review |
+
+`MIGITE_PERMISSION_MODE` still works and maps onto `permissions.headless` (env beats files). The
+Jira fetch always passes its own explicit mode plus a two-tool allowlist, regardless of these.
 
 ```bash
-export MIGITE_PERMISSION_MODE=bypassPermissions   # only affects migite-explore/audit/pr-review
+export MIGITE_PERMISSION_MODE=acceptEdits          # or, in .migite.yml:  permissions: { headless: acceptEdits }
 ```
 
 Omitting `--permission-mode` in `--print` mode means any tool use in that call is refused — the
@@ -31,11 +33,13 @@ claude config list                      # look for a pinned/managed permission p
 echo '1' | claude --print --permission-mode bypassPermissions 'run: echo ok'
 ```
 
-If the second command can't run the tool, set a mode your policy does allow (only affects the
-three tools that read it):
+If the second command can't run the tool, set modes your policy does allow in `.migite.yml`:
 
-```bash
-export MIGITE_PERMISSION_MODE=acceptEdits
+```yaml
+permissions:
+  interactive: acceptEdits
+  heal: acceptEdits
+  headless: acceptEdits
 ```
 
 ### Running migite from inside a Claude Code session

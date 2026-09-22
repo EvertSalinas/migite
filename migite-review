@@ -24,8 +24,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 import migite_claude
+import migite_config
 import migite_paths
 
+# Built-in defaults; main() replaces them from the config (models.roles.review / .verdict).
 REVIEW_MODEL  = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
 
@@ -61,8 +63,10 @@ REVIEW_SCHEMA = {
 VERDICT_KEY = {"NEEDS FIXES": "needs_fixes", "READY TO COMMIT": "ready"}
 
 # Ships in the repo's prompts/ dir next to this script (resolve() follows the
-# ~/.local/bin symlink). Hard error if missing — see read_prompt().
-REVIEW_CMD_PATH = Path(__file__).resolve().parent / "prompts" / "review.md"
+# ~/.local/bin symlink); `prompts.dir` in the config can override it per project.
+# Hard error if missing — see read_prompt().
+MIGITE_HOME = Path(__file__).resolve().parent
+REVIEW_CMD_PATH = MIGITE_HOME / "prompts" / "review.md"
 
 
 def read_prompt(path: Path) -> str:
@@ -224,7 +228,7 @@ If nothing found, output exactly: ✅ No issues in this dimension.
 Do not repeat findings that other dimensions would cover."""
 
     try:
-        result = call_claude(prompt, label=f"review:{dim}").text
+        result = call_claude(prompt, model=REVIEW_MODEL, label=f"review:{dim}").text
     except Exception as e:
         result = f"🔴 **Critical** — reviewer failed: {e}"
     return {"findings": [f"### {dim}\n{result}"]}
@@ -371,6 +375,19 @@ def main() -> None:
     ap.add_argument("--base-branch",     default=None, help="Branch to diff against (default: auto-detect origin/HEAD, then main/master/develop)")
     ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
     args = ap.parse_args()
+
+    global REVIEW_MODEL, CRITIC_MODEL, REVIEW_CMD_PATH
+    try:
+        cfg = migite_config.load(args.repo_root)
+    except migite_config.ConfigError as e:
+        print(f"  ✘ migite-review: config error: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    REVIEW_MODEL = cfg.model("review")
+    CRITIC_MODEL = cfg.model("verdict")
+    migite_claude.configure_from(cfg)
+    REVIEW_CMD_PATH = cfg.prompt_path("review", MIGITE_HOME, args.repo_root)
 
     base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
 

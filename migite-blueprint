@@ -124,10 +124,13 @@ fi
 
 # Derive output dir from vault + project name if not overridden
 if [[ -z "$OUTPUT_DIR" ]]; then
+  # Layered config: vault.base / vault.org (env DEV_LOG_BASE / MIGITE_ORG still win).
+  eval "$("$MIGITE_PYTHON" "$SCRIPT_DIR/migite_config.py" env --repo-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")" || exit 1
+  VAULT_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
   # Canonical slug (same as migite's bash slugify and migite_paths.slugify) — the
   # old `tr -cs` version left leading/trailing hyphens and differed from both.
   SAFE_NAME=$("$MIGITE_PYTHON" "$SCRIPT_DIR/migite_paths.py" slugify "$PROJECT_NAME")
-  OUTPUT_DIR="$VAULT_BASE/${MIGITE_ORG:-Personal}/$SAFE_NAME/blueprint"
+  OUTPUT_DIR="$VAULT_BASE/${MIGITE_CFG_VAULT_ORG:-Personal}/$SAFE_NAME/blueprint"
 fi
 
 echo ""

@@ -76,7 +76,7 @@ JIRA_FETCH_FAILED: <short reason>"
       printf '%s' "$JIRA_FETCH_PROMPT" \
         | claude_print "jira-fetch" --permission-mode bypassPermissions \
             --allowedTools "mcp__claude_ai_Atlassian__getJiraIssue mcp__claude_ai_Atlassian__getAccessibleAtlassianResources" \
-            --model claude-sonnet-5 \
+            --model "$(cfg_model jira)" \
         > "$JIRA_FETCH_TMP" 2>/dev/null || true
 
       if [[ -s "$JIRA_FETCH_TMP" ]] && ! grep -q '^JIRA_FETCH_FAILED' "$JIRA_FETCH_TMP"; then
@@ -202,7 +202,8 @@ JIRA_FETCH_FAILED: <short reason>"
     esac
   else
     [[ -z "$TASK_TYPE" ]] && _pick_task_type
-    local TASK_TEMPLATE="$MIGITE_HOME/templates/${TASK_TYPE}.md"
+    local TASK_TEMPLATE
+    TASK_TEMPLATE="$(template_path "$TASK_TYPE")"   # templates.dir override, else the repo copy
     [[ -f "$TASK_TEMPLATE" ]] || error "Template not found: $TASK_TEMPLATE"
     cp "$TASK_TEMPLATE" "$INTAKE_FILE"
     # Literal substitution — never sed with user text in the expression (see fill_intake_field)
@@ -450,7 +451,7 @@ JIRA_FETCH_FAILED: <short reason>"
         _refine_tmp=$(mktemp)
         printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
           "$(cat "$PLAN_FILE")" "$_plan_feedback" \
-          | claude_print "plan-refine" --model claude-sonnet-5 \
+          | claude_print "plan-refine" --model "$(cfg_model plan_refine)" \
           > "$_refine_tmp" 2>/dev/null || true
         if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
           mv "$_refine_tmp" "$PLAN_FILE"
@@ -477,6 +478,13 @@ JIRA_FETCH_FAILED: <short reason>"
         ;;
       n|N)
         warn "Rejected — re-running full plan"
+        # gates.plan.warn_after_rejections: repeated full redos usually mean the
+        # intake is too large or too vague for one plan, not that the planner is unlucky.
+        local _redo_limit
+        _redo_limit="$(cfg gates.plan.warn_after_rejections 3)"
+        if [[ "$_redo_limit" -gt 0 && "$PLAN_GATE_ATTEMPTS" -ge "$_redo_limit" ]]; then
+          warn "This is redo #$PLAN_GATE_ATTEMPTS — consider splitting the task, tightening the intake (e), or scoping it with migite-explore first"
+        fi
         _backup_plan_file
         local _rerun_prev
         _rerun_prev=$(mktemp)

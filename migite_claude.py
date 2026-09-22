@@ -37,7 +37,31 @@ from typing import Any
 LEDGER_ENV = "MIGITE_USAGE_LEDGER"
 DEFAULT_TIMEOUT = 600
 THINKING_TIMEOUT = 900
+DEFAULT_PERMISSION_MODE: str | None = None   # None/"none" = don't pass --permission-mode
 SCHEMA_VERSION = 1
+
+
+def configure(*, timeout: int | None = None, thinking_timeout: int | None = None,
+              permission_mode: str | None = None) -> None:
+    """Apply config values (models.timeout_seconds, models.thinking_timeout_seconds,
+    permissions.headless) for every subsequent call_claude in this process. Each
+    tool calls this once from main() after migite_config.load()."""
+    global DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION_MODE
+    if timeout:
+        DEFAULT_TIMEOUT = int(timeout)
+    if thinking_timeout:
+        THINKING_TIMEOUT = int(thinking_timeout)
+    if permission_mode is not None:
+        DEFAULT_PERMISSION_MODE = None if permission_mode == "none" else permission_mode
+
+
+def configure_from(cfg) -> None:
+    """configure() straight from a migite_config.Config."""
+    configure(
+        timeout=cfg.get("models.timeout_seconds"),
+        thinking_timeout=cfg.get("models.thinking_timeout_seconds"),
+        permission_mode=os.environ.get("MIGITE_PERMISSION_MODE") or cfg.get("permissions.headless") or "none",
+    )
 
 
 class ClaudeError(RuntimeError):
@@ -131,8 +155,9 @@ def call_claude(prompt: str, model: str, *, thinking: bool = False, timeout: int
     cmd = ["claude", "--print", "--output-format", "json", "--model", model]
     if schema is not None:
         cmd += ["--json-schema", json.dumps(schema)]
-    if permission_mode:
-        cmd += ["--permission-mode", permission_mode]
+    effective_permission = permission_mode if permission_mode is not None else DEFAULT_PERMISSION_MODE
+    if effective_permission and effective_permission != "none":
+        cmd += ["--permission-mode", effective_permission]
     if allowed_tools:
         cmd += ["--allowedTools", " ".join(allowed_tools)]
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
