@@ -37,3 +37,19 @@ check "changed_spec_files: includes untracked _spec.rb file" \
   bash -c "printf '%s' \"\$1\" | grep -qx 'spec/bar_spec.rb'" _ "$got_spec"
 check "changed_spec_files: excludes non-spec .rb files" \
   not bash -c "printf '%s' \"\$1\" | grep -qx 'lib/foo.rb'" _ "$got_spec"
+
+got_source=$(cd "$repo" && changed_source_files main)
+check "changed_source_files: includes tracked and untracked non-spec .rb files" \
+  bash -c "printf '%s' \"\$1\" | grep -qx 'lib/bar.rb' && printf '%s' \"\$1\" | grep -qx 'lib/foo.rb'" _ "$got_source"
+check "changed_source_files: excludes _spec.rb files (heal loop autocorrects source only)" \
+  not bash -c "printf '%s' \"\$1\" | grep -qx 'spec/bar_spec.rb'" _ "$got_source"
+
+mkdir -p "$repo/scratchpad/some-task"
+echo '# plan' > "$repo/scratchpad/some-task/plan.md"
+got_all=$(cd "$repo" && changed_all_files main)
+check "changed_all_files: includes non-.rb untracked files (for the diff-vs-notes warning)" \
+  bash -c "printf '%s' \"\$1\" | grep -qx 'notes.md'" _ "$got_all"
+check "changed_all_files: excludes migite's own scratchpad/" \
+  not bash -c "printf '%s' \"\$1\" | grep -q '^scratchpad/'" _ "$got_all"
+check "changed_all_files: excludes a working-tree delete" \
+  not bash -c "printf '%s' \"\$1\" | grep -qx 'lib/baz.rb'" _ "$got_all"

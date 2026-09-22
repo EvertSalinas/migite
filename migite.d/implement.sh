@@ -148,14 +148,14 @@ run_auto_heal_loop() {
   local HEAL_RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rspec.txt"
   local HEAL_CHANGED_RUBY
   local HEAL_CHANGED_SPECS
-  HEAL_CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec\.rb$' || true)
+  HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
   HEAL_ATTEMPT=0
 
   # Rubocop: one autocorrect sweep, no Claude involved. Re-autocorrects on every
   # recheck below too, so anything Claude's rspec fixes introduce gets swept for
   # free instead of round-tripping through another heal attempt.
   _heal_autofix_rubocop() {
-    HEAL_CHANGED_RUBY=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '\.rb$' | grep -v '_spec\.rb$' || true)
+    HEAL_CHANGED_RUBY=$(changed_source_files "$BASE_BRANCH")
     run_rubocop_check "$HEAL_CHANGED_RUBY" "$HEAL_RUBOCOP_LOG" true || true
     RUBOCOP_REMAINING=false
     grep -qE '[1-9][0-9]* offense' "$HEAL_RUBOCOP_LOG" 2>/dev/null && RUBOCOP_REMAINING=true
@@ -206,7 +206,7 @@ Fix all failures above. Do not run rubocop yourself — migite already runs \`ru
 
     log "Re-running checks after heal attempt $HEAL_ATTEMPT..."
     _heal_autofix_rubocop
-    HEAL_CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec\.rb$' || true)
+    HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
     run_rspec_check "$HEAL_CHANGED_SPECS" "$HEAL_RSPEC_LOG" || true
   done
 

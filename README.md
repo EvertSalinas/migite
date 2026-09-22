@@ -323,8 +323,8 @@ Not yet. `migite` itself hardcodes Ruby/Rails tooling (`bundle`, rubocop, rspec,
 **Can I resume a run if I close the terminal or a phase fails partway through?**
 Yes — just re-run the same `migite --jira <ticket>` (or same task/intake) command. It picks up from whatever already exists: an existing `intake.md` is reused with no editor, an existing `plan.md` offers `[u]se existing` or `[r]edo`. See [Resuming a run](./docs/migite.md#resuming-a-run).
 
-**Why did my brand-new file get skipped by lint/tests/review?**
-Every phase scopes its file list from `git diff <base branch>`, which only sees tracked changes — a file that hasn't been `git add`ed yet is invisible to rubocop, rspec, and the reviewer until you stage it. See [Which files get linted and tested](./docs/migite.md#lint-test-selection).
+**Does a brand-new file I haven't `git add`ed get linted and tested?**
+Yes. Every phase gets its file list from the shared `changed_*_files` helpers, which union `git diff <base branch>` with `git ls-files --others --exclude-standard`, so untracked new files are included (gitignored ones are not). The one gap: the reviewer's diff still comes from plain `git diff`, so a new file's content reaches `migite-review` only once staged. See [Which files get linted and tested](./docs/migite.md#lint-test-selection).
 
 **Why does Phase 3 re-run rubocop/rspec when the Phase 2.5 auto-heal loop already got them passing?**
 The heal loop's job is to deliver clean input to the reviewer, not to replace the review — Phase 3 always runs its own authoritative pass regardless of heal-loop outcome, so a stale or partial heal never silently reaches the commit gate.

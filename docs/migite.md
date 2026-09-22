@@ -306,13 +306,19 @@ Phase 3 always runs its own authoritative rubocop + rspec pass regardless — th
 <a id="lint-test-selection"></a>
 ### Which files get linted and tested
 
-Every phase computes its own changed-file list from `git diff <base branch> --name-only`, filtered by extension (`\.rb$`, `_spec\.rb$`) — there isn't one shared helper, and the phases aren't fully consistent with each other:
+Every phase gets its changed-file list from one set of shared helpers in `helpers.sh` —
+`changed_ruby_files`, `changed_spec_files`, `changed_source_files` (Ruby minus specs, for the
+heal loop's autocorrect), and `changed_all_files` (any extension, for the diff-vs-notes warning).
+Each one is `git diff <base branch> --name-only --diff-filter=ACMR` **union**
+`git ls-files --others --exclude-standard`, so tracked changes and never-`git add`ed new files
+are both included, and working-tree deletes are excluded. The phases still differ on what
+happens when no spec files changed:
 
-| Phase | Diff filter | No-spec-files behaviour |
-|-------|-------------|--------------------------|
-| Phase 1.5 TDD red-state check (`plan.sh`) | `--diff-filter=ACMR` (deletions excluded) | skips the check, warns |
-| Phase 2.5 auto-heal loop (`implement.sh`) | `--diff-filter=ACMR` (deletions excluded) | skips rspec and says so |
-| Phase 3 review + commit-gate re-checks (`review.sh`) | `--diff-filter=ACMR` (deletions excluded) | **falls back to the full suite** |
+| Phase | No-spec-files behaviour |
+|-------|--------------------------|
+| Phase 1.5 TDD red-state check (`plan.sh`) | skips the check, warns |
+| Phase 2.5 auto-heal loop (`implement.sh`) | skips rspec and says so |
+| Phase 3 review + commit-gate re-checks (`review.sh`) | **falls back to the full suite** |
 
 | Rule | Why |
 |------|-----|
@@ -320,9 +326,17 @@ Every phase computes its own changed-file list from `git diff <base branch> --na
 | Deleted files excluded (`ACMR`) everywhere | Stale paths caused rubocop `No such file or directory` and rspec load errors — Phase 3 didn't apply this filter until it was caught and fixed |
 | `bundle exec` runs from the app's actual root, not necessarily the repo root | Bundler only searches upward from cwd for a Gemfile. When the Ruby app lives one level down (e.g. a `rails-app/` subdirectory alongside other tooling), `detect_stack` (`helpers.sh`) finds it via the `rails` stack profile's `stack_rails_app_root` and every `bundle_exec` call `cd`s there first — otherwise `git diff`'s repo-root-relative paths get re-resolved against the wrong directory and rubocop reports files missing |
 
-Untracked (never-`git add`ed) files are **not** included in any of these diffs — there's no `git ls-files --others` call anywhere in migite. A brand-new file that hasn't been staged yet is invisible to rubocop/rspec/review until you `git add` it.
+Untracked files respect `.gitignore` (`--exclude-standard`), and `changed_all_files` additionally
+drops anything under `scratchpad/` so migite's own artifacts never show up as "your" changes.
+Note that `migite-plan`'s explorers and `migite-review`'s diff still use plain `git diff`, so a
+brand-new file is linted and tested but its *content* only reaches the reviewer once staged.
 
-Phase 3 also runs a separate, different check: any file in the diff whose basename doesn't appear anywhere in `implementation.md` gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them — a diff-vs-notes cross-reference, not an untracked-file check.
+Phase 3 also runs a separate, different check: any changed file (tracked or untracked) whose basename doesn't appear anywhere in `implementation.md` gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them.
+
+Tooling failures — Ruby version unset, a git-sourced gem not checked out, rspec producing
+`0 examples` because of a DB connection or load error — are detected by one shared
+`tooling_failed <log>` helper wherever a rubocop/rspec log is inspected (Phase 3, the commit-gate
+re-checks, and the banner). When it fires, `TOOLING_ERROR` carries the message into the banner.
 
 **Known inconsistency:** Phase 2.5 skips rspec (and says so) when no spec files changed, but Phase 3's review and its commit-gate re-checks still fall back to running the full suite in that case — the older behavior Phase 2.5 was specifically changed to avoid, for the same reason (it requires a live DB and verifies nothing relevant to the diff). Phase 3 hasn't been brought in line with that fix yet.
 
@@ -479,7 +493,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 
 | Signal | Source |
 |--------|--------|
-| Tooling error | `No version is set for command`, `Bundler::GitError`, `not yet checked out`, or a missing gem in either log — the tool never ran, so all results below are untrustworthy |
+| Tooling error | `tooling_failed()` matched either log: `No version is set for command`, `Bundler::GitError` / `not yet checked out`, or `0 examples` alongside a DB connection or load error — the tool never ran, so all results below are untrustworthy. Re-evaluated on every commit-gate re-check |
 | Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`helpers.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |

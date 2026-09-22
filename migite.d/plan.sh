@@ -528,7 +528,7 @@ Rules:
     log "Confirming red state (specs should fail)..."
     local TDD_RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-tdd-rspec.txt"
     local TDD_CHANGED_SPECS
-    TDD_CHANGED_SPECS=$(git diff "$BASE_BRANCH" --name-only --diff-filter=ACMR | grep '_spec\.rb$' || true)
+    TDD_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
     if [[ -n "$TDD_CHANGED_SPECS" ]]; then
       local TDD_APP_SPECS
       TDD_APP_SPECS=$(strip_app_prefix "$TDD_CHANGED_SPECS")

@@ -163,6 +163,23 @@ changed_spec_files() {
   } | grep '_spec\.rb$' | sort -u
 }
 
+# changed_source_files <base_branch> — changed .rb files that are NOT specs.
+# The heal loop autocorrects only source files (specs are rspec's job there).
+changed_source_files() {
+  local base_branch="$1"
+  changed_ruby_files "$base_branch" | grep -v '_spec\.rb$' || true
+}
+
+# changed_all_files <base_branch> — every changed path, any extension, tracked
+# union untracked, minus migite's own scratchpad/. Used for the diff-vs-notes
+# cross-reference warning before review.
+changed_all_files() {
+  local base_branch="$1"
+  { git diff "$base_branch" --name-only --diff-filter=ACMR
+    git ls-files --others --exclude-standard
+  } | grep -v '^scratchpad/' | sort -u
+}
+
 detect_base_branch() {
   local remote_head
   remote_head=$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)
@@ -588,9 +605,11 @@ show_commit_context() {
   echo ""
   echo -e "${BOLD}── Commit context ──────────────────────────${RESET}"
 
-  # Ruby version / tool-version errors (surfaced from rubocop or rspec runs)
-  if [[ "${RUBY_VERSION_ERROR:-false}" == "true" ]]; then
-    echo -e "  ${RED}${BOLD}⚠ Ruby version error — bundle exec could not run. Fix .tool-versions before approving.${RESET}"
+  # Tooling error (Ruby version unset, git gem not checked out, DB down, load
+  # error) — set by run_review from tooling_failed. When set, every result
+  # below it is untrustworthy because the tool never actually ran.
+  if [[ -n "${TOOLING_ERROR:-}" ]]; then
+    echo -e "  ${RED}${BOLD}⚠ ${TOOLING_ERROR} — fix the toolchain before approving.${RESET}"
   fi
 
   # Review verdict — anchored on the "## Verdict" heading via review_verdict,
@@ -603,14 +622,16 @@ show_commit_context() {
     esac
   fi
 
-  # Spec failures / DB connection issues
+  # Spec failures / tooling failures (via tooling_failed — one pattern list)
   if [[ -f "${RSPEC_LOG:-}" ]]; then
-    local failure_line
-    failure_line=$(grep -oE '[0-9]+ failure[s]?' "$RSPEC_LOG" | head -1 || echo "")
+    local failure_line spec_tooling_msg
+    failure_line=$(grep -oE '[1-9][0-9]* failure[s]?' "$RSPEC_LOG" | head -1 || echo "")
     if [[ -n "$failure_line" ]]; then
       echo -e "  Specs:   ${RED}${BOLD}⚠ $failure_line — check $RSPEC_LOG before approving${RESET}"
-    elif grep -q '0 examples' "$RSPEC_LOG" && grep -qi 'connection\|ConnectionBad' "$RSPEC_LOG"; then
-      echo -e "  Specs:   ${RED}${BOLD}⚠ DB connection failed — 0 examples ran, no coverage verified${RESET}"
+    elif spec_tooling_msg=$(tooling_failed "$RSPEC_LOG"); then
+      echo -e "  Specs:   ${RED}${BOLD}⚠ ${spec_tooling_msg}${RESET}"
+    elif grep -qE '^(No spec files changed|Generic stack)' "$RSPEC_LOG"; then
+      echo -e "  Specs:   ${YELLOW}not run${RESET}"
     else
       echo -e "  Specs:   ${GREEN}all passed${RESET}"
     fi
