@@ -122,6 +122,9 @@ migite/                   ← wherever you clone this repo
 
 ### Core
 
+Runs on macOS and Linux (bash 4+). Desktop notifications use `osascript` on macOS and
+`notify-send` on Linux when present, and are silently skipped otherwise.
+
 | Tool | Purpose |
 |------|---------|
 | `claude` (Claude Code CLI) | All AI phases — auth is shared, no separate API key needed |

@@ -18,7 +18,15 @@ log()     { echo -e "${CYAN}▶ $1${RESET}"; }
 success() { echo -e "${GREEN}✔ $1${RESET}"; }
 warn()    { echo -e "${YELLOW}⚠ $1${RESET}"; }
 error()   { echo -e "${RED}✘ $1${RESET}" >&2; exit 1; }
-notify()  { osascript -e "display notification \"$2\" with title \"Migite\" subtitle \"$1\" sound name \"Glass\"" 2>/dev/null || true; }
+# notify <subtitle> <message> — desktop notification, best effort. macOS via
+# osascript, Linux via notify-send, silent no-op anywhere else. Never fails the run.
+notify() {
+  if command -v osascript &>/dev/null; then
+    osascript -e "display notification \"$2\" with title \"Migite\" subtitle \"$1\" sound name \"Glass\"" 2>/dev/null || true
+  elif command -v notify-send &>/dev/null; then
+    notify-send "Migite — $1" "$2" 2>/dev/null || true
+  fi
+}
 
 require_cmd() {
   command -v "$1" &>/dev/null || error "$1 is required but not installed"
@@ -196,6 +204,13 @@ detect_base_branch() {
   echo "main"
 }
 
+# slugify <text> — lowercase, every run of non-[a-z0-9] becomes one "-",
+# no leading/trailing "-", max 50 chars, and no trailing "-" left by the cut.
+# This is the CANONICAL slug definition: migite_paths.slugify (Python) is
+# kept byte-for-byte compatible and tests/slugify_test.sh checks parity, so
+# vault folders created by `migite` (bash) and looked up by the standalone
+# tools (Python) always agree. There used to be four implementations that
+# disagreed on "_" and "+".
 slugify() {
   echo "$1" \
     | tr '[:upper:]' '[:lower:]' \
@@ -203,7 +218,21 @@ slugify() {
     | sed 's/--*/-/g' \
     | sed 's/^-//' \
     | sed 's/-$//' \
-    | cut -c1-50
+    | cut -c1-50 \
+    | sed 's/-$//'
+}
+
+# recent_task_dirs <parent> [n=10] — basenames of the n most recently modified
+# subdirectories of <parent>, newest first. `ls -td` is the portable way to
+# sort by mtime; the previous `find -exec stat -f '%m %N'` was BSD-only
+# (GNU stat uses -c) and broke the amend picker on Linux.
+recent_task_dirs() {
+  local parent="$1" n="${2:-10}"
+  [[ -d "$parent" ]] || return 0
+  # shellcheck disable=SC2012
+  ls -1td "$parent"/*/ 2>/dev/null | head -n "$n" | while IFS= read -r d; do
+    basename "${d%/}"
+  done
 }
 
 # write_prompt <label> <prompt> → writes to $LOG_DIR and prints the path
@@ -442,9 +471,15 @@ spawn_langgraph() {
 # stamp_file <file> — prepend created/updated frontmatter, or bump updated if already present
 stamp_file() {
   local file="$1"
-  [[ -f "$file" ]] || return
+  # `return 0`, not bare `return`: a bare return inherits the failed [[ -f ]]
+  # status (1), which under migite's `set -e` would abort the whole run.
+  [[ -f "$file" ]] || return 0
   if grep -q "^created:" "$file" 2>/dev/null; then
-    sed -i '' "s/^updated: .*/updated: $DATE/" "$file"
+    # tmp + mv rather than `sed -i`: BSD sed wants `-i ''`, GNU sed wants `-i`
+    # with no argument, and there is no spelling both accept.
+    local tmp
+    tmp=$(mktemp)
+    sed "s/^updated: .*/updated: $DATE/" "$file" > "$tmp" && mv "$tmp" "$file"
   else
     local tmp
     tmp=$(mktemp)

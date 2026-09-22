@@ -45,7 +45,11 @@
 `migite-audit`, `migite-pr-review`, and `migite-explore` each accept `--jira` (a Jira ticket key or
 Atlassian URL) to group their output under an existing ticket's folder instead of writing a flat,
 disconnected file. `migite_paths.py` is the shared resolver behind this — see its module docstring
-for exact match/prefix-match/ambiguous-folder rules. `--output`, when given, always wins and skips
+for exact match/prefix-match/ambiguous-folder rules. Folder names come from one slug rule shared
+by bash (`slugify` in `helpers.sh`, used by `migite`) and Python (`migite_paths.slugify`, used
+by the standalone tools, and exposed as `migite_paths.py slugify <text>`): lowercase, every run
+of non-alphanumerics becomes one `-`, no leading/trailing `-`, max 50 chars.
+`tests/slugify_test.sh` checks the two stay identical. `--output`, when given, always wins and skips
 the resolver entirely. `migite` itself does not yet use this resolver.
 
 `migite-pr-review` additionally falls back to a ticket key embedded in the branch name itself when

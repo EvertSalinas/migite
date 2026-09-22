@@ -44,8 +44,23 @@ else
 fi
 # Real directory this script lives in — resolves through the ~/.local/bin symlink so
 # anything migite writes about itself lands in the repo (the source of truth), not
-# wherever it happened to be invoked from.
-MIGITE_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# wherever it happened to be invoked from. `readlink -f` exists on GNU and on
+# macOS 12.3+; older macOS gets a manual symlink walk instead of a crash.
+_migite_real="${BASH_SOURCE[0]}"
+if ! _migite_real="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null)"; then
+  _migite_real="${BASH_SOURCE[0]}"
+  while [[ -L "$_migite_real" ]]; do
+    _migite_link="$(readlink "$_migite_real")"
+    if [[ "$_migite_link" == /* ]]; then
+      _migite_real="$_migite_link"
+    else
+      _migite_real="$(dirname "$_migite_real")/$_migite_link"
+    fi
+  done
+  unset _migite_link
+fi
+MIGITE_HOME="$(cd "$(dirname "$_migite_real")" && pwd)"
+unset _migite_real
 # Phase prompts ship in this repo's prompts/ directory (plan.md, implement.md,
 # review.md, architecture_critic.md) — migite-plan and migite-review resolve
 # their own the same way. They used to live in ~/.claude/commands/ and were

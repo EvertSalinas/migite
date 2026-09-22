@@ -11,6 +11,21 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Same Python resolution as the migite entrypoint: an explicit MIGITE_PYTHON
+# wins; else `python3` only if it actually runs (an asdf shim exists on PATH
+# even with no version selected for this directory — migite's own repo has
+# none — and would fail with "No version is set"); else the asdf fallback.
+# Tests that need Python skip with a note if none of these work.
+if [[ -z "${MIGITE_PYTHON:-}" ]]; then
+  if command -v python3 &>/dev/null && python3 --version &>/dev/null; then
+    MIGITE_PYTHON="$(command -v python3)"
+  else
+    MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
+  fi
+fi
+export MIGITE_PYTHON
+DATE="${DATE:-$(date +%Y-%m-%d)}"
+
 # shellcheck source=../migite.d/helpers.sh
 source "$REPO_ROOT/migite.d/helpers.sh"
 

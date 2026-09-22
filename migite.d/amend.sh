@@ -39,8 +39,8 @@ run_amend_mode() {
     [[ -d "$REPO_VAULT_DIR" ]] || error "No task history found for $ORG/$REPO_NAME — nothing to amend"
     local AMEND_CANDIDATES=()
     while IFS= read -r d; do
-      AMEND_CANDIDATES+=("$(basename "$d")")
-    done < <(find "$REPO_VAULT_DIR" -maxdepth 1 -mindepth 1 -type d -exec stat -f '%m %N' {} \; 2>/dev/null | sort -rn | head -10 | cut -d' ' -f2-)
+      [[ -n "$d" ]] && AMEND_CANDIDATES+=("$d")
+    done < <(recent_task_dirs "$REPO_VAULT_DIR" 10)
     [[ ${#AMEND_CANDIDATES[@]} -eq 0 ]] && error "No task directories found under $REPO_VAULT_DIR"
 
     echo ""

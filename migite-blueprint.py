@@ -28,6 +28,8 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_paths
+
 ANALYST_MODEL = "claude-sonnet-5"  # parallel analysts — pure reasoning, no file scanning
 SYNTH_MODEL   = "claude-opus-5"    # blueprint synthesis — most consequential call in the tool
 EXTRACT_MODEL = "claude-sonnet-5"  # milestone + knowledge extraction
@@ -149,13 +151,6 @@ def call_claude(prompt: str, model: str = ANALYST_MODEL) -> str:
     if r.returncode != 0:
         raise RuntimeError(f"claude --print failed (exit {r.returncode}, {elapsed:.1f}s): {r.stderr[:300]}")
     return r.stdout.strip()
-
-
-def slugify(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
-    text = re.sub(r"[\s-]+", "-", text).strip("-")
-    return text[:50]
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -466,7 +461,7 @@ def write_outputs(state: BlueprintState) -> dict:
             content = content.strip()
             title_match = re.search(r"^Title:\s*(.+)$", content, re.MULTILINE)
             title = title_match.group(1).strip() if title_match else f"milestone-{n}"
-            slug = slugify(title)
+            slug = migite_paths.slugify(title)  # one shared slugify — see migite_paths
             filename = f"intake-{n:02d}-{slug}.md"
             (out / filename).write_text(content)
             print(f"    ✔ {filename}", flush=True)

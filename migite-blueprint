@@ -124,7 +124,9 @@ fi
 
 # Derive output dir from vault + project name if not overridden
 if [[ -z "$OUTPUT_DIR" ]]; then
-  SAFE_NAME=$(printf '%s' "$PROJECT_NAME" | tr -cs 'a-zA-Z0-9' '-' | tr '[:upper:]' '[:lower:]')
+  # Canonical slug (same as migite's bash slugify and migite_paths.slugify) — the
+  # old `tr -cs` version left leading/trailing hyphens and differed from both.
+  SAFE_NAME=$("$MIGITE_PYTHON" "$SCRIPT_DIR/migite_paths.py" slugify "$PROJECT_NAME")
   OUTPUT_DIR="$VAULT_BASE/${MIGITE_ORG:-Personal}/$SAFE_NAME/blueprint"
 fi
 

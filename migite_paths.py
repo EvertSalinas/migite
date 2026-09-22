@@ -35,9 +35,15 @@ class AmbiguousRunDirError(Exception):
 
 
 def slugify(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
-    text = re.sub(r"[\s-]+", "-", text).strip("-")
+    """Byte-for-byte compatible with helpers.sh's bash `slugify` — the canonical
+    definition. Lowercase; every run of non-[a-z0-9] becomes one "-"; no
+    leading/trailing "-"; max 50 chars; no trailing "-" left by the cut.
+    `migite` (bash) creates vault folders with the bash version and the
+    standalone tools look them up with this one, so the two MUST agree.
+    tests/slugify_test.sh checks parity. (The old Python version *deleted*
+    "_" and "+" instead of hyphenating them — "foo_bar" → "foobar" here but
+    "foo-bar" in bash.)"""
+    text = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return text[:50].rstrip("-")
 
 
@@ -117,20 +123,6 @@ def resolve_run_dir(vault_base: str, org: str, repo: str, id: str = None, name: 
 
 
 # ── Self-check ──────────────────────────────────────────────────────────────
-
-def _load_blueprint_slugify():
-    """migite-blueprint.py isn't importable by name (hyphenated filename) and
-    is intentionally left with its own unreconciled slugify copy — see plan
-    step 1's note. Loaded here only to diff behaviour, not to enforce parity."""
-    import importlib.util
-    bp_path = Path(__file__).parent / "migite-blueprint.py"
-    if not bp_path.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("migite_blueprint_ref", bp_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.slugify
-
 
 def run_self_test() -> None:
     import tempfile
@@ -254,21 +246,16 @@ def run_self_test() -> None:
             result == repo_dir / "add-users",
         )
 
-    # slugify
+    # slugify — must match helpers.sh's bash slugify (tests/slugify_test.sh checks parity)
     long_text = "jira ticket bb-3370 please fetch context from the discovery doc and figure it out"
     check(
         "slugify: 50-char truncation never leaves a trailing hyphen",
         not slugify(long_text).endswith("-"),
     )
-
-    bp_slugify = _load_blueprint_slugify()
-    if bp_slugify is not None:
-        bp_result = bp_slugify(long_text)
-        my_result = slugify(long_text)
-        note = "same" if bp_result == my_result else f"differs (blueprint={bp_result!r}, ours={my_result!r})"
-        print(f"  · slugify parity vs migite-blueprint.py: {note} (informational only)")
-    else:
-        print("  · migite-blueprint.py not found — skipping slugify parity check")
+    check("slugify: underscores become hyphens, not deleted", slugify("foo_bar") == "foo-bar")
+    check("slugify: punctuation runs collapse to one hyphen", slugify("fix N+1 on /districts!") == "fix-n-1-on-districts")
+    check("slugify: Jira key unchanged apart from case", slugify("BB-3370") == "bb-3370")
+    check("slugify: leading/trailing junk stripped", slugify("  --Hello World-- ") == "hello-world")
 
     print()
     if failures:
@@ -292,6 +279,9 @@ def main() -> None:
     p_base = sub.add_parser("detect-base-branch", help="Print the detected base branch for a repo root")
     p_base.add_argument("--repo-root", required=True)
 
+    p_slug = sub.add_parser("slugify", help="Print the canonical slug for a string (matches helpers.sh slugify)")
+    p_slug.add_argument("text")
+
     args = parser.parse_args()
 
     if args.self_test:
@@ -304,6 +294,10 @@ def main() -> None:
 
     if args.command == "detect-base-branch":
         print(detect_base_branch(args.repo_root))
+        return
+
+    if args.command == "slugify":
+        print(slugify(args.text))
         return
 
     parser.print_help()
