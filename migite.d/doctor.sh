@@ -69,6 +69,20 @@ run_doctor() {
     fi
   fi
 
+  # ── Phase prompts ──────────────────────────────────────────────────────────
+  # plan.md / implement.md / review.md / architecture_critic.md ship in the
+  # repo's prompts/ dir. migite, migite-plan and migite-review all hard-fail
+  # without them; doctor surfaces the gap before a run does.
+  local doc_prompt
+  for doc_prompt in plan implement review architecture_critic; do
+    if [[ -s "$MIGITE_HOME/prompts/$doc_prompt.md" ]]; then
+      echo "✔ Prompt present: prompts/$doc_prompt.md"
+    else
+      echo "✘ Prompt missing or empty: prompts/$doc_prompt.md"
+      issues=$((issues + 1))
+    fi
+  done
+
   # ── Scratchpad / vault sync drift ──────────────────────────────────────────
   # Every scratchpad/<slug>/*.md should have a same-or-newer counterpart under
   # the vault mirror — a mismatch means a sync_artifact call didn't happen

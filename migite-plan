@@ -32,8 +32,21 @@ EXPLORE_MODEL = "claude-haiku-4-5-20251001"
 THINK_MODEL   = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
 
-PLAN_CMD_PATH = Path.home() / ".claude/commands/plan.md"
-CRITIC_CMD_PATH = Path.home() / ".claude/commands/architecture_critic.md"
+# Prompts ship in the repo's prompts/ dir next to this script. resolve() follows
+# the ~/.local/bin symlink to the real checkout. Missing files are a hard error
+# in main() — the old "read if exists else ''" silently ran the planner with no
+# plan format at all on a fresh machine.
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PLAN_CMD_PATH = PROMPTS_DIR / "plan.md"
+CRITIC_CMD_PATH = PROMPTS_DIR / "architecture_critic.md"
+
+
+def read_prompt(path: Path) -> str:
+    if not path.is_file():
+        print(f"  ✘ migite-plan: prompt file missing: {path} — is the migite checkout intact?",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+    return path.read_text()
 
 EXPLORE_AREAS = [
     ("models",             ["app/models/**/*.rb"]),
@@ -640,8 +653,8 @@ def main() -> None:
     blueprint  = Path(args.blueprint).read_text()   if args.blueprint  and Path(args.blueprint).exists()  else ""
     task_file  = Path(args.task_file).read_text()   if args.task_file  and Path(args.task_file).exists()  else ""
     jira_context = Path(args.jira_context).read_text() if args.jira_context and Path(args.jira_context).exists() else ""
-    plan_cmd   = PLAN_CMD_PATH.read_text()   if PLAN_CMD_PATH.exists()   else ""
-    critic_cmd = CRITIC_CMD_PATH.read_text() if CRITIC_CMD_PATH.exists() else ""
+    plan_cmd   = read_prompt(PLAN_CMD_PATH)
+    critic_cmd = read_prompt(CRITIC_CMD_PATH)
     base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
 
     print(f"  migite-plan | base branch: {base_branch}", flush=True)

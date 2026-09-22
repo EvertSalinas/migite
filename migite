@@ -46,9 +46,13 @@ fi
 # anything migite writes about itself lands in the repo (the source of truth), not
 # wherever it happened to be invoked from.
 MIGITE_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-# Single source of truth for the /implement command file — mirrors PLAN_CMD_PATH /
-# CRITIC_CMD_PATH in migite-plan rather than hardcoding this path at each call site.
-IMPLEMENT_CMD_PATH="$HOME/.claude/commands/implement.md"
+# Phase prompts ship in this repo's prompts/ directory (plan.md, implement.md,
+# review.md, architecture_critic.md) — migite-plan and migite-review resolve
+# their own the same way. They used to live in ~/.claude/commands/ and were
+# read with "if exists else ''", so a fresh machine silently ran with no plan
+# or review format at all. Existence is checked in Setup below (after the
+# doctor dispatch, which must not depend on it).
+IMPLEMENT_CMD_PATH="$MIGITE_HOME/prompts/implement.md"
 
 # ── Phases ────────────────────────────────────────────────────────────────────
 source "$MIGITE_HOME/migite.d/helpers.sh"
@@ -72,6 +76,10 @@ fi
 mkdir -p "$LOG_DIR"
 require_cmd claude
 require_cmd git
+for _prompt in plan implement review architecture_critic; do
+  [[ -f "$MIGITE_HOME/prompts/$_prompt.md" ]] || error "Prompt file missing: $MIGITE_HOME/prompts/$_prompt.md — is the migite checkout intact?"
+done
+unset _prompt
 # `bundle` is only required for the `rails` stack — checked after detect_stack,
 # once we know which stack this repo actually is.
 

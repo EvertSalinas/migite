@@ -27,7 +27,17 @@ import migite_paths
 REVIEW_MODEL  = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
 
-REVIEW_CMD_PATH = Path.home() / ".claude/commands/review.md"
+# Ships in the repo's prompts/ dir next to this script (resolve() follows the
+# ~/.local/bin symlink). Hard error if missing — see read_prompt().
+REVIEW_CMD_PATH = Path(__file__).resolve().parent / "prompts" / "review.md"
+
+
+def read_prompt(path: Path) -> str:
+    if not path.is_file():
+        print(f"  ✘ migite-review: prompt file missing: {path} — is the migite checkout intact?",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+    return path.read_text()
 
 REVIEW_DIMENSIONS = [
     (
@@ -272,7 +282,7 @@ def main() -> None:
     rubocop_log    = read_or_empty(args.rubocop_log)
     rspec_log      = read_or_empty(args.rspec_log)
     testing_plan   = read_or_empty(args.testing_plan) if args.testing_plan else ""
-    review_cmd     = REVIEW_CMD_PATH.read_text() if REVIEW_CMD_PATH.exists() else ""
+    review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
     print(f"\n  migite-review | model={REVIEW_MODEL}  base branch: {base_branch}", flush=True)
 

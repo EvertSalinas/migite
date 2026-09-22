@@ -30,6 +30,11 @@ migite-plan \
 
 `--blueprint` injects the blueprint content into both `synthesize_plan` and `run_architecture_critic` as pre-decided architecture. The planner and critic treat blueprint decisions as settled constraints rather than re-deriving them from the codebase.
 
+Reads `prompts/plan.md` (plan format + type routing, injected into `synthesize_plan`) and
+`prompts/architecture_critic.md` (the critic checklist) from the directory the script really
+lives in (`Path(__file__).resolve().parent`, so the `~/.local/bin` symlink is followed). Either
+file missing is a hard exit-1 — never a silent empty prompt.
+
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure (no sentinel written).
 
 <a id="internal-migite-review"></a>
@@ -51,5 +56,10 @@ migite-review \
 `--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades.
 
 **Models used:** `claude-sonnet-5` for the 4 parallel review dimensions, `claude-opus-5` for `synthesize_verdict`.
+
+`synthesize_verdict` is given `prompts/review.md` as the output format (resolved the same way as
+`migite-plan`'s prompts; hard error if missing). That format puts `## Verdict: READY TO COMMIT` or
+`## Verdict: NEEDS FIXES` on one line directly under the title, which is what `review_verdict()`
+in `helpers.sh` parses for the commit-gate banner.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

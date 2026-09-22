@@ -97,6 +97,11 @@ migite/                   ← wherever you clone this repo
 ├── migite-pr-review.py   ← LangGraph PR review agent (Python)
 ├── migite_paths.py       ← shared run-directory resolver (id/name → vault folder)
 ├── migite-improvements.md ← self-improvement notes appended after each run
+├── prompts/              ← phase prompts, resolved via $MIGITE_HOME — hard error if missing
+│   ├── plan.md           ← plan format + type routing, injected into migite-plan's synthesis
+│   ├── architecture_critic.md ← pre-implementation critique checklist (migite-plan, Opus call)
+│   ├── implement.md      ← interactive implement/TDD/amend session brief ([PLAN_PATH] substituted)
+│   └── review.md         ← review document format, verdict-first (migite-review's synthesis)
 ├── templates/            ← intake templates + the PR-description prompt, read by migite.d/plan.sh and deliver.sh
 │   ├── feature.md, bug.md, refactor.md, spike.md, config.md  ← intake templates ($TASK_TYPE.md)
 │   └── commit.md         ← PR-description generation prompt (Phase 4)
@@ -128,8 +133,8 @@ migite/                   ← wherever you clone this repo
 ### Files expected
 
 - Vault root: `~/dev-log/` — plain markdown files, created automatically on first run. No note-taking app required; point `DEV_LOG_BASE` at an existing Obsidian vault (or anywhere else) if you have one and want the `[[wikilinks]]` to resolve.
-- Intake templates and the PR-description prompt ship in this repo's [`templates/`](./templates) directory — `migite.d/plan.sh` and `migite.d/deliver.sh` read them via `$MIGITE_HOME`, no `~/.claude/` setup required for these.
-- Remaining phase prompts: `~/.claude/commands/{plan,implement,review,architecture_critic}.md`
+- Intake templates and the PR-description prompt ship in this repo's [`templates/`](./templates) directory — `migite.d/plan.sh` and `migite.d/deliver.sh` read them via `$MIGITE_HOME`.
+- The four phase prompts (`plan`, `implement`, `review`, `architecture_critic`) ship in [`prompts/`](./prompts). `migite`, `migite-plan`, and `migite-review` resolve them relative to their own real path and **fail loudly if one is missing** — nothing under `~/.claude/` is required. If you also want them as Claude Code slash commands, symlink them (see [Installation](#installation), step 5).
 
 ---
 
@@ -163,6 +168,15 @@ source ~/.zshrc
 
 # 4. Install Python dependencies (one-time)
 pip3 install langgraph
+
+# 5. (Optional) expose the phase prompts as Claude Code slash commands too
+#    (/plan, /implement, /review, /architecture_critic). The repo copy is the
+#    source of truth; these are written for the headless pipeline, so as slash
+#    commands they output the document rather than writing files themselves.
+mkdir -p ~/.claude/commands
+for p in plan implement review architecture_critic; do
+  ln -sf "$MIGITE_SRC/prompts/$p.md" ~/.claude/commands/$p.md
+done
 ```
 
 If you use asdf for Python version management, set `MIGITE_PYTHON` to the full binary path:
