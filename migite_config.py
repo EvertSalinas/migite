@@ -229,6 +229,8 @@ heal:
 #   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md
 # templates:
 #   dir: .migite/templates   # override intake templates or commit.md (the PR-description prompt)
+#   # {org} and {repo} are substituted, e.g. in ~/.config/migite/config.yml:
+#   # dir: ~/.config/migite/templates/{org}   → ~/.config/migite/templates/Acme/commit.md for repos under ~/Code/Acme/
 
 budget:
   # max_usd_per_run: 5.00    # soft cap: every gate banner warns once the run's headless spend passes it
@@ -400,12 +402,26 @@ class Config:
         v = self.get(key)
         return Path(os.path.expanduser(str(v))) if v else None
 
+    def override_dir(self, kind: str, repo_root: str | Path | None) -> Path | None:
+        """`prompts.dir` / `templates.dir` resolved for a repo: `~` expanded, a relative
+        path anchored at the repo root, and `{org}` / `{repo}` substituted — so one
+        user-level setting like `~/.config/migite/templates/{org}` gives every
+        organisation its own PR template without a file in each repo."""
+        raw = self.get(f"{kind}.dir")
+        if not raw:
+            return None
+        raw = str(raw)
+        if repo_root and ("{org}" in raw or "{repo}" in raw):
+            import migite_paths  # lazy: migite_paths imports this module for vault.org
+            raw = raw.replace("{org}", migite_paths.detect_org(str(repo_root))).replace("{repo}", Path(repo_root).name)
+        base = Path(os.path.expanduser(raw))
+        if not base.is_absolute() and repo_root:
+            base = Path(repo_root) / base
+        return base
+
     def _override_file(self, kind: str, name: str, migite_home: str | Path, repo_root: str | Path | None) -> Path:
-        override_dir = self.get(f"{kind}.dir")
-        if override_dir:
-            base = Path(os.path.expanduser(str(override_dir)))
-            if not base.is_absolute() and repo_root:
-                base = Path(repo_root) / base
+        base = self.override_dir(kind, repo_root)
+        if base is not None:
             candidate = base / f"{name}.md"
             if candidate.is_file():
                 return candidate

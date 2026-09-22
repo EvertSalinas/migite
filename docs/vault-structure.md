@@ -1,7 +1,10 @@
 # Vault structure
 
+The vault root is `vault.base` in the config (`DEV_LOG_BASE` env var, default `~/dev-log`).
+Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]]` to resolve.
+
 ```
-~/dev-log/
+<vault.base>/
 ├── <org>/                                          ← name of the directory that directly contains the repo (or $MIGITE_ORG)
 │   └── <repo-name>/
 │       ├── knowledge.md                          ← one file per repo, all lessons
@@ -14,11 +17,16 @@
 │       └── <ticket>/                             ← grouped by --jira, shared across tools
 │           ├── intake.md
 │           ├── task.md                           ← optional, from the --intake supplementary prompt
-│           ├── plan.md
-│           ├── testing-plan.md                   ← regenerated in full on every --amend
+│           ├── jira-context.md                   ← optional, the fetched ticket
+│           ├── plan.md  +  plan.json
+│           ├── amendment-NN.md                   ← one per --amend; plan.md is never rewritten
+│           ├── testing-plan.md                   ← regenerated in full on every --amend and fix round
 │           ├── architecture-critic.md
 │           ├── implementation.md
-│           ├── review.md
+│           ├── fix-rN.md                         ← one per commit-gate `f` round
+│           ├── review.md  +  review.json
+│           ├── gate-overrides.md                 ← only with gates.commit.policy: strict, on a `Y`
+│           ├── usage.json                        ← every headless model call in the run, by model
 │           ├── pr-description.md
 │           ├── audit-<timestamp>.md              ← migite-audit --jira <ticket>
 │           ├── pr-review-<branch>-<timestamp>.md ← migite-pr-review --jira <ticket>
@@ -63,4 +71,4 @@ exists — see [standalone-tools.md](./standalone-tools.md#migite-pr-review) for
 `<repo-root>/scratchpad/<ticket>/`, and synced out to this vault path after every write so both
 copies stay current. Use the vault copy for reading/browsing (e.g. in Obsidian); resuming or
 amending a task reads from the scratchpad, falling back to the vault mirror only if the
-scratchpad copy is missing. See [Output files](./migite.md#output-files) for the full picture.
+scratchpad copy is missing. See [Output files](./outputs.md#output-files) for the full picture.

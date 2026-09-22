@@ -106,6 +106,22 @@ echo "custom plan prompt" > "$cfg_dir/repo/.migite/prompts/plan.md"
     test "$(prompt_path review)" = "$MIGITE_HOME/prompts/review.md"
   check "template_path: no templates.dir → repo copy" \
     test "$(template_path commit)" = "$MIGITE_HOME/templates/commit.md"
+  # {org} / {repo} placeholders, substituted from $ORG / $REPO_NAME
+  mkdir -p "$cfg_dir/tpl/Acme" "$cfg_dir/tpl/by-repo/widgets"
+  echo "acme pr template" > "$cfg_dir/tpl/Acme/commit.md"
+  echo "widgets bug template" > "$cfg_dir/tpl/by-repo/widgets/bug.md"
+  ORG="Acme" REPO_NAME="widgets"
+  MIGITE_CFG_TEMPLATES_DIR="$cfg_dir/tpl/{org}"
+  check "template_path: {org} in templates.dir resolves to the org's directory" \
+    test "$(template_path commit)" = "$cfg_dir/tpl/Acme/commit.md"
+  check "template_path: {org} dir without the file falls back to the repo copy" \
+    test "$(template_path feature)" = "$MIGITE_HOME/templates/feature.md"
+  MIGITE_CFG_TEMPLATES_DIR="$cfg_dir/tpl/by-repo/{repo}"
+  check "template_path: {repo} in templates.dir resolves to the repo's directory" \
+    test "$(template_path bug)" = "$cfg_dir/tpl/by-repo/widgets/bug.md"
+  ORG="Other"; MIGITE_CFG_TEMPLATES_DIR="$cfg_dir/tpl/{org}"
+  check "template_path: an org with no override directory falls back to the repo copy" \
+    test "$(template_path commit)" = "$MIGITE_HOME/templates/commit.md"
   TMUX="fake-session" ; check "use_tmux: ui.tmux=off is false even inside tmux" not use_tmux
   check "notify: ui.notify=off is a silent no-op" notify "x" "y"
 )

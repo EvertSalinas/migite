@@ -8,6 +8,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
 - [Precedence](#precedence)
 - [Files and formats](#files)
 - [`migite config`](#command)
+- [Recipes](#recipes)
 - [Reference](#reference)
   - [vault, logs](#vault)
   - [models](#models)
@@ -74,6 +75,76 @@ which file. Both commands refuse to overwrite an existing file unless you pass `
 
 `migite config` output ends with the resolved model for every call-site role and which layer
 pinned it — the quickest way to see what a change to `models:` actually did.
+
+---
+
+<a id="recipes"></a>
+## Recipes
+
+Copy the one that matches, delete the rest of the starter file.
+
+**Solo developer, first config** (`~/.config/migite/config.yml`)
+
+```yaml
+vault:
+  base: ~/Documents/MyVault/dev-log
+ui:
+  editor: nvim
+models:
+  effort:
+    strong: xhigh
+```
+
+**Team repo with a hard gate** (`<repo>/.migite.yml`, committed)
+
+```yaml
+gates:
+  commit:
+    policy: strict              # y refused over NEEDS FIXES / failing specs / offenses; Y overrides and is logged
+    require_clean_lint: true
+    require_green_specs: true
+heal:
+  full_suite_fallback: false    # never run the whole suite when no spec files changed
+templates:
+  dir: .migite/templates        # this team's own PR template: .migite/templates/commit.md
+```
+
+**Cheap mode** for spikes and throwaway branches (`.migite.yml` or `MIGITE_CONFIG=cheap.yml`)
+
+```yaml
+models:
+  roles:
+    think: claude-sonnet-5
+    explore_refine: claude-sonnet-5
+    review_correctness: claude-sonnet-5
+    review_security: claude-sonnet-5
+    verdict: claude-sonnet-5
+  effort:
+    standard: medium
+budget:
+  max_usd_per_run: 1.50
+```
+
+**Non-Rails repo or monorepo where detection picks wrong**
+
+```yaml
+stack: generic                  # skip rubocop/rspec; plan, implement, review still run
+permissions:
+  headless: acceptEdits         # if your managed settings forbid bypassPermissions
+```
+
+**Override one prompt for one project**
+
+```yaml
+prompts:
+  dir: .migite/prompts          # only files present here are overridden; the rest fall back
+```
+
+```bash
+mkdir -p .migite/prompts && cp ~/Code/migite/prompts/review.md .migite/prompts/review.md
+$EDITOR .migite/prompts/review.md      # e.g. add your team's checklist items
+migite config | grep prompts           # confirm it is picked up
+```
 
 ---
 
@@ -226,6 +297,26 @@ Any `<dir>/<name>.md` overrides the same-named file under migite's `prompts/`
 (`plan`, `implement`, `review`, `architecture_critic`) or `templates/` (`feature`, `bug`,
 `refactor`, `spike`, `config`, `commit`). Files not present in the override dir fall back to the
 repo copies, so you can override just the PR-description prompt for one project.
+
+The directory may be relative (anchored at the repo root) or absolute, and may contain **`{org}`**
+and **`{repo}`**, substituted with the vault org and the repo name. That makes a single user-level
+setting serve several organisations with no file in any repo:
+
+```yaml
+# ~/.config/migite/config.yml
+templates:
+  dir: ~/.config/migite/templates/{org}
+```
+
+```text
+~/.config/migite/templates/
+├── Acme/commit.md        ← used for every repo under ~/Code/Acme/ (org = parent directory name)
+└── Personal/commit.md    ← used for repos whose org resolves to Personal
+                            repos under any other org fall back to migite's generic templates/commit.md
+```
+
+The generic `templates/commit.md` shipped with migite has no company-specific checklist items; a
+team's own PR template belongs in an override like the one above.
 
 <a id="budget"></a>
 ### `budget`

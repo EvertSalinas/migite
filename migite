@@ -256,6 +256,10 @@ REPO_NAME=$(basename "$REPO_ROOT")
 # get re-resolved against the wrong cwd.
 cd "$REPO_ROOT"
 
+# Org is needed before the config is applied: prompts.dir / templates.dir may
+# contain {org}, and IMPLEMENT_CMD_PATH is resolved right after loading.
+ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT")"
+
 # ── Load configuration (needs REPO_ROOT for <repo>/.migite.yml) ──────────────
 load_migite_config "$REPO_ROOT"
 mkdir -p "$LOG_DIR"
@@ -285,7 +289,6 @@ detect_stack
 log "Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
 [[ "$STACK" == "rails" ]] && require_cmd bundle
 
-ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT")"
 log "Repo: $ORG/$REPO_NAME"
 
 # ── Detect base branch ────────────────────────────────────────────────────────

@@ -244,6 +244,24 @@ class PathsTest(_Isolated):
         self.assertEqual(cfg.prompt_path("review", ROOT, self.repo), ROOT / "prompts" / "review.md")
         self.assertEqual(cfg.template_path("commit", ROOT, self.repo), ROOT / "templates" / "commit.md")
 
+    def test_override_dir_substitutes_org_and_repo(self):
+        # repo lives at <tmp>/repo → org = "<tmp dirname>", repo = "repo"
+        org = self.repo.parent.name
+        (self.home / "tpl" / org).mkdir(parents=True)
+        (self.home / "tpl" / org / "commit.md").write_text("org template")
+        (self.home / "tpl" / "by-repo" / "repo").mkdir(parents=True)
+        (self.home / "tpl" / "by-repo" / "repo" / "bug.md").write_text("repo template")
+        self.write_repo({"templates": {"dir": "~/tpl/{org}"}})
+        cfg = self.load()
+        self.assertEqual(cfg.override_dir("templates", self.repo), self.home / "tpl" / org)
+        self.assertEqual(cfg.template_path("commit", ROOT, self.repo), self.home / "tpl" / org / "commit.md")
+        self.assertEqual(cfg.template_path("feature", ROOT, self.repo), ROOT / "templates" / "feature.md")  # not overridden
+        self.write_repo({"templates": {"dir": "~/tpl/by-repo/{repo}"}})
+        migite_config._CACHE.clear()
+        cfg = self.load()
+        self.assertEqual(cfg.template_path("bug", ROOT, self.repo), self.home / "tpl" / "by-repo" / "repo" / "bug.md")
+        self.assertIsNone(self.load().override_dir("prompts", self.repo))
+
     def test_expanded_path(self):
         cfg = self.load()
         self.assertEqual(cfg.expanded_path("vault.base"), self.home / "dev-log")

@@ -88,11 +88,17 @@ cfg() {
 }
 
 # prompt_path <name> / template_path <name> — honour prompts.dir / templates.dir
-# overrides (relative to the repo root) before falling back to the repo copies.
+# overrides before falling back to the repo copies. The dir may be relative to
+# the repo root and may contain {org} / {repo}, substituted from $ORG /
+# $REPO_NAME (so one user-level `templates.dir: ~/.config/migite/templates/{org}`
+# gives each organisation its own PR template with no file in any repo).
+# Mirrors Config.override_dir() in migite_config.py.
 _override_path() {
   local kind="$1" name="$2" dir
   dir="$(cfg "$kind.dir")"
   if [[ -n "$dir" ]]; then
+    dir="${dir//\{org\}/${ORG:-}}"
+    dir="${dir//\{repo\}/${REPO_NAME:-}}"
     dir="${dir/#\~/$HOME}"
     [[ "$dir" != /* && -n "${REPO_ROOT:-}" ]] && dir="$REPO_ROOT/$dir"
     [[ -f "$dir/$name.md" ]] && { echo "$dir/$name.md"; return; }

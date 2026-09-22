@@ -1,5 +1,62 @@
 # Troubleshooting
 
+Symptoms first; each entry names the check that proves the cause.
+
+| Symptom | Jump to |
+|---------|---------|
+| `✘ migite config error: ...` before anything runs | [Config errors](#config-errors) |
+| `... exists but PyYAML is not installed` | [PyYAML](#pyyaml) |
+| `No version is set for command python3`, or `Python not found at ...` | [Python](#python) |
+| `Prompt file missing: .../prompts/plan.md` | [Prompt files](#prompts) |
+| rubocop / rspec never run, or a phase asks for permissions and hangs | [Permission failures](#troubleshooting-permissions) |
+| a headless phase exits immediately when launched from inside Claude Code | [Nested sessions](#nested) |
+| the commit gate keeps saying NEEDS FIXES | [Review loops](#troubleshooting-needs-fixes) |
+| `migite doctor` reports scratchpad/vault drift | [Drift](#drift) |
+
+<a id="config-errors"></a>
+### Config errors
+
+An invalid value in a config file aborts the run on purpose: running on defaults after you wrote
+a config would be worse than stopping. The message names the key, the value, and the file:
+
+```text
+✘ migite config error: gates.commit.policy must be one of lenient, strict (got 'strcit' from /Users/you/repo/.migite.yml)
+✘ Fix the configuration above (or unset MIGITE_CONFIG) and re-run
+```
+
+`migite config --validate` reproduces it without starting a run. Unknown keys are a warning, not
+an error, so a typo in a key name shows up as `⚠ config: ...: unknown key 'gatse.commit' (ignored)`
+and the run continues on the default for that key.
+
+<a id="pyyaml"></a>
+### PyYAML
+
+Only needed when a `.yml` / `.yaml` config file exists. `pip3 install pyyaml` into the Python
+`MIGITE_PYTHON` points at, or rename the file to `.json`. With no config files at all, migite
+runs without PyYAML.
+
+<a id="python"></a>
+### Python
+
+Migite uses `MIGITE_PYTHON` if set, else `python3` if it actually runs, else an asdf fallback
+path. `No version is set for command python3` means an asdf shim is on `PATH` with no version
+selected for this directory; migite's own check skips it, but the four standalone wrappers and
+`tests/run.sh` resolve Python the same way only when `MIGITE_PYTHON` is unset. The robust fix is
+one line in your shell profile:
+
+```bash
+export MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
+"$MIGITE_PYTHON" -c "import langgraph" || "$MIGITE_PYTHON" -m pip install langgraph
+```
+
+<a id="prompts"></a>
+### Prompt files
+
+`migite`, `migite-plan`, and `migite-review` fail loudly if any of `prompts/{plan,implement,review,architecture_critic}.md`
+is missing, rather than running with an empty prompt. Causes: an incomplete checkout, or
+`prompts.dir` pointing at a directory that exists but lacks the file (that case falls back to
+the repo copy, so it is almost always the checkout). `migite doctor` lists each prompt's presence.
+
 <a id="troubleshooting-permissions"></a>
 ### Permission failures running bundler / rubocop / rspec / brakeman
 
@@ -42,6 +99,7 @@ permissions:
   headless: acceptEdits
 ```
 
+<a id="nested"></a>
 ### Running migite from inside a Claude Code session
 
 Claude Code sets `CLAUDECODE` in its own terminal sessions, and a nested `claude` refuses to
@@ -75,4 +133,19 @@ verdict shown.
 If the same finding keeps coming back, it's usually something Claude can't fix blind — a schema
 decision, a missing factory, or a genuinely wrong review finding. Use `e` at the gate to open
 `review.md` directly and strike the bad finding, or `n` to fix it yourself and re-run checks when
-ready.
+ready. With `gates.commit.policy: strict`, a capital `Y` approves over the remaining blockers and
+records them in `gate-overrides.md`.
+
+<a id="drift"></a>
+### `migite doctor` reports scratchpad/vault drift
+
+```text
+⚠ Scratchpad/vault drift (2):
+  - bb-1234/plan.md — scratchpad is newer than vault (sync_artifact may not have run)
+  - bb-1234/notes.md — no vault counterpart
+```
+
+The first line means a phase wrote the scratchpad copy and crashed before mirroring it; re-running
+the task re-syncs on the next write. The second means a file was added to the scratchpad by hand;
+migite only mirrors what it writes. Neither blocks a run. Drift from old runs of migite on its
+own repo is normal and safe to ignore or delete.

@@ -2,400 +2,245 @@
 
 > 右手 (みぎて) — right hand. The trusted assistant that handles the groundwork so you can focus on what matters.
 
-Migite is a personal agentic dev workflow orchestrator. It wraps Claude around every task: plan before you touch a file, gate before you implement, review before you commit, and capture knowledge so nothing gets lost. It doesn't replace your judgment — it extends your reach.
+Migite wraps Claude Code around every engineering task in the same shape: **plan** before you touch
+a file, **gate** before you implement, **review** before you commit, and **write down** what was
+learned. It never commits for you. It extends your reach without replacing your judgment.
+
+```bash
+migite --jira BB-1234 --type feature      # plan → gate → implement → heal → review → gate → PR description
+```
+
+- **Two human gates**, one after the plan and one before the commit, with approve / AI-refine / hand-edit / redo / abort at each.
+- **Autonomous everywhere else**: 7 parallel codebase explorers, an architecture critic, an auto-heal loop for lint and tests, 4 specialist reviewers, a typed verdict.
+- **Memory**: every artifact mirrored to a markdown vault (Obsidian-friendly), and a per-repo `knowledge.md` injected into every future plan.
+- **Machine-readable**: `plan.json`, `review.json`, and a per-run usage ledger with cost per model.
+- **Configurable**: one layered `.migite.yml` for models, effort, gates, permissions, prompts, budget.
 
 ---
 
-<a id="contents"></a>
 ## Contents
 
-- [Architecture](#architecture)
-  - [Workflow orchestrator](#workflow-orchestrator)
-  - [Standalone tools at a glance](#standalone-tools-glance)
-- [Repository layout](#repository-layout)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-  - [`--type` values](#type-values)
+- [Quickstart](#quickstart)
+- [A run, end to end](#a-run-end-to-end)
+- [Which tool for which situation](#which-tool)
+- [Configuration in one minute](#configuration)
+- [Requirements and portability](#requirements)
 - [Documentation](#documentation)
-- [FAQ](#faq)
 - [Roadmap](#roadmap)
 
 ---
 
-<a id="architecture"></a>
-## Architecture
+<a id="quickstart"></a>
+## Quickstart
 
-Migite is a **hybrid orchestrator**: a bash spine that coordinates human gates, file management, and tool runs, with Python LangGraph agents handling the reasoning-heavy phases.
-
-<a id="workflow-orchestrator"></a>
-### Workflow orchestrator (`migite`)
-
-```
-bash (migite, sourcing migite.d/*.sh)
-├── Phase 1   ──► migite-plan (LangGraph)     — parallel codebase exploration → plan + critic       [migite.d/plan.sh]
-├── Phase 1.5 ──► claude interactive          — TDD spec writing (opt-in)                           [migite.d/plan.sh]
-├── Phase 2   ──► claude interactive          — implementation                                      [migite.d/implement.sh]
-├── Phase 2.5 ──► claude --print loop         — auto-heal: rubocop + rspec → fix → repeat            [migite.d/implement.sh]
-├── Phase 3   ──► migite-review (LangGraph)   — 4 parallel specialist reviewers → verdict            [migite.d/review.sh]
-├── Phase 3.5 ──► claude --print              — knowledge extraction                                [migite.d/deliver.sh]
-├── Phase 4   ──► claude interactive          — PR description                                      [migite.d/deliver.sh]
-└── Phase 4.5 ──► claude --print              — self-improvement notes                              [migite.d/deliver.sh]
-```
-
-Human gates sit between Phase 1→2 and Phase 3→3.5. Everything else is autonomous. `--amend` mode (`migite.d/amend.sh`) replaces Phase 1 with a scoped-delta flow against an already-planned, already-built task; Phases 2 onward run the same either way.
-
-Full phase-by-phase reference: [docs/migite.md](./docs/migite.md).
-
-<a id="standalone-tools-glance"></a>
-### Standalone tools at a glance
-
-| Command | Purpose |
-|---------|---------|
-| `migite-blueprint` | Start a new project — brief → 5 analysts → blueprint + milestone intakes + knowledge seed |
-| `migite-explore` | Scope a large initiative on an existing repo — 6 lenses → feasibility doc + verdict, no implementation |
-| `migite-audit` | Audit an existing codebase — 7 parallel specialist auditors → ranked findings |
-| `migite-pr-review` | Review a teammate's PR — diff a local branch → 4 parallel reviewers → verdict |
-
-**Which tool for which situation:**
-
-| Situation | Tool |
-|-----------|------|
-| No repo yet — defining a new project | `migite-blueprint` |
-| Repo exists, big initiative, unsure if it's worth doing | `migite-explore` |
-| Repo exists, work is decided, ready to build | `migite` |
-| Want to know what's wrong with the codebase | `migite-audit` |
-| Reviewing someone else's branch | `migite-pr-review` |
-
-Full reference for all four: [docs/standalone-tools.md](./docs/standalone-tools.md).
-
----
-
-<a id="repository-layout"></a>
-## Repository layout
-
-```
-migite/                   ← wherever you clone this repo
-├── migite                ← workflow orchestrator entrypoint (bash) — config, arg parsing, phase sequencing
-├── migite.d/              ← phase fragments sourced by migite, in run order
-│   ├── helpers.sh         ← output/prompt helpers + shared DRY helpers (sync_artifact, run_rubocop_check, detect_stack + stack profiles, bundle_exec, resolve_path, ...)
-│   ├── config.sh          ← load_migite_config (evals migite_config.py env), cfg / cfg_model / prompt_path, use_tmux, `migite config`
-│   ├── amend.sh           ← --amend mode (scope a delta against an already-built task)
-│   ├── plan.sh            ← Phase 1 (plan) + Phase 1.5 (TDD red phase)
-│   ├── implement.sh       ← Phase 2 (implement, staged or single-session) + Phase 2.5 auto-heal loop
-│   ├── review.sh          ← Phase 3 (rubocop/rspec + migite-review) + commit gate
-│   └── deliver.sh         ← Phase 3.5 (knowledge capture) + Phase 4 (PR description) + Phase 4.5 (self-improvement)
-├── migite-plan           ← LangGraph planner agent (Python) — called by migite Phase 1
-├── migite-review         ← LangGraph reviewer agent (Python) — called by migite Phase 3
-├── migite-blueprint      ← standalone project definition tool, bash wrapper
-├── migite-blueprint.py   ← LangGraph blueprint agent (Python)
-├── migite-explore        ← standalone initiative feasibility tool, bash wrapper
-├── migite-explore.py     ← LangGraph exploration agent (Python)
-├── migite-audit          ← standalone codebase auditor, bash wrapper
-├── migite-audit.py       ← LangGraph audit agent (Python)
-├── migite-pr-review      ← standalone PR reviewer, bash wrapper
-├── migite-pr-review.py   ← LangGraph PR review agent (Python)
-├── migite_paths.py       ← shared run-directory resolver (id/name → vault folder)
-├── migite_claude.py      ← shared `claude --print` wrapper: JSON envelopes, structured output, usage ledger
-├── migite_config.py      ← layered config resolver (.migite.yml / ~/.config/migite) — see docs/configuration.md
-├── migite-improvements.md ← self-improvement notes appended after each run
-├── prompts/              ← phase prompts, resolved via $MIGITE_HOME — hard error if missing
-│   ├── plan.md           ← plan format + type routing, injected into migite-plan's synthesis
-│   ├── architecture_critic.md ← pre-implementation critique checklist (migite-plan, Opus call)
-│   ├── implement.md      ← interactive implement/TDD/amend session brief ([PLAN_PATH] substituted)
-│   └── review.md         ← review document format, verdict-first (migite-review's synthesis)
-├── templates/            ← intake templates + the PR-description prompt, read by migite.d/plan.sh and deliver.sh
-│   ├── feature.md, bug.md, refactor.md, spike.md, config.md  ← intake templates ($TASK_TYPE.md)
-│   └── commit.md         ← PR-description generation prompt (Phase 4)
-├── docs/                 ← deep-dive reference docs (phases, standalone tools, vault, troubleshooting)
-└── README.md
-```
-
-`migite.d/` holds the orchestrator's own logic, split by phase so no single file runs past a few hundred lines. `migite` sources each fragment on startup and calls its phase function (`run_plan`, `run_implement`, ...) — they all share `migite`'s variables (`TASK_DIR`, `PLAN_FILE`, `REVIEW_FILE`, ...) directly rather than taking them as arguments, so `migite.d/*.sh` only makes sense read alongside `migite` itself, not standalone. It's not a standalone tool like `migite-plan`/`migite-review`, so it isn't symlinked or listed in [docs/standalone-tools.md](./docs/standalone-tools.md).
-
-`~/.local/bin/` holds symlinks to every top-level file above except README.md, docs/, and migite-improvements.md. `migite.d/` is not symlinked separately — `migite` resolves its own real path (through the symlink) to find `migite.d/` alongside it, so the directory just needs to stay next to `migite` in this repo.
-
-**Gemfile-subdirectory detection.** `migite` always `cd`s to `$REPO_ROOT` right after computing it, so `git diff` and every other command run from a consistent directory regardless of where `migite` was invoked from — but Bundler only searches upward from cwd for a `Gemfile`, never into subdirectories. When the actual Ruby app lives one level down (e.g. a `rails-app/` folder alongside other tooling in the same repo), `detect_stack()` finds it (via the `rails` stack profile's `stack_rails_app_root`) and sets `$APP_ROOT`; every `bundle_exec` call then `cd`s there first, and `strip_app_prefix()` rewrites the repo-root-relative paths `git diff` produces into `$APP_ROOT`-relative ones before handing them to rubocop/rspec. `resolve_path()` absolutizes user-supplied file paths (`--audit`, `--blueprint`, `--intake`, `--amend-file`, `--attach`) before that `cd`, so they still resolve correctly afterward even if given relative to wherever you ran `migite` from. `rails` and `generic` are the two registered stack profiles today — see [`--stack` values](#stack-values) below; adding one means registering a `stack_<name>_detect` / `stack_<name>_app_root` pair in `STACK_PROFILES` (`migite.d/helpers.sh`) and, if it has lint/test tooling, teaching `review.sh` and `implement.sh` the equivalent commands.
-
----
-
-<a id="requirements"></a>
-## Requirements
-
-### Core
-
-Runs on macOS and Linux (bash 4+). Desktop notifications use `osascript` on macOS and
-`notify-send` on Linux when present, and are silently skipped otherwise.
-
-| Tool | Purpose |
-|------|---------|
-| `claude` (Claude Code CLI) | All AI phases — auth is shared, no separate API key needed |
-| `git` | Branch detection, diff scoping |
-| `bundle` | Rubocop + rspec |
-| Python 3.11+ | LangGraph agent scripts |
-| `langgraph` Python package | Plan and review agents (every model call shells out to `claude`, so the `anthropic` SDK is not needed) |
-
-### Files expected
-
-- Vault root: `~/dev-log/` — plain markdown files, created automatically on first run. No note-taking app required; point `DEV_LOG_BASE` at an existing Obsidian vault (or anywhere else) if you have one and want the `[[wikilinks]]` to resolve.
-- Intake templates and the PR-description prompt ship in this repo's [`templates/`](./templates) directory — `migite.d/plan.sh` and `migite.d/deliver.sh` read them via `$MIGITE_HOME`.
-- Configuration (optional): `~/.config/migite/config.yml` for your defaults and `<repo>/.migite.yml` per project — both created with `migite config --init [--user]`, see [Configuration](#configuration). Without them migite runs on built-in defaults.
-- The four phase prompts (`plan`, `implement`, `review`, `architecture_critic`) ship in [`prompts/`](./prompts). `migite`, `migite-plan`, and `migite-review` resolve them relative to their own real path and **fail loudly if one is missing** — nothing under `~/.claude/` is required. If you also want them as Claude Code slash commands, symlink them (see [Installation](#installation), step 5).
-
----
-
-<a id="installation"></a>
-## Installation
-
-Clone it anywhere. Commands are exposed via symlinks in `~/.local/bin/`.
+Five minutes from clone to first run. The detailed version, with macOS and Linux notes, is in
+[docs/getting-started.md](./docs/getting-started.md).
 
 ```bash
-# 1. Clone to wherever you keep source
+# 1. Clone and put the commands on your PATH
 git clone <this-repo> ~/Code/migite
-
-# 2. Symlink all scripts onto your PATH
-MIGITE_SRC="$HOME/Code/migite"   # match wherever you cloned it in step 1
-BIN="$HOME/.local/bin"
-for f in migite migite-plan migite-review \
-          migite-blueprint migite-blueprint.py \
-          migite-explore migite-explore.py \
-          migite-audit migite-audit.py \
-          migite-pr-review migite-pr-review.py \
-          migite_paths.py migite_claude.py migite_config.py; do
+MIGITE_SRC="$HOME/Code/migite"; BIN="$HOME/.local/bin"; mkdir -p "$BIN"
+for f in migite migite-plan migite-review migite-blueprint migite-blueprint.py \
+         migite-explore migite-explore.py migite-audit migite-audit.py \
+         migite-pr-review migite-pr-review.py \
+         migite_paths.py migite_claude.py migite_config.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
-chmod +x "$MIGITE_SRC"/migite "$MIGITE_SRC"/migite-blueprint \
-         "$MIGITE_SRC"/migite-explore \
-         "$MIGITE_SRC"/migite-audit "$MIGITE_SRC"/migite-pr-review
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 
-# 3. Make sure ~/.local/bin is on your PATH (add to ~/.zshrc if needed)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+# 2. Python deps (3.11+). PyYAML is optional: only needed for YAML config files.
+pip3 install langgraph pyyaml
 
-# 4. Install Python dependencies (one-time)
-pip3 install langgraph
+# 3. Your personal defaults (vault location, editor, models). Every value in the
+#    generated file is a default — delete the lines you don't change.
+migite config --init --user && $EDITOR ~/.config/migite/config.yml
 
-# 5. Create your personal config (applies to every repo; a repo's .migite.yml
-#    overrides it key by key; env vars override both). Every value in the file
-#    is a default — delete the lines you don't change.
-migite config --init --user     # writes ~/.config/migite/config.yml
-$EDITOR ~/.config/migite/config.yml
-migite config                   # shows the effective result and where each value came from
-#    Per-repo settings (strict commit gate, prompt overrides, a stack override):
-#    cd <repo> && migite config --init   → .migite.yml, commit it with the repo.
-#    YAML files need PyYAML: pip3 install pyyaml   (.json files work without it)
-
-# 6. (Optional) expose the phase prompts as Claude Code slash commands too
-#    (/plan, /implement, /review, /architecture_critic). The repo copy is the
-#    source of truth; these are written for the headless pipeline, so as slash
-#    commands they output the document rather than writing files themselves.
-mkdir -p ~/.claude/commands
-for p in plan implement review architecture_critic; do
-  ln -sf "$MIGITE_SRC/prompts/$p.md" ~/.claude/commands/$p.md
-done
+# 4. Check the install, then run your first task
+cd ~/Code/your-rails-app
+migite doctor
+migite "add a health-check endpoint" --type feature
 ```
 
-If you use asdf for Python version management, set `MIGITE_PYTHON` to the full binary path:
+Prerequisites: the `claude` CLI (Claude Code) logged in, `git`, Python 3.11+, and `bundle` for
+Rails repos. No separate API key: every model call shells out to `claude` and shares its auth.
 
-```bash
-export MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
+---
+
+<a id="a-run-end-to-end"></a>
+## A run, end to end
+
+What `migite --jira BB-1234 --type feature` looks like on a Rails repo, abbreviated. Everything
+between the two gates is autonomous. The full transcript with every prompt and output file is in
+[docs/getting-started.md](./docs/getting-started.md#first-run).
+
+```text
+▶ Jira mode: BB-1234
+▶ Current branch: feature/BB-1234-pdf-export
+▶ Stack: rails — app dir: .
+▶ Config: /Users/you/.config/migite/config.yml
+▶ Repo: Acme/invoices-api
+▶ Base branch: main
+
+▶ Phase 1/4 — Planning
+▶ Fetching Jira ticket BB-1234...
+✔ Jira ticket fetched — added to planning context
+▶ Created intake from template: feature          ← $EDITOR opens the intake; fill it in
+  Starting LangGraph agent: Planning
+  ▶ Fanning out 7 explorers in parallel (stack=rails)
+  ▶ Synthesising plan from 7 exploration reports
+  ▶ Architecture critic
+  ▶ Refining plan with critic findings
+  ▶ Generating testing plan
+    ✔ plan.md → scratchpad/bb-1234/plan.md
+    ✔ plan.json → scratchpad/bb-1234/plan.json
+
+── Architecture critic ─────────────────────────────
+- 🟡 **Warning** — `Invoice#pdf_url` is called per row in the index serializer; eager-load or cache
+────────────────────────────────────────────────────
+────────────────────────────────────────
+  REVIEW GATE: plan
+────────────────────────────────────────
+Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort): y
+
+▶ Phase 2/4 — Implementing                        ← interactive Claude Code session, /exit when done
+▶ Phase 2.5 — Running checks (auto-heal enabled, max 3 attempts)
+✔ All checks passed — no healing needed
+
+▶ Phase 3/4 — Reviewing
+✔ Rubocop clean
+  ▶ Fanning out 4 specialist reviewers in parallel
+    ✔ review.json → scratchpad/bb-1234/review.json  (verdict=ready, 0🔴 1🟡 2🟢, source=structured)
+
+── Commit context ──────────────────────────
+  Verdict: READY TO COMMIT
+  Findings: 0 critical · 1 warnings · 2 notes
+  Reason:  Implementation matches the plan; the one warning is a missing request spec for the 422 path.
+  Specs:   all passed
+  Rubocop: clean
+  Cost:    16 calls, $2.87 so far (headless calls only)
+────────────────────────────────────────────
+Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort): y
+
+▶ Phase 3.5/4 — Capturing knowledge
+▶ Phase 4/4 — Generating PR description           ← interactive, writes pr-description.md
+▶ Phase 4.5/4 — Capturing improvement notes
+✔ Workflow complete.
+
+── Usage ───────────────────────────────────────
+  model                              calls  in+cache tok  out tok    time     cost
+  claude-opus-5-5                        6       241,318    9,204    212s    $2.41
+  claude-haiku-4-5-20251001              7       165,438    2,710     41s    $0.33
+  claude-sonnet-5                        5        98,120    4,411     64s    $0.44
+  total                                 18       504,876   16,325    317s    $3.18
 ```
 
-Add that export to `~/.zshrc` to make it permanent.
+`y` at the commit gate does not commit. It ends the review loop; the commit is yours to make, and
+`pr-description.md` is ready to paste. With `gates.commit.policy: strict`, `y` is refused while
+blockers remain and a capital `Y` overrides with a record.
+
+---
+
+<a id="which-tool"></a>
+## Which tool for which situation
+
+| Situation | Command | Output |
+|-----------|---------|--------|
+| Repo exists, work is decided, ready to build | `migite --jira BB-1234` | plan, review, PR description, knowledge |
+| Feedback arrived after implementation (PR comments, QA) | `migite --amend "must be idempotent on retry"` | `amendment-NN.md`, then the normal implement → review flow |
+| Big initiative, unsure if it's worth doing | `migite-explore "extract billing into a service" --intakes` | feasibility doc with a PROCEED / SPIKE / DEFER / NOT WORTH IT verdict, adversarial challenge, one intake per workstream |
+| No repo yet, defining a new project | `migite-blueprint --brief brief.md --name billing-api` | blueprint, milestone intakes, seed `knowledge.md` |
+| What's wrong with this codebase? | `migite-audit --focus jobs` | ranked findings, feedable into `migite --audit` |
+| Reviewing a teammate's branch | `migite-pr-review --branch feat/x` | review with verdict, read-only |
+| Is my install healthy? | `migite doctor` | config, prompts, tools, scratchpad drift, orphaned sentinels |
+
+All commands: [docs/migite.md](./docs/migite.md) for the orchestrator's modes,
+[docs/standalone-tools.md](./docs/standalone-tools.md) for the other four.
 
 ---
 
 <a id="configuration"></a>
-## Configuration
+## Configuration in one minute
 
-Migite reads a layered configuration — **flags > env vars > `$MIGITE_CONFIG` > `<repo>/.migite.yml`
-> `~/.config/migite/config.yml` > defaults** — and every default equals the pre-config behaviour,
-so nothing changes until you write a file. Full reference: **[docs/configuration.md](./docs/configuration.md)**.
-
-```bash
-migite config --init --user   # once: ~/.config/migite/config.yml — your defaults for every repo
-migite config --init          # per repo: .migite.yml — commit it with the project
-migite config                 # show the effective config and where each value came from
-migite config --validate      # exit 1 on errors (bad YAML, invalid value), warn on unknown keys
-```
-
-Both starter files contain every setting at its default with a comment, so the usual workflow is
-to delete everything you don't change. See [Installation](#installation) step 5.
-
-The most useful knobs: `models` (three tiers — Haiku 4.5 / Sonnet 5 / Opus 5.5 — plus per-role pins and `--effort` per tier), `gates.commit.policy: strict`
-(refuse `y` over a NEEDS FIXES verdict; `Y` overrides and is logged), `permissions.*`,
-`heal.full_suite_fallback`, `prompts.dir` / `templates.dir` per-project prompt overrides, and
-`budget.max_usd_per_run`. YAML files need PyYAML (`pip install pyyaml`); `.migite.json` works without it.
-
-The environment variables below all still work and beat the files:
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MIGITE_PYTHON` | `$HOME/.asdf/installs/python/3.13.5/bin/python3` | Python binary for LangGraph scripts |
-| `DEV_LOG_BASE` | `~/dev-log` | Vault root |
-| `MIGITE_ORG` | unset | Forces the vault "org" bucket a repo files under (`$DEV_LOG_BASE/<org>/<repo>/...`). Unset, it's auto-detected as the name of the directory directly containing the repo — `~/Code/Acme/foo` → `Acme` — so any org/client folder name works without configuration. Falls back to `Personal` only if the repo has no meaningful parent directory |
-| `LOG_DIR` | `~/.dev-workflow/logs` | Per-run logs |
-| `MAX_HEAL_ATTEMPTS` | `3` | Phase 2.5 auto-heal retry cap |
-| `MIGITE_USAGE_LEDGER` | `$LOG_DIR/<ts>-usage.jsonl` | Per-run usage ledger: one JSON line per headless model call (tokens, cost, duration). Summarised into `usage.json` and printed at exit. See [Machine-readable envelopes](./docs/internals.md#machine-readable) |
-| `MIGITE_PROMPT_INLINE_MAX` | `100000` | Interactive-phase prompts larger than this many bytes are passed to `claude` as a pointer to the prompt file instead of inline on the command line (Linux caps one argv string at 128 KB; the implement prompt includes all of `knowledge.md`) |
-| `MIGITE_PERMISSION_MODE` | unset | Permission mode passed to `claude --print` — but only inside three standalone tools: `migite-explore`, `migite-audit`, `migite-pr-review`. Omitted (fail closed) when unset. `migite` itself, `migite-plan`, `migite-review`, and `migite-blueprint` don't read this variable at all — see [Permission failures](./docs/troubleshooting.md#troubleshooting-permissions) |
-| `EDITOR` | `vim` | Opens intake template and other manual-edit prompts |
-
-Override in your shell profile:
+Precedence: **flags > env vars > `$MIGITE_CONFIG` > `<repo>/.migite.yml` > `~/.config/migite/config.yml` > defaults**.
+Every default equals the behaviour without a file, so nothing changes until you write one.
 
 ```bash
-export EDITOR=nvim
-export MIGITE_PYTHON="/opt/homebrew/bin/python3"
-export DEV_LOG_BASE="$HOME/Notes/dev-log"   # or your Obsidian vault's dev-log folder
-export MIGITE_ORG="Personal"                # optional: force one bucket regardless of folder name
+migite config --init --user   # once: ~/.config/migite/config.yml, your defaults for every repo
+migite config --init          # per repo: .migite.yml, commit it with the project
+migite config                 # effective config, with the source of every value
 ```
+
+A repo file that turns on the strict gate and pins one model:
+
+```yaml
+# .migite.yml
+gates:
+  commit:
+    policy: strict            # y refused while NEEDS FIXES / failing specs / offenses remain; Y overrides and is logged
+models:
+  roles:
+    think: claude-sonnet-5    # cheaper planner for this repo; everything else stays on the defaults
+  effort:
+    strong: xhigh             # --effort for every strong-tier call
+```
+
+Models are three tiers, `fast` / `standard` / `strong` (Haiku 4.5 / Sonnet 5 / Opus 5.5 by
+default), plus 28 per-call-site roles you can pin individually. Full reference, every key, and
+five ready-made recipes: [docs/configuration.md](./docs/configuration.md).
 
 ---
 
-<a id="usage"></a>
-## Usage
+<a id="requirements"></a>
+## Requirements and portability
 
-```bash
-# Plain task description
-migite "add PDF export to invoices"
+| Needs | Why |
+|-------|-----|
+| `claude` (Claude Code CLI), logged in | Every model call. Auth is shared; no API key |
+| `git` | Branch detection, diff scoping, base-branch resolution |
+| Python 3.11+ with `langgraph` | The planning, review, explore, audit, blueprint, and PR-review agents |
+| `bundle` | Only for the `rails` stack (rubocop + rspec). Not needed for `generic` |
+| PyYAML | Only if you use `.yml` config files. `.json` works without it |
 
-# Atlassian URL — ticket key extracted automatically
-migite "https://yourcompany.atlassian.net/browse/<jira-ticket-id>"
+Runs on **macOS and Linux** with bash 4+. Notifications use `osascript` or `notify-send` when
+present and are skipped otherwise. tmux is optional: inside tmux, agents and interactive phases
+open in split panes; outside, they run inline. Python is resolved as `MIGITE_PYTHON` if set, else
+`python3` if it actually runs (an asdf shim with no version pinned is detected and skipped), else
+a fallback path. The vault is plain markdown at `~/dev-log` by default; point `vault.base` at an
+Obsidian vault if you want the `[[wikilinks]]` to resolve.
 
-# Jira key directly
-migite --jira <jira-ticket-id>
-
-# Pre-specify type to skip the interactive prompt
-migite --jira <jira-ticket-id> --type feature
-migite "fix N+1 on district index" --type bug
-
-# Audit mode — feed a migite-audit report directly into planning
-migite --audit ~/dev-log/Work/my-repo/audit-2026-08-11.md
-
-# Audit mode + Jira
-migite --audit ./audit.md --jira <jira-ticket-id>
-
-# Pre-written intake from migite-explore or migite-blueprint
-migite --intake ./exploration-agent-agnostic-2026-08-18/intake-01-extract-provider-adapter.md
-
-# Same thing — a positional .md file is auto-detected as an intake
-migite ./intake-01-foundation.md
-
-# Blueprint context — inject a migite-blueprint output into planning
-migite --jira <jira-ticket-id> --blueprint ./output/blueprint.md
-
-# Staged implementation — checkpoint gate between plan scope layers
-migite "add billing API" --staged
-migite --jira <jira-ticket-id> --staged
-
-# Amend an already-implemented task with post-implementation feedback
-migite --amend "reviewer says the service must be idempotent on retry"
-migite --amend-file ./qa-notes.md
-
-# Attach reference material the plan should ground itself in (repeatable) —
-# folded into task.md as plain text, since migite-plan's Claude calls are
-# headless and can't open a path mentioned in the intake themselves
-migite --jira <jira-ticket-id> --type spike --attach ~/Downloads/data-map.csv
-
-# Non-Rails / no-Gemfile repo — auto-detects as the generic stack (no
-# rubocop/rspec, plan+review still run). --stack forces it explicitly, e.g.
-# on a monorepo where auto-detection would otherwise pick rails.
-migite "add a health-check endpoint" --stack generic
-
-# Health check — read-only, mutates nothing. Tool resolution, scratchpad/vault
-# sync drift, orphaned sentinels. Exits non-zero if anything's found.
-migite doctor
-migite doctor --repo ~/Code/some-other-repo
-```
-
-<a id="type-values"></a>
-### `--type` values
-
-| Value | When to use |
-|-------|-------------|
-| `feature` | New behaviour, new endpoint, new model |
-| `bug` | Fix a regression or reported defect |
-| `refactor` | Internal restructure, no behaviour change |
-| `spike` | Investigation or proof of concept |
-| `config` | Infrastructure, environment, or gem changes |
-
-<a id="stack-values"></a>
-### `--stack` values
-
-| Value | When it's used |
-|-------|----------------|
-| `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down. Runs rubocop/rspec via `bundle_exec`. |
-| `generic` | Auto-detected fallback for any repo with no recognized stack. Skips rubocop/rspec/`bundle` entirely; plan and review still run against the diff using general engineering judgment, with generic (language-agnostic) explore-area globs instead of Rails' MVC split. |
-
-Pass `--stack <value>` to override auto-detection. Stacks are registered in `STACK_PROFILES`
-(`migite.d/helpers.sh`); the [Roadmap](#roadmap) covers making them data-driven so `node`,
-`python`, etc. can be added without bash.
-
-For amend mode, intake mode, blueprint mode, audit mode, the full phase-by-phase breakdown, output files, the commit gate, the Testing Plan requirement, and resuming a run, see **[docs/migite.md](./docs/migite.md)**.
+Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down; anything else is
+`generic`, which runs the whole pipeline minus lint and tests. See
+[`--stack`](./docs/migite.md#stack-values).
 
 ---
 
 <a id="documentation"></a>
 ## Documentation
 
-| Doc | Covers |
-|-----|--------|
-| [docs/migite.md](./docs/migite.md) | `migite` usage modes (amend/intake/blueprint/audit), all phases, active memory injection, tmux integration, output files, the commit gate banner, the Testing Plan requirement, resuming a run |
-| [docs/configuration.md](./docs/configuration.md) | `.migite.yml` / `~/.config/migite/config.yml`: precedence, every key, model roles, strict gate, env-var mapping |
+| Doc | Read it when |
+|-----|--------------|
+| [docs/getting-started.md](./docs/getting-started.md) | Installing on macOS or Linux, verifying with `doctor`, a full first run with every file it produces |
+| [docs/migite.md](./docs/migite.md) | The command-line reference and the run modes: amend, intake, blueprint, audit, staged; resuming a run |
+| [docs/phases.md](./docs/phases.md) | Phase by phase: what each step calls, every gate key, which files get linted and tested, memory injection, tmux |
+| [docs/outputs.md](./docs/outputs.md) | Every file a run writes, the commit-gate banner, the testing-plan requirement |
+| [docs/configuration.md](./docs/configuration.md) | You are writing a `.migite.yml`: every key, model roles and effort, strict gate, recipes |
 | [docs/standalone-tools.md](./docs/standalone-tools.md) | `migite-blueprint`, `migite-explore`, `migite-audit`, `migite-pr-review` |
-| [docs/internals.md](./docs/internals.md) | The internal `migite-plan` / `migite-review` LangGraph scripts `migite` calls directly |
-| [docs/vault-structure.md](./docs/vault-structure.md) | Full `~/dev-log/` directory tree and org resolution |
-| [docs/troubleshooting.md](./docs/troubleshooting.md) | Permission failures, tooling preflight, review loops |
-
----
-
-<a id="faq"></a>
-## FAQ
-
-**Does `--jira` always open the intake editor?**
-No. It opens `$EDITOR` on the template only on a first run with no existing intake. It silently reuses an existing `intake.md` for that ticket's slug when resuming, and skips the editor entirely in `--intake`/`--audit` mode (just a `[y/e/q]` confirm prompt instead).
-
-**Does `--jira` fetch the ticket's content automatically?**
-Yes, for planning. `plan.sh` fetches the ticket (title, type, priority, status, description, acceptance criteria) via the Atlassian MCP before `migite-plan` runs, caches it to `jira-context.md`, and feeds it into plan synthesis and the explorers — the one call in the pipeline granted tool access, scoped to just the two read-only Jira-lookup tools. It still doesn't get injected into the intake template's own `Title`/`Jira` fields (those are still just slugging/labeling, filled with the ticket key/link as before) — the fetched content flows straight into planning instead. If the fetch fails (MCP not configured/authenticated, wrong key, no access), planning proceeds without it, same as a missing knowledge.md/audit/blueprint.
-
-**Why do the planning explorers only read a handful of files instead of the whole codebase?**
-Cost and context budget — each of the 7 parallel Haiku explorers is capped at 14 files / 14,000 chars. They're not meant to be exhaustive; they exist to ground the plan in real file/method names before Phase 2 (an interactive session with full Read/Grep/Edit access) does the actual deep exploration during implementation.
-
-**Why does an explorer check `git diff <base_branch>` before any code has been written?**
-On a fresh branch it's empty and changes nothing. It matters when resuming a plan, running `--amend`, or if you'd already hand-edited files before invoking `migite` — in those cases, already-changed files are the strongest relevance signal and are always read first.
-
-**How are the remaining files ranked when there's no diff to fall back to?**
-By intake-keyword hits — weighted 5x for a match in the file's path (deliberate naming is a stronger signal) plus 1x per keyword occurrence found in the file's content, so relevant files with generic names still surface.
-
-**Does migite commit for me?**
-No — it never runs `git commit` at any point, including at the commit gate's `y` (approve). That just advances to Phase 3.5; the actual commit is always yours to make. See [The commit gate banner](./docs/migite.md#commit-gate-banner).
-
-**Do I need a separate Anthropic API key?**
-No. Every phase shells out to the `claude` CLI, which shares your existing Claude Code auth — see [Requirements](#requirements).
-
-**Does migite work on non-Ruby/Rails projects?**
-Partly. Any repo without a `Gemfile` auto-detects as the `generic` stack: plan, implement, review, knowledge capture, and the PR description all run, but rubocop/rspec (and the auto-heal loop that depends on them) are skipped, and the planner's explorers use language-agnostic globs instead of the Rails MVC split. What's missing is running the *equivalent* toolchain for other stacks (`npm run lint`/`jest`, `ruff`/`pytest`, ...) — see [Roadmap](#roadmap). `migite-explore` is fully language-agnostic (it discovers files via `git ls-files`), and `migite-blueprint` infers/accepts any stack; `migite-audit` and `migite-pr-review` are still Rails-specific in their checklists.
-
-**Can I resume a run if I close the terminal or a phase fails partway through?**
-Yes — just re-run the same `migite --jira <ticket>` (or same task/intake) command. It picks up from whatever already exists: an existing `intake.md` is reused with no editor, an existing `plan.md` offers `[u]se existing` or `[r]edo`. See [Resuming a run](./docs/migite.md#resuming-a-run).
-
-**Does a brand-new file I haven't `git add`ed get linted and tested?**
-Yes. Every phase gets its file list from the shared `changed_*_files` helpers, which union `git diff <base branch>` with `git ls-files --others --exclude-standard`, so untracked new files are included (gitignored ones are not). The one gap: the reviewer's diff still comes from plain `git diff`, so a new file's content reaches `migite-review` only once staged. See [Which files get linted and tested](./docs/migite.md#lint-test-selection).
-
-**Why does Phase 3 re-run rubocop/rspec when the Phase 2.5 auto-heal loop already got them passing?**
-The heal loop's job is to deliver clean input to the reviewer, not to replace the review — Phase 3 always runs its own authoritative pass regardless of heal-loop outcome, so a stale or partial heal never silently reaches the commit gate.
+| [docs/internals.md](./docs/internals.md) | Repository layout, the agent scripts' CLIs, `plan.json` / `review.json` / usage ledger with examples |
+| [docs/vault-structure.md](./docs/vault-structure.md) | Where every file lands in the vault and how the org folder is chosen |
+| [docs/troubleshooting.md](./docs/troubleshooting.md) | Permission failures, config errors, missing Python or PyYAML, review loops, nested Claude sessions |
+| [docs/faq.md](./docs/faq.md) | Does it commit? Does `--jira` fetch the ticket? Why only 14 files per explorer? |
+| [docs/glossary.md](./docs/glossary.md) | Intake, scratchpad, vault, gate, envelope, ledger, role, tier |
 
 ---
 
 <a id="roadmap"></a>
 ## Roadmap
 
-Not yet built, roughly in the order they're likely to land:
+Roughly in the order they are likely to land:
 
-- **Meter interactive sessions too.** Every headless call is now recorded in the usage ledger and summarised in `usage.json` at exit, but the interactive phases (implement, gate fixes, PR description) still aren't — the CLI only emits usage in `--print` mode. Options: parse the session transcript, or run implementation headlessly with a structured hand-off.
-- **Stack profiles as data, with real toolchains.** `migite` already detects `rails` vs `generic` (see [`--stack` values](#stack-values)), and `generic` runs the whole pipeline minus lint/test. The next step is describing a stack as data — detect rule, lint, autofix, test, test-glob, explorer areas — so `node` (`npm run lint`/`jest`), `python` (`ruff`/`pytest`), `go` (`go vet`/`go test`) become config blocks rather than new bash function pairs, and `migite-audit`/`migite-pr-review` can drop their Rails-only checklists.
-- **Support AI agents other than Claude.** Right now every phase shells out to `claude`. Making the agent backend pluggable (e.g. Codex, opencode) would decouple the orchestration logic (phases, gates, vault, resolvers) from any one CLI.
-- **One-line installer.** Replace the manual clone-and-symlink dance in [Installation](#installation) with a script that does it in one command.
-- **CI hardening.** `.github/workflows/ci.yml` runs the Python unit tests, the resolver self-test, the bash suite (against the fake `claude`), and shellcheck at error severity on every push. Next: promote shellcheck warnings to blocking once triaged, and add a smoke run of `migite-plan`/`migite-review` against the fake CLI.
-- **Stack profiles in the config file.** `.migite.yml` now covers models, gates, permissions, heal, prompt/template overrides, budget and UI (see [docs/configuration.md](./docs/configuration.md)); `stack:` can only pick between the two bash-registered profiles. The remaining step is a `stacks:` block describing detect/lint/autofix/test/globs as data.
+- **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
+- **Run manifest and `--yes`.** A `run.json` at every phase boundary so a run can resume from a recorded state, and a non-interactive mode so migite can run from CI or from another agent.
+- **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
+- **Support agents other than Claude.** Every call goes through one module now; a backend adapter would decouple the orchestration from the CLI.
+- **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
+- **One-line installer** to replace the clone-and-symlink block above.

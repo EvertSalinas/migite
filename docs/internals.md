@@ -1,4 +1,71 @@
-# Internal LangGraph scripts (called by migite)
+# Internals
+
+Repository layout, the two agent scripts `migite` calls directly, and the machine-readable
+envelopes. For the phase-by-phase behaviour see [migite.md](./migite.md).
+
+## Contents
+
+- [Repository layout](#layout)
+- [How the bash spine and the agents talk](#spine)
+- [`migite-plan`](#internal-migite-plan)
+- [`migite-review`](#internal-migite-review)
+- [Machine-readable envelopes and the usage ledger](#machine-readable)
+
+<a id="layout"></a>
+## Repository layout
+
+```
+migite/                       ← wherever you clone this repo
+├── migite                    ← entrypoint (bash): config load, arg parsing, phase sequencing, EXIT trap
+├── migite.d/                 ← phase fragments sourced by migite, sharing its variables
+│   ├── helpers.sh            ← output, claude_cmd/claude_print, changed-file helpers, stack profiles, sync, gate banner
+│   ├── config.sh             ← load_migite_config, cfg / cfg_model / cfg_model_flags / prompt_path, use_tmux, `migite config`
+│   ├── doctor.sh             ← `migite doctor`
+│   ├── amend.sh              ← --amend mode
+│   ├── plan.sh               ← Phase 1 (+ Jira fetch, plan gate) and Phase 1.5
+│   ├── implement.sh          ← Phase 2 (single or --staged) and the Phase 2.5 heal loop
+│   ├── review.sh             ← Phase 3, the commit gate, strict-policy blockers
+│   └── deliver.sh            ← Phases 3.5, 4, 4.5
+├── migite-plan               ← LangGraph planner (Python), called by Phase 1
+├── migite-review             ← LangGraph reviewer (Python), called by Phase 3
+├── migite-explore(.py)       ← standalone: initiative feasibility (bash wrapper + agent)
+├── migite-blueprint(.py)     ← standalone: new-project definition
+├── migite-audit(.py)         ← standalone: codebase audit
+├── migite-pr-review(.py)     ← standalone: review a branch
+├── migite_claude.py          ← the one `claude --print` wrapper: JSON envelope, --json-schema, --effort, usage ledger
+├── migite_config.py          ← layered config resolver; the ONLY file that names a model id
+├── migite_paths.py           ← vault path resolver: org detection, base branch, slugify, run-dir lookup
+├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
+├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
+├── tests/                    ← run.sh (bash suite), test_*.py (unittest), fake-claude (stand-in CLI), fixtures/
+├── docs/                     ← this directory
+├── .github/workflows/ci.yml  ← Python tests, bash suite, shellcheck
+└── migite-improvements.md    ← the self-improvement log, appended by Phase 4.5
+```
+
+`~/.local/bin/` holds symlinks to every executable and to the three `migite_*.py` modules (the
+agents import them from the directory they are launched from). `migite.d/`, `prompts/`, and
+`templates/` are not symlinked: `migite` resolves its real path through the symlink and finds
+them beside itself.
+
+<a id="spine"></a>
+## How the bash spine and the agents talk
+
+- **Arguments in, files out.** `migite` passes paths (intake, outputs, sentinel, logs) and a few
+  scalars (base branch, stack, task type) to each agent on the command line. The agent writes its
+  documents and its JSON envelope, then touches the sentinel. Bash treats a missing sentinel as
+  failure rather than trusting exit codes through a tmux pane.
+- **Config is loaded on both sides.** Bash evals `migite_config.py env`; each agent calls
+  `migite_config.load(repo_root)` itself. Both see the same layered result, so the agents behave
+  identically when run by hand.
+- **One model-call path.** Bash's `claude_print` and the agents' `call_claude` wrappers both end
+  in `migite_claude.py`, which always requests the JSON envelope and appends to the usage ledger
+  named by `$MIGITE_USAGE_LEDGER`. tmux panes inherit the tmux server's environment, so the
+  wrapper scripts re-export that variable.
+- **Gemfile one level down.** `migite` always `cd`s to the repo root, but Bundler only searches
+  upward for a `Gemfile`. `detect_stack` finds an app directory one level down and every
+  `bundle_exec` runs from it, with `strip_app_prefix` rewriting the repo-relative paths `git diff`
+  produces. `resolve_path` absolutizes user-supplied file arguments before the `cd`.
 
 These are invoked by `migite` via `spawn_langgraph()`. They can also be tested standalone.
 
@@ -118,6 +185,46 @@ through untouched with zero usage, so nothing downstream changes. Note the
 Both envelopes carry `schema_version`, `tool`, `generated_at`, `base_branch`, and `outputs` paths.
 Bash reads them with `json_field <file> <dotted.key>`; mirror them to the vault with `sync_json`
 (never `sync_artifact`, whose frontmatter stamp would corrupt JSON).
+
+A `plan.json` from a run whose critic found one warning and whose refine went through cleanly:
+
+```json
+{
+  "schema_version": 1,
+  "tool": "migite-plan",
+  "generated_at": "2026-09-22T14:21:33+00:00",
+  "base_branch": "main",
+  "stack": "rails",
+  "task_type": "feature",
+  "critic": { "clean": false, "critical": 0, "warning": 1, "note": 1 },
+  "open_questions": 2,
+  "plan_headings": ["## Summary", "## Scope", "## Approach", "## Test plan", "## Performance considerations",
+                    "## cURL examples", "## Risks", "## Out of scope", "## Open questions"],
+  "synth_retries": 0,
+  "refine_status": "applied",
+  "explorers": { "count": 7, "failed": [] },
+  "outputs": { "plan": ".../scratchpad/bb-1234/plan.md", "critic": ".../architecture-critic.md", "testing_plan": ".../testing-plan.md" },
+  "usage": { "calls": 11, "failed": 0, "cost_usd": 2.31, "duration_ms": 254100,
+             "input_tokens": 1820, "output_tokens": 12904, "cache_read_input_tokens": 236240, "cache_creation_input_tokens": 23624 }
+}
+```
+
+Reading one field from bash and from Python:
+
+```bash
+json_field scratchpad/bb-1234/review.json verdict            # → needs_fixes
+json_field scratchpad/bb-1234/review.json counts.critical    # → 1
+json_field scratchpad/bb-1234/plan.json critic.clean         # → false
+```
+
+```python
+import json
+review = json.load(open("scratchpad/bb-1234/review.json"))
+blocking = [f for f in review["findings"] if f["severity"] == "critical"]
+```
+
+A `review.json` example, including `findings[]`, is in
+[getting-started.md](./getting-started.md#outputs).
 
 **`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
 report too) and summarises the ledger by model and by tool. Interactive sessions (`run_phase`:
