@@ -1,30 +1,23 @@
 #!/usr/bin/env bash
-# tests/run.sh — dependency-free test runner for migite.d/helpers.sh
+# tests/run.sh — dependency-free test runner for the bash library (lib/*.sh)
 #
 # Discovers tests/*_test.sh, sources each in turn, and expects them to call
-# `check` for every assertion. helpers.sh is sourced standalone (no set -e
-# side effects — see its own header comment), so functions under test run
-# exactly as migite itself would call them.
+# `check` for every assertion. The lib files are sourced standalone (no set -e
+# side effects), so functions under test run exactly as migite itself would
+# call them.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Same Python resolution as the migite entrypoint: an explicit MIGITE_PYTHON
-# wins; else `python3` only if it actually runs (an asdf shim exists on PATH
-# even with no version selected for this directory — migite's own repo has
-# none — and would fail with "No version is set"); else the asdf fallback.
-# Tests that need Python skip with a note if none of these work.
-if [[ -z "${MIGITE_PYTHON:-}" ]]; then
-  if command -v python3 &>/dev/null && python3 --version &>/dev/null; then
-    MIGITE_PYTHON="$(command -v python3)"
-  else
-    MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
-  fi
-fi
+export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite/gateway.py resolve it from here
+# shellcheck source=../lib/common.sh
+source "$REPO_ROOT/lib/common.sh"
+# Same Python resolution as the migite entrypoint (lib/common.sh). Tests that
+# need Python skip with a note if the result doesn't run.
+migite_resolve_python
 export MIGITE_PYTHON
-export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_call.py resolve it from here
 # Every ticket lookup goes to the fake Atlassian CLI, never a real (logged-in) acli on PATH.
 export MIGITE_ACLI="$SCRIPT_DIR/fake-acli"
 DATE="${DATE:-$(date +%Y-%m-%d)}"
@@ -36,10 +29,12 @@ export LOG_DIR
 # Never let a test run append to a real ledger; tests that need one set their own.
 unset MIGITE_USAGE_LEDGER
 
-# shellcheck source=../migite.d/helpers.sh
-source "$REPO_ROOT/migite.d/helpers.sh"
-# shellcheck source=../migite.d/config.sh
-source "$REPO_ROOT/migite.d/config.sh"
+# Every lib file except doctor.sh (a command, not helpers) and the phases.
+for _lib in config stack agent vault intake gate; do
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/lib/$_lib.sh"
+done
+unset _lib
 
 CLEANUP_DIRS=()
 # Results go through a FILE, not shell variables: test files may run blocks in

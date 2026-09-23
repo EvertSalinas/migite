@@ -42,12 +42,7 @@ Five minutes from clone to first run. The detailed version, with macOS and Linux
 # 1. Clone and put the commands on your PATH
 git clone <this-repo> ~/Code/migite
 MIGITE_SRC="$HOME/Code/migite"; BIN="$HOME/.local/bin"; mkdir -p "$BIN"
-for f in migite migite-plan migite-review migite-blueprint migite-blueprint.py \
-         migite-explore migite-explore.py migite-audit migite-audit.py \
-         migite-pr-review migite-pr-review.py migite-ticket \
-         migite_paths.py migite_call.py migite_config.py migite_agent.py; do
-  ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
-done
+for f in "$MIGITE_SRC"/bin/*; do ln -sf "$f" "$BIN/$(basename "$f")"; done
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 
 # 2. Python deps (3.11+). PyYAML is optional: only needed for YAML config files.

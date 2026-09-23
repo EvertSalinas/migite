@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# migite — Agentic dev workflow orchestrator
+# Usage: migite "task description"
+#        migite --jira PROJ-123
+#
+# ── About the name ────────────────────────────────────────────────────────────
+# Migite (右手, みぎて) is the Japanese word for "right hand". As in right-hand
+# man — the trusted assistant who handles the groundwork so you can focus on
+# what matters. That's exactly what this workflow does: it plans before you
+# touch a file, gates before you implement, reviews before you commit, and
+# captures knowledge so nothing gets lost. It doesn't replace your judgment —
+# it extends your reach, always one step ahead, always at your side.
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# This file is the entrypoint: config, arg parsing, and phase sequencing.
+# The shared helpers live in lib/ (one file per concern) and the phases in
+# lib/phases/, all sourced below — they share this script's variables
+# (TASK_DIR, PLAN_FILE, REVIEW_FILE, ...) directly rather than passing them as
+# arguments, so read a phase file alongside this one.
+
+set -euo pipefail
+
+# ── Config ────────────────────────────────────────────────────────────────────
+# Bootstrap defaults only. The real values come from load_migite_config
+# (lib/config.sh) once the repo root is known: flags > env > $MIGITE_CONFIG
+# > <repo>/.migite.yml > ~/.config/migite/config.yml > defaults. `migite config`
+# prints the effective result; `migite config --init` writes a starter file.
+DEV_LOG_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
+LOG_DIR="${LOG_DIR:-$HOME/.dev-workflow/logs}"
+DATE=$(date +%Y-%m-%d)
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
+# The checkout this script lives in (one level up from bin/), through the
+# ~/.local/bin symlink, so lib/ and the Python modules are found regardless of
+# where it was invoked from.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
+unset _self _link
+# shellcheck source=../lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+# (require_python runs after `migite doctor` is dispatched: the health check
+# must run even when Python is missing — that's what it's for.)
+# Phase prompts ship in this repo's prompts/ directory (plan.md, implement.md,
+# review.md, architecture_critic.md) — migite-plan and migite-review resolve
+# their own the same way, and `prompts.dir` in .migite.yml can override any of
+# them per project. They used to live in ~/.claude/commands/ and were read with
+# "if exists else ''", so a fresh machine silently ran with no plan or review
+# format at all. IMPLEMENT_CMD_PATH is resolved after the config is loaded.
+IMPLEMENT_CMD_PATH=""
+
+# ── Library and phases ────────────────────────────────────────────────────────
+source "$MIGITE_HOME/lib/config.sh"
+source "$MIGITE_HOME/lib/stack.sh"
+source "$MIGITE_HOME/lib/agent.sh"
+source "$MIGITE_HOME/lib/vault.sh"
+source "$MIGITE_HOME/lib/intake.sh"
+source "$MIGITE_HOME/lib/gate.sh"
+source "$MIGITE_HOME/lib/doctor.sh"
+source "$MIGITE_HOME/lib/phases/amend.sh"
+source "$MIGITE_HOME/lib/phases/plan.sh"
+source "$MIGITE_HOME/lib/phases/implement.sh"
+source "$MIGITE_HOME/lib/phases/review.sh"
+source "$MIGITE_HOME/lib/phases/deliver.sh"
+
+# `migite doctor [--repo <path>]` — dispatched before Setup (require_cmd, arg
+# parsing) since it must run even when those would fail (no Gemfile, missing
+# agent CLI or `bundle`, etc.) - that's the whole point of a health check.
+if [[ "${1:-}" == "doctor" ]]; then
+  shift
+  run_doctor "$@"
+  exit $?
+fi
+
+# `migite config [--init | --validate]` — show/create/check the layered config.
+if [[ "${1:-}" == "config" ]]; then
+  shift
+  run_config_command "$@"
+  exit $?
+fi
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+require_python
+require_cmd git
+# The agent CLI (claude / cursor-agent / opencode) is required after the config is
+# loaded below, since agent.backend decides which one.
+# `bundle` is only required for the `rails` stack — checked after detect_stack,
+# once we know which stack this repo actually is.
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+TASK=""
+JIRA_TICKET=""
+JIRA_URL=""
+TASK_TYPE=""
+AUDIT_FILE=""
+BLUEPRINT_FILE=""
+INTAKE_FILE_ARG=""
+STAGED=false
+AMEND_MODE=false
+AMEND_FEEDBACK=""
+AMEND_FEEDBACK_FILE=""
+STACK_OVERRIDE=""
+ATTACH_FILES=()
+
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    --audit)
+      AUDIT_FILE="${2:-}"
+      [[ -z "$AUDIT_FILE" ]] && error "Provide an audit file path after --audit"
+      [[ ! -f "$AUDIT_FILE" ]] && error "Audit file not found: $AUDIT_FILE"
+      AUDIT_FILE="$(resolve_path "$AUDIT_FILE")"
+      log "Audit context: $AUDIT_FILE"
+      shift 2
+      ;;
+    --blueprint)
+      BLUEPRINT_FILE="${2:-}"
+      [[ -z "$BLUEPRINT_FILE" ]] && error "Provide a blueprint file path after --blueprint"
+      [[ ! -f "$BLUEPRINT_FILE" ]] && error "Blueprint file not found: $BLUEPRINT_FILE"
+      BLUEPRINT_FILE="$(resolve_path "$BLUEPRINT_FILE")"
+      log "Blueprint context: $BLUEPRINT_FILE"
+      shift 2
+      ;;
+    --intake)
+      INTAKE_FILE_ARG="${2:-}"
+      [[ -z "$INTAKE_FILE_ARG" ]] && error "Provide an intake file path after --intake"
+      [[ ! -f "$INTAKE_FILE_ARG" ]] && error "Intake file not found: $INTAKE_FILE_ARG"
+      INTAKE_FILE_ARG="$(resolve_path "$INTAKE_FILE_ARG")"
+      log "Intake file: $INTAKE_FILE_ARG"
+      shift 2
+      ;;
+    --staged)
+      STAGED=true
+      shift
+      ;;
+    --amend)
+      AMEND_MODE=true
+      # Optional inline feedback — only consume $2 if it's not itself a flag
+      if [[ -n "${2:-}" && "$2" != --* ]]; then
+        AMEND_FEEDBACK="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --amend-file)
+      AMEND_MODE=true
+      AMEND_FEEDBACK_FILE="${2:-}"
+      [[ -z "$AMEND_FEEDBACK_FILE" ]] && error "Provide a file path after --amend-file"
+      [[ ! -f "$AMEND_FEEDBACK_FILE" ]] && error "Amend feedback file not found: $AMEND_FEEDBACK_FILE"
+      AMEND_FEEDBACK_FILE="$(resolve_path "$AMEND_FEEDBACK_FILE")"
+      shift 2
+      ;;
+    --jira)
+      [[ -z "${2:-}" ]] && error "Provide a Jira ticket key or URL after --jira"
+      # One parser for keys and browse URLs (migite/tickets.py), shared with the Python tools.
+      _ticket_vars="$(ticket_cmd parse --shell "$2")" || error "Not a Jira ticket key or ticket URL: $2"
+      eval "$_ticket_vars"; unset _ticket_vars
+      JIRA_TICKET="$TICKET_KEY"; JIRA_URL="$TICKET_URL"
+      [[ -n "$JIRA_URL" ]] && log "Extracted Jira key from URL: $JIRA_TICKET"
+      TASK="$JIRA_TICKET"
+      log "Jira mode: $JIRA_TICKET"
+      shift 2
+      ;;
+    --type)
+      TASK_TYPE="${2:-}"
+      case "$TASK_TYPE" in
+        feature|bug|refactor|spike|config) ;;
+        *) error "Invalid type '$TASK_TYPE'. Use: feature | bug | refactor | spike | config" ;;
+      esac
+      shift 2
+      ;;
+    --stack)
+      # Overrides auto-detection (lib/stack.sh's detect_stack) — for the
+      # ambiguous/monorepo case, or to force the generic (no lint/test
+      # tooling) path on a repo that would otherwise auto-detect as rails.
+      STACK_OVERRIDE="${2:-}"
+      [[ -z "$STACK_OVERRIDE" ]] && error "Provide a stack name after --stack"
+      shift 2
+      ;;
+    --attach)
+      # Repeatable. Each file's raw content is folded into task.md (see
+      # run_plan in plan.sh) so migite-plan sees it as plain prompt text —
+      # its agent calls are headless, with no permission flag passed by default
+      # (permissions.headless: none), so a referenced path in the intake can
+      # never be opened by the model itself.
+      ATTACH_ARG="${2:-}"
+      [[ -z "$ATTACH_ARG" ]] && error "Provide a file path after --attach"
+      [[ ! -f "$ATTACH_ARG" ]] && error "Attachment file not found: $ATTACH_ARG"
+      ATTACH_ARG="$(resolve_path "$ATTACH_ARG")"
+      ATTACH_FILES+=("$ATTACH_ARG")
+      log "Attachment: $ATTACH_ARG"
+      shift 2
+      ;;
+    *)
+      # An existing .md file is auto-detected as an intake, same as --intake.
+      # Anything else — plain text, or a path that doesn't exist — stays a task description.
+      if [[ -f "${1:-}" && "${1:-}" == *.md ]]; then
+        INTAKE_FILE_ARG="$(resolve_path "$1")"
+        log "Intake file (positional): $INTAKE_FILE_ARG"
+      else
+        TASK="${1:-}"
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Audit mode: when --audit is provided without a task, auto-set a slug so dirs have a readable name
+if [[ -n "$AUDIT_FILE" && -z "$TASK" && -z "$JIRA_TICKET" ]]; then
+  TASK="audit-remediation"
+fi
+
+# A ticket browse URL passed as the plain task argument means --jira
+if [[ -z "$JIRA_TICKET" && -n "$TASK" && "$TASK" =~ ^https?://.*/browse/ ]]; then
+  if _ticket_vars="$(ticket_cmd parse --shell "$TASK" 2>/dev/null)"; then
+    eval "$_ticket_vars"
+    JIRA_TICKET="$TICKET_KEY"; JIRA_URL="$TICKET_URL"
+    log "Extracted Jira key from URL: $JIRA_TICKET"
+    TASK="$JIRA_TICKET"
+  fi
+  unset _ticket_vars
+fi
+
+# ── Confirm we're in a git repo ───────────────────────────────────────────────
+git rev-parse --is-inside-work-tree &>/dev/null || error "Not inside a git repo"
+BRANCH=$(git branch --show-current)
+log "Current branch: $BRANCH"
+
+# ── Detect repo + org ─────────────────────────────────────────────────────────
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_NAME=$(basename "$REPO_ROOT")
+
+# git diff and other later commands assume cwd == REPO_ROOT. Anchor it here so
+# migite behaves the same whether invoked from the repo root or a subdirectory
+# (e.g. a monorepo's app/ dir) — otherwise git diff's repo-root-relative paths
+# get re-resolved against the wrong cwd.
+cd "$REPO_ROOT"
+
+# Org is needed before the config is applied: prompts.dir / templates.dir may
+# contain {org}, and IMPLEMENT_CMD_PATH is resolved right after loading.
+ORG="$("$MIGITE_PYTHON" -m migite.paths detect-org --repo-root "$REPO_ROOT")"
+
+# ── Load configuration (needs REPO_ROOT for <repo>/.migite.yml) ──────────────
+load_migite_config "$REPO_ROOT"
+mkdir -p "$LOG_DIR"
+# Per-run usage ledger: one JSONL line per headless agent call
+# (tokens, cost, duration, model, label). Written by the gateway (migite/gateway.py)
+# for both the Python agents and bash's agent_ask; summarised at exit by
+# print_usage_summary into <scratchpad>/usage.json. Exported so the agents
+# (and the tmux wrapper scripts, which re-export it) inherit it.
+MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
+export MIGITE_USAGE_LEDGER
+require_cmd "$(agent_binary)"
+log "Agent: $(agent_field display_name) ($(agent_binary))"
+# --stack on the command line beats `stack:` in the config, which beats auto-detection.
+[[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
+IMPLEMENT_CMD_PATH="$(prompt_path implement)"
+for _prompt in plan implement review architecture_critic; do
+  [[ -f "$(prompt_path "$_prompt")" ]] || error "Prompt file missing: $(prompt_path "$_prompt") — is the migite checkout intact?"
+done
+unset _prompt
+# Print what the run spent on the way out — success, gate abort, or error alike.
+[[ "$(cfg budget.print_summary true)" == "true" ]] && trap print_usage_summary EXIT
+
+# Detects the project's stack ($STACK) and sets $APP_ROOT/$APP_REL_PATH — the
+# directory holding the Gemfile, which isn't always $REPO_ROOT (e.g. a
+# rails-app/ subdirectory one level down). bundle exec always runs from
+# $APP_ROOT via the bundle_exec/run_rubocop_check/run_rspec_check helpers,
+# regardless of where migite itself was invoked from.
+detect_stack
+log "Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+[[ "$STACK" == "rails" ]] && require_cmd bundle
+
+log "Repo: $ORG/$REPO_NAME"
+
+# ── Detect base branch ────────────────────────────────────────────────────────
+BASE_BRANCH="$(detect_base_branch)"
+log "Base branch: $BASE_BRANCH"
+
+if [[ "$AMEND_MODE" == "true" ]]; then
+  # ── Amend mode: locate the already-implemented task, scope a delta ──────────
+  run_amend_mode
+else
+  run_plan
+  run_tdd
+fi
+
+run_implement
+run_review
+run_deliver
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
+success "Workflow complete."
+echo ""
+echo -e "  Scratchpad: ${CYAN}$SCRATCHPAD_DIR${RESET}"
+echo -e "    intake.md          → task intake"
+echo -e "    plan.md            → planning output"
+echo -e "    implementation.md  → implementation notes"
+echo -e "    review.md          → review verdict"
+echo -e "    pr-description.md  → ready to paste into GitHub"
+echo -e "    plan.json / review.json / usage.json → machine-readable envelopes"
+echo -e "  Vault (read-only mirror): ${CYAN}$TASK_DIR${RESET}"
+echo ""

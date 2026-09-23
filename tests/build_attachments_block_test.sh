@@ -1,4 +1,4 @@
-# tests/build_attachments_block_test.sh — helpers.sh:build_attachments_block
+# tests/build_attachments_block_test.sh — lib/intake.sh:build_attachments_block
 #
 # ATTACH_FILES is unset in most callers until migite's --attach flag is used —
 # `${#ATTACH_FILES[@]:-0}` (an earlier version of the empty/unset guard) is

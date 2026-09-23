@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# migite-ticket - ticket references and ticket content, from the command line.
+#
+# Usage:
+#   migite-ticket BB-1234                      # fetch the ticket, print markdown
+#   migite-ticket https://acme.atlassian.net/browse/BB-1234 --out ticket.md
+#   migite-ticket fetch BB-1234 --source jira-acli
+#   migite-ticket sources [BB-1234]            # which source would be used here, and why
+#   migite-ticket parse <key-or-url>           # key, URL, and site as JSON
+#
+# The source comes from tracker.provider in .migite.yml (docs/tickets.md). The acli
+# source needs Atlassian's CLI, logged in once: acli jira auth login --web
+
+set -euo pipefail
+
+# The checkout this script lives in (one level up from bin/), through the
+# ~/.local/bin symlink, so lib/ and the Python modules are found regardless of
+# where it was invoked from.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
+unset _self _link
+# shellcheck source=../lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
+
+# The repo whose .migite.yml applies, when there is one.
+repo_args=()
+if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  repo_args=(--repo-root "$REPO_ROOT")
+fi
+
+case "${1:-}" in
+  ""|-h|--help)
+    sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0 ;;
+  parse|fetch|sources)
+    exec "$MIGITE_PYTHON" -m migite.tickets ${repo_args[@]+"${repo_args[@]}"} "$@" ;;
+  *)
+    exec "$MIGITE_PYTHON" -m migite.tickets ${repo_args[@]+"${repo_args[@]}"} fetch "$@" ;;
+esac

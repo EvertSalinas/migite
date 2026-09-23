@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import agents          # noqa: E402
-import migite_call     # noqa: E402
-import migite_config   # noqa: E402
+from migite import agents          # noqa: E402
+from migite import gateway     # noqa: E402
+from migite import config   # noqa: E402
 
 FAKES = ROOT / "tests"
 
@@ -198,69 +198,69 @@ class EndToEndTest(unittest.TestCase):
         self.ledger = str(Path(self.tmp.name) / "usage.jsonl")
         self.argv_log = str(Path(self.tmp.name) / "argv.log")
         os.environ["FAKE_AGENT_ARGV"] = self.argv_log
-        migite_config._CACHE.clear()
+        config._CACHE.clear()
 
     def tearDown(self):
         os.environ.clear(); os.environ.update(self._env)
-        migite_call.reset()
-        migite_config._CACHE.clear(); self.tmp.cleanup()
+        gateway.reset()
+        config._CACHE.clear(); self.tmp.cleanup()
 
     def cfg_for(self, backend, **env_extra):
-        env = {k: v for k, v in os.environ.items() if k not in migite_config.ENV_OVERRIDES}
+        env = {k: v for k, v in os.environ.items() if k not in config.ENV_OVERRIDES}
         env["MIGITE_AGENT"] = backend
         env.update(env_extra)
-        return migite_config.load(None, env=env, use_cache=False)
+        return config.load(None, env=env, use_cache=False)
 
     def test_cursor_degrades_schema_and_effort(self):
-        migite_call.configure_from(self.cfg_for("cursor"))
+        gateway.configure_from(self.cfg_for("cursor"))
         os.environ["FAKE_AGENT_MODE"] = "ok"
-        r = migite_call.call_agent("hello cursor", "verdict", label="t", tool="x", ledger=self.ledger,
+        r = gateway.call_agent("hello cursor", "verdict", label="t", tool="x", ledger=self.ledger,
                                    schema={"type": "object"}, effort="xhigh")
         self.assertTrue(r.text.startswith("cursor:hello cursor"))
         self.assertIsNone(r.structured)                                 # degraded: no structured output
         argv = Path(self.argv_log).read_text()
         self.assertIn("--trust", argv); self.assertNotIn("--effort", argv)
         self.assertNotIn("--json-schema", argv); self.assertNotIn("--model", argv)
-        rec = migite_call.read_ledger(self.ledger)[0]
+        rec = gateway.read_ledger(self.ledger)[0]
         self.assertTrue(rec["ok"]); self.assertEqual(rec["cost_usd"], 0.0); self.assertEqual(rec["duration_ms"], 842)
         os.environ["FAKE_AGENT_MODE"] = "error"
-        with self.assertRaises(migite_call.AgentError) as cm:
-            migite_call.call_agent("x", "verdict", ledger=self.ledger)
+        with self.assertRaises(gateway.AgentError) as cm:
+            gateway.call_agent("x", "verdict", ledger=self.ledger)
         self.assertIn("Not logged in", str(cm.exception))
 
     def test_opencode_usage_and_pinned_model(self):
         cfg = self.cfg_for("opencode")
         cfg._data["models"]["standard"] = "anthropic/claude-sonnet-4-5"
-        migite_call.configure_from(cfg)
+        gateway.configure_from(cfg)
         os.environ["FAKE_AGENT_MODE"] = "ok"
-        r = migite_call.call_agent("hello opencode", "knowledge", label="t", tool="x", ledger=self.ledger,
+        r = gateway.call_agent("hello opencode", "knowledge", label="t", tool="x", ledger=self.ledger,
                                    permission="bypassPermissions")
         self.assertTrue(r.text.startswith("opencode:hello opencode")); self.assertIn("second part", r.text)
         self.assertAlmostEqual(r.usage.cost_usd, 0.02); self.assertEqual(r.usage.input_tokens, 1500)
         self.assertEqual(r.usage.cache_read_input_tokens, 6000)
         self.assertIn("run --format json --auto --model anthropic/claude-sonnet-4-5", Path(self.argv_log).read_text())
         os.environ["FAKE_AGENT_MODE"] = "error"
-        with self.assertRaises(migite_call.AgentError):
-            migite_call.call_agent("x", "knowledge", ledger=self.ledger)
+        with self.assertRaises(gateway.AgentError):
+            gateway.call_agent("x", "knowledge", ledger=self.ledger)
 
     def test_headless_permission_comes_from_the_config(self):
-        migite_call.configure_from(self.cfg_for("cursor", MIGITE_PERMISSION_MODE="acceptEdits"))
+        gateway.configure_from(self.cfg_for("cursor", MIGITE_PERMISSION_MODE="acceptEdits"))
         os.environ["FAKE_AGENT_MODE"] = "ok"
-        migite_call.call_agent("x", "knowledge", ledger=self.ledger)
+        gateway.call_agent("x", "knowledge", ledger=self.ledger)
         self.assertIn("--force", Path(self.argv_log).read_text())      # edits → --force on cursor
 
     def test_scope_refused_before_the_cli_starts(self):
-        migite_call.configure_from(self.cfg_for("cursor"))
-        with self.assertRaises(migite_call.ScopeUnsupported):
-            migite_call.call_agent("x", "jira", scopes=("jira.read",), ledger=self.ledger)
+        gateway.configure_from(self.cfg_for("cursor"))
+        with self.assertRaises(gateway.ScopeUnsupported):
+            gateway.call_agent("x", "jira", scopes=("jira.read",), ledger=self.ledger)
         self.assertFalse(Path(self.argv_log).exists())
-        self.assertEqual(migite_call.read_ledger(self.ledger), [])
+        self.assertEqual(gateway.read_ledger(self.ledger), [])
 
     def test_large_prompt_becomes_a_pointer_file_for_arg_agents(self):
-        migite_call.configure_from(self.cfg_for("cursor"))
+        gateway.configure_from(self.cfg_for("cursor"))
         os.environ["FAKE_AGENT_MODE"] = "ok"
-        big = "x" * (migite_call.INLINE_MAX + 10)
-        r = migite_call.call_agent(big, "knowledge", ledger=self.ledger)
+        big = "x" * (gateway.INLINE_MAX + 10)
+        r = gateway.call_agent(big, "knowledge", ledger=self.ledger)
         argv = Path(self.argv_log).read_text()
         self.assertIn("Your task brief is in the file", argv)
         self.assertLess(len(argv), 2000)
@@ -269,14 +269,14 @@ class EndToEndTest(unittest.TestCase):
         self.assertFalse(Path(pointed).exists())                        # the temp file is cleaned up
 
     def test_supports_and_model_for_follow_the_agent(self):
-        migite_call.configure_from(self.cfg_for("claude"))
-        self.assertTrue(migite_call.supports("structured_output")); self.assertTrue(migite_call.supports("scope:jira.read"))
-        self.assertEqual(migite_call.model_for("critic"), "claude-opus-5-5")
-        migite_call.configure_from(self.cfg_for("opencode"))
-        self.assertFalse(migite_call.supports("structured_output")); self.assertTrue(migite_call.supports("usage"))
-        self.assertEqual(migite_call.model_for("critic"), "")           # no model until pinned
-        migite_call.configure_from(self.cfg_for("cursor"))
-        self.assertFalse(migite_call.supports("usage"))
+        gateway.configure_from(self.cfg_for("claude"))
+        self.assertTrue(gateway.supports("structured_output")); self.assertTrue(gateway.supports("scope:jira.read"))
+        self.assertEqual(gateway.model_for("critic"), "claude-opus-5-5")
+        gateway.configure_from(self.cfg_for("opencode"))
+        self.assertFalse(gateway.supports("structured_output")); self.assertTrue(gateway.supports("usage"))
+        self.assertEqual(gateway.model_for("critic"), "")           # no model until pinned
+        gateway.configure_from(self.cfg_for("cursor"))
+        self.assertFalse(gateway.supports("usage"))
 
     def test_model_defaults_per_agent(self):
         self.assertEqual(self.cfg_for("claude").model("critic"), "claude-opus-5-5")
@@ -284,11 +284,11 @@ class EndToEndTest(unittest.TestCase):
         pinned = self.cfg_for("cursor")
         pinned._data["models"]["strong"] = "gpt-5"
         self.assertEqual(pinned.model("critic"), "gpt-5")
-        self.assertEqual(migite_config.default_model("critic"), "claude-opus-5-5")
-        self.assertEqual(migite_config.default_model("critic", "cursor"), "")
+        self.assertEqual(config.default_model("critic"), "claude-opus-5-5")
+        self.assertEqual(config.default_model("critic", "cursor"), "")
 
     def test_unknown_backend_rejected(self):
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.cfg_for("copilot")
 
 

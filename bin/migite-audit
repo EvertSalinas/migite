@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# migite-audit — autonomous codebase audit
+#
+# Usage:
+#   migite-audit [--focus <area>] [--output <file>]
+#
+# Examples:
+#   migite-audit                    # full audit, writes to vault
+#   migite-audit --focus jobs       # audit only jobs layer
+#   migite-audit --output ./out.md  # write to specific file
+
+set -euo pipefail
+
+# The checkout this script lives in (one level up from bin/), through the
+# ~/.local/bin symlink, so lib/ and the Python modules are found regardless of
+# where it was invoked from.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
+unset _self _link
+# shellcheck source=../lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
+
+# ── Preflight ────────────────────────────────────────────────────────────────────
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+  echo "✘ Not inside a git repository." >&2
+  exit 1
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+require_langgraph
+
+# ── Run ──────────────────────────────────────────────────────────────────────────
+exec "$MIGITE_PYTHON" -m migite.tools.audit --repo-root "$REPO_ROOT" "$@"

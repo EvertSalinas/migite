@@ -22,7 +22,7 @@ fields are in [internals.md](./internals.md#machine-readable).
 <a id="scratchpad"></a>
 ### Scratchpad (`<repo-root>/scratchpad/<ticket>/`) — source of truth for the run
 
-Every phase reads and writes here directly. `sync_artifact()` (`migite.d/helpers.sh`) mirrors
+Every phase reads and writes here directly. `sync_artifact()` (`lib/vault.sh`) mirrors
 each file out to the vault immediately after every write, edit, refine, or redo, so the vault
 copy never lags behind.
 
@@ -58,7 +58,7 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
 A synced copy of every file above (same names, same paths under `$TASK_DIR`), meant for
 reading/browsing later — e.g. in Obsidian — not for resuming or working from directly. Safe to
 delete the scratchpad copy after merging; the vault mirror keeps the durable record.
-`knowledge.md` (one file per repo, not per-ticket) and `migite-improvements.md` (in the migite
+`knowledge.md` (one file per repo, not per-ticket) and `docs/improvements.md` (in the migite
 tool's own repo) are the exceptions — they live in the vault only, with no scratchpad copy.
 
 See [Vault structure](./vault-structure.md) for the full directory tree.
@@ -98,7 +98,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | Signal | Source |
 |--------|--------|
 | Tooling error | `tooling_failed()` matched either log: `No version is set for command`, `Bundler::GitError` / `not yet checked out`, or `0 examples` alongside a DB connection or load error — the tool never ran, so all results below are untrustworthy. Re-evaluated on every commit-gate re-check |
-| Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`helpers.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
+| Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`lib/gate.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |
 | Findings / Reason | From `review.json`: critical / warning / note counts and the one-line reason the verdict was decided. Only shown when the envelope exists (i.e. not after a hand-edit of `review.md`) |

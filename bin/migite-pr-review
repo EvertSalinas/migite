@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# migite-pr-review — autonomous PR reviewer
+#
+# Usage:
+#   migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--jira <key>] [--output <file>]
+#
+# Examples:
+#   migite-pr-review --branch feature/<jira-ticket-id>-add-pdf-export
+#   migite-pr-review --branch feature/<jira-ticket-id> --jira <jira-ticket-id>
+#   migite-pr-review --branch feature/<jira-ticket-id> --jira https://yourcompany.atlassian.net/browse/<jira-ticket-id>
+#   migite-pr-review --branch alex/fix-n-plus-one --base develop
+#   migite-pr-review --branch feature/big-refactor --skip-tests
+
+set -euo pipefail
+
+# The checkout this script lives in (one level up from bin/), through the
+# ~/.local/bin symlink, so lib/ and the Python modules are found regardless of
+# where it was invoked from.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
+unset _self _link
+# shellcheck source=../lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
+
+# ── Preflight ────────────────────────────────────────────────────────────────────
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+  echo "✘ Not inside a git repository." >&2
+  exit 1
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+require_langgraph
+
+# ── Require --branch ─────────────────────────────────────────────────────────────
+if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
+  echo "Usage: migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--output <file>]" >&2
+  exit 1
+fi
+
+# ── Run ──────────────────────────────────────────────────────────────────────────
+exec "$MIGITE_PYTHON" -m migite.tools.pr_review --repo-root "$REPO_ROOT" "$@"

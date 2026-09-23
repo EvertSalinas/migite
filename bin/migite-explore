@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# migite-explore - initiative feasibility exploration
+#
+# Explores a large initiative against an existing codebase WITHOUT implementing
+# anything. Produces:
+#   - exploration.md      - feasibility document with a verdict and effort estimates
+#   - challenges.md       - adversarial review of that document
+#   - intake-NN-<slug>.md - one migite intake per workstream (with --intakes)
+#
+# Usage:
+#   migite-explore "make migite agent-agnostic across claude code and opencode"
+#   migite-explore --brief path/to/brief.md
+#   migite-explore --brief brief.md --name agent-agnostic --intakes
+#   migite-explore "extract billing into a service" --focus approaches
+#   migite-explore --brief brief.md --attach ./data-map.csv
+#
+# Unlike migite-plan and migite-audit this is language-agnostic - it discovers
+# files with `git ls-files`, so it works on any repo, not just Rails.
+
+set -euo pipefail
+
+# The checkout this script lives in (one level up from bin/), through the
+# ~/.local/bin symlink, so lib/ and the Python modules are found regardless of
+# where it was invoked from.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
+unset _self _link
+# shellcheck source=../lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
+VAULT_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
+
+# ── Preflight ─────────────────────────────────────────────────────────────────
+# The git check lives after arg parsing - re-extract mode reads an exploration.md
+# from the vault and needs no repo at all.
+require_langgraph
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+BRIEF_TEXT=""
+BRIEF_FILE=""
+INIT_NAME=""
+OUTPUT_DIR=""
+FOCUS=""
+WANT_INTAKES=false
+FROM_EXPLORATION=""
+JIRA=""
+ATTACH_FILES=()
+
+usage() {
+  cat <<'EOF'
+migite-explore - initiative feasibility exploration (no implementation)
+
+Usage:
+  migite-explore "<initiative brief>"        explore an initiative described inline
+  migite-explore --brief <file>              read the brief from a file
+  migite-explore                             prompt for the brief interactively
+  migite-explore --from-exploration <file>   re-extract intakes from an existing run
+
+Options:
+  --brief <file>              Read the initiative brief from a file
+  --name <slug>               Short slug for the initiative (default: derived from brief)
+  --jira <ticket>             Jira ticket key or URL - groups this exploration under
+                              the ticket's existing vault folder
+  --attach <file>             Fold a file's raw content into the brief as reference
+                              material (repeatable). Every agent call here is
+                              headless with no tool access by default, so a path
+                              merely mentioned in the brief can never be opened by
+                              the model itself - this is the only way it sees it.
+  --output <dir>              Output directory (default: vault)
+  --focus <lens>              Limit to one lens: current_state | touchpoints |
+                              coupling_and_risk | existing_seams | constraints | approaches
+  --intakes                   Also emit one migite intake file per workstream
+  --from-exploration <file>   Re-extract workstream intakes from an existing (and
+                              possibly hand-edited) exploration.md. Skips the lenses,
+                              synthesis, and challenge pass - one model call instead of
+                              nine. Leaves exploration.md and challenges.md untouched.
+                              Needs no git repo, unless --jira is also passed.
+  -h, --help                  Show this help
+
+Outputs (in the output directory):
+  exploration.md        feasibility document with verdict, effort, open questions
+  challenges.md         adversarial review of that document
+  intake-NN-<slug>.md   one migite intake per workstream (with --intakes)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --brief)
+      BRIEF_FILE="${2:-}"
+      [[ -z "$BRIEF_FILE" ]] && { echo "✘ --brief requires a file path" >&2; exit 1; }
+      [[ ! -f "$BRIEF_FILE" ]] && { echo "✘ Brief file not found: $BRIEF_FILE" >&2; exit 1; }
+      shift 2
+      ;;
+    --name)
+      INIT_NAME="${2:-}"
+      shift 2
+      ;;
+    --jira)
+      JIRA="${2:-}"
+      shift 2
+      ;;
+    --attach)
+      ATTACH_ARG="${2:-}"
+      [[ -z "$ATTACH_ARG" ]] && { echo "✘ --attach requires a file path" >&2; exit 1; }
+      [[ ! -f "$ATTACH_ARG" ]] && { echo "✘ Attachment file not found: $ATTACH_ARG" >&2; exit 1; }
+      ATTACH_FILES+=("$ATTACH_ARG")
+      shift 2
+      ;;
+    --output)
+      OUTPUT_DIR="${2:-}"
+      shift 2
+      ;;
+    --focus)
+      FOCUS="${2:-}"
+      shift 2
+      ;;
+    --intakes)
+      WANT_INTAKES=true
+      shift
+      ;;
+    --from-exploration)
+      FROM_EXPLORATION="${2:-}"
+      [[ -z "$FROM_EXPLORATION" ]] && { echo "✘ --from-exploration requires a file path" >&2; exit 1; }
+      [[ ! -f "$FROM_EXPLORATION" ]] && { echo "✘ Exploration file not found: $FROM_EXPLORATION" >&2; exit 1; }
+      shift 2
+      ;;
+    -*)
+      echo "✘ Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      BRIEF_TEXT="$1"
+      shift
+      ;;
+  esac
+done
+
+# ── Re-extract mode ───────────────────────────────────────────────────────────
+# Needs no git repo and no brief - it reads an existing exploration.md and
+# regenerates only the workstream intakes. exploration.md and challenges.md
+# are left untouched.
+if [[ -n "$FROM_EXPLORATION" ]]; then
+  REEXTRACT_ARGS=(--from-exploration "$FROM_EXPLORATION")
+  [[ -n "$OUTPUT_DIR" ]] && REEXTRACT_ARGS+=(--output "$OUTPUT_DIR")
+  if [[ -n "$JIRA" ]]; then
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+      echo "✘ --jira requires a git repository (to resolve org/repo for the vault path)." >&2
+      exit 1
+    fi
+    REEXTRACT_ARGS+=(--jira "$JIRA" --repo-root "$(git rev-parse --show-toplevel)")
+  fi
+  exec "$MIGITE_PYTHON" -m migite.tools.explore "${REEXTRACT_ARGS[@]}"
+fi
+
+# ── Git preflight (full runs only) ────────────────────────────────────────────
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+  echo "✘ Not inside a git repository." >&2
+  echo "  migite-explore discovers files with 'git ls-files'. Run 'git init' first." >&2
+  exit 1
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# Layered config (flags > env > .migite.yml > ~/.config/migite > defaults) — the
+# bash side only needs vault.base here; migite/tools/explore.py loads the rest itself.
+eval "$("$MIGITE_PYTHON" -m migite.config env --repo-root "$REPO_ROOT")" || exit 1
+VAULT_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
+
+# ── Collect the brief ─────────────────────────────────────────────────────────
+if [[ -z "$BRIEF_TEXT" && -z "$BRIEF_FILE" ]]; then
+  echo ""
+  echo -e "${BOLD}  What initiative do you want to explore?${RESET}"
+  echo -e "  ${YELLOW}Describe it (one sentence to a few paragraphs).${RESET}"
+  echo -e "  ${YELLOW}Press Enter twice when done:${RESET}"
+  echo ""
+  BRIEF_TEXT=""
+  while IFS= read -r line; do
+    [[ -z "$line" && -z "$BRIEF_TEXT" ]] && continue
+    [[ -z "$line" ]] && break
+    BRIEF_TEXT="${BRIEF_TEXT}${line}
+"
+  done
+  [[ -z "$BRIEF_TEXT" ]] && { echo "✘ Brief cannot be empty" >&2; exit 1; }
+fi
+
+# ── Knowledge file (if one exists for this repo) ──────────────────────────────
+REPO_NAME=$(basename "$REPO_ROOT")
+ORG=$("$MIGITE_PYTHON" -m migite.paths detect-org --repo-root "$REPO_ROOT")
+KNOWLEDGE_FILE="$VAULT_BASE/$ORG/$REPO_NAME/knowledge.md"
+
+# ── Run ───────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}  migite-explore | 6 parallel lenses → Opus 5 synthesis → adversarial challenge${RESET}"
+echo -e "  ${CYAN}Repo: $ORG/$REPO_NAME${RESET}"
+echo ""
+
+PYTHON_ARGS=(--repo-root "$REPO_ROOT")
+
+# --attach files are folded straight into the brief text (not passed through to
+# migite/tools/explore.py, which stays unaware attachments exist) — state["brief"] is
+# interpolated verbatim into every lens/synthesis/challenge/refine prompt, so
+# this is the one place that reliably reaches all of them. Every agent call
+# here is headless with no tool access by default, so a path merely mentioned in
+# the brief text could never be opened by the model itself.
+if [[ ${#ATTACH_FILES[@]} -gt 0 ]]; then
+  BRIEF_TMP=$(mktemp)
+  trap 'rm -f "$BRIEF_TMP"' EXIT
+  if [[ -n "$BRIEF_FILE" ]]; then
+    cat "$BRIEF_FILE" > "$BRIEF_TMP"
+  else
+    printf '%s' "$BRIEF_TEXT" > "$BRIEF_TMP"
+  fi
+  printf '\n\n---\n\n## Attachments\n\n' >> "$BRIEF_TMP"
+  ATTACH_MAX_CHARS=50000
+  for ATTACH_F in "${ATTACH_FILES[@]}"; do
+    ATTACH_CONTENT=$(cat "$ATTACH_F")
+    if [[ ${#ATTACH_CONTENT} -gt $ATTACH_MAX_CHARS ]]; then
+      ATTACH_CONTENT="${ATTACH_CONTENT:0:$ATTACH_MAX_CHARS}"$'\n\n'"[... truncated, file is larger than the ${ATTACH_MAX_CHARS}-char cap ...]"
+      echo -e "${YELLOW}⚠ Attachment $(basename "$ATTACH_F") truncated to $ATTACH_MAX_CHARS chars${RESET}" >&2
+    fi
+    printf '### %s\n\n%s\n\n' "$(basename "$ATTACH_F")" "$ATTACH_CONTENT" >> "$BRIEF_TMP"
+  done
+  PYTHON_ARGS+=(--brief-file "$BRIEF_TMP")
+elif [[ -n "$BRIEF_FILE" ]]; then
+  PYTHON_ARGS+=(--brief-file "$BRIEF_FILE")
+else
+  BRIEF_TMP=$(mktemp)
+  trap 'rm -f "$BRIEF_TMP"' EXIT
+  printf '%s' "$BRIEF_TEXT" > "$BRIEF_TMP"
+  PYTHON_ARGS+=(--brief-file "$BRIEF_TMP")
+fi
+
+[[ -n "$INIT_NAME"  ]] && PYTHON_ARGS+=(--name   "$INIT_NAME")
+[[ -n "$JIRA"       ]] && PYTHON_ARGS+=(--jira   "$JIRA")
+[[ -n "$OUTPUT_DIR" ]] && PYTHON_ARGS+=(--output "$OUTPUT_DIR")
+[[ -n "$FOCUS"      ]] && PYTHON_ARGS+=(--focus  "$FOCUS")
+[[ -f "$KNOWLEDGE_FILE" ]] && PYTHON_ARGS+=(--knowledge "$KNOWLEDGE_FILE")
+[[ "$WANT_INTAKES" == "true" ]] && PYTHON_ARGS+=(--intakes)
+
+"$MIGITE_PYTHON" -m migite.tools.explore "${PYTHON_ARGS[@]}"

@@ -24,7 +24,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Resolver self-test
-        run: python migite_paths.py --self-test
+        run: python -m migite.paths --self-test
 
       # tests/run.sh uses a fake `claude` on PATH (tests/fake-claude) — no real
       # model call is ever made, and no CLI install is needed.
@@ -44,8 +44,8 @@ jobs:
       # until the existing style findings have been triaged.
       - name: shellcheck (errors)
         run: |
-          shellcheck -S error -s bash migite migite.d/*.sh migite-explore migite-audit migite-blueprint migite-pr-review migite-ticket tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
+          shellcheck -S error -s bash bin/* lib/*.sh lib/phases/*.sh tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
       - name: shellcheck (warnings, informational)
         continue-on-error: true
         run: |
-          shellcheck -S warning -s bash migite migite.d/*.sh migite-explore migite-audit migite-blueprint migite-pr-review migite-ticket tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
+          shellcheck -S warning -s bash bin/* lib/*.sh lib/phases/*.sh tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode

@@ -5,7 +5,7 @@ and vault folder, the amend target, the PR title suffix. The **content** (title,
 status, description, acceptance criteria) is fetched once before planning, cached as
 `jira-context.md`, and given to the planner as the authoritative statement of scope.
 
-Both live in one sub-tool, `migite-ticket` (`migite_ticket.py`), so no phase knows how a ticket is
+Both live in one sub-tool, `migite-ticket` (`migite/tickets.py`), so no phase knows how a ticket is
 parsed or retrieved. Where the content comes from is a config choice.
 
 ## Where the content comes from
@@ -147,8 +147,8 @@ them while implementing.
 
 ## Adding another tracker
 
-Write `trackers/<name>.py` with one `Tracker` subclass (`available(ref)` and `fetch(ref)`, which
+Write `migite/trackers/<name>.py` with one `Tracker` subclass (`available(ref)` and `fetch(ref)`, which
 returns `trackers.render(Ticket(...))`; Jira-shaped JSON can go through
-`trackers.jira_format.issue_to_ticket`), add it to `SOURCES` in `migite_ticket.py` and to
-`TRACKER_PROVIDERS` in `migite_config.py`, and add tests with a stubbed transport like the fake
+`trackers.jira_format.issue_to_ticket`), add it to `SOURCES` in `migite/tickets.py` and to
+`TRACKER_PROVIDERS` in `migite/config.py`, and add tests with a stubbed transport like the fake
 `acli` runner in `tests/test_migite_ticket.py`. No phase changes.

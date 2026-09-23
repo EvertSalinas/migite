@@ -1,4 +1,4 @@
-# tests/fill_intake_field_test.sh — helpers.sh:fill_intake_field
+# tests/fill_intake_field_test.sh — lib/intake.sh:fill_intake_field
 #
 # The intake template's placeholders used to be filled with
 # `sed -i "s|<placeholder>|$TASK|"`, which put user text inside a sed

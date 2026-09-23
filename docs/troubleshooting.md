@@ -107,10 +107,10 @@ permissions:
 ### Running migite from inside a Claude Code session
 
 Claude Code sets `CLAUDECODE` in its own terminal sessions, and a nested `claude` refuses to
-start while it's set. The Claude adapter declares it (`env_unset` in `agents/claude.py`), and the
+start while it's set. The Claude adapter declares it (`env_unset` in `migite/agents/claude.py`), and the
 gateway removes it from every headless call and every interactive session command, so no call
 site has to remember. Anything new that talks to an agent should go through `agent_ask`,
-`agent_think`, `run_phase`, or `migite_call.call_agent`, never launch a CLI directly.
+`agent_think`, `run_phase`, or `migite.gateway.call_agent`, never launch a CLI directly.
 
 Note that **brakeman is not part of migite**. If you're seeing brakeman runs, they come from your
 `~/.claude/CLAUDE.md`, a project CLAUDE.md, or a skill — migite never invokes it.
@@ -121,7 +121,7 @@ Note that **brakeman is not part of migite**. If you're seeing brakeman runs, th
 There's no `bundle check`/rubocop/rspec startup preflight — a broken Ruby toolchain surfaces only
 when a phase actually tries to run it (look for `No version is set for command` or a bundler error
 in the relevant log). The one real preflight that exists is narrower: before spawning any LangGraph
-agent, `spawn_langgraph()` (`helpers.sh`) verifies `import langgraph` succeeds in
+agent, `spawn_langgraph()` (`lib/agent.sh`) verifies `import langgraph` succeeds in
 `$MIGITE_PYTHON` and fails loudly if it doesn't — that's a Python-dependency check, not a
 Ruby-tooling one.
 

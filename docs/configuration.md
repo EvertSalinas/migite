@@ -264,7 +264,7 @@ pre-2026-09 cheaper tiering, pin `think`, `explore_refine`, `review_correctness`
 stack: auto             # auto | rails | generic   (MIGITE_STACK; --stack on the command line wins)
 ```
 
-`auto` runs the detection in `helpers.sh` (`Gemfile` at the root or one level down → `rails`,
+`auto` runs the detection in `lib/stack.sh` (`Gemfile` at the root or one level down → `rails`,
 else `generic`). Setting it explicitly is for monorepos where detection picks wrong, or to force
 the no-tooling path. Describing stacks as data (lint/test commands, globs) is not supported yet —
 see the README roadmap.
@@ -414,17 +414,17 @@ files**:
 <a id="internals"></a>
 ## How the pieces read it
 
-`migite_config.py` is the single resolver. `migite` calls `load_migite_config` (`migite.d/config.sh`)
-right after the repo root is known; it `eval`s `migite_config.py env`, which prints one
+`migite/config.py` is the single resolver. `migite` calls `load_migite_config` (`lib/config.sh`)
+right after the repo root is known; it `eval`s `python -m migite.config env`, which prints one
 `MIGITE_CFG_<KEY>=value` assignment per leaf plus `MIGITE_CFG_MODEL_<ROLE>` for every resolved
 role, then maps them onto the variables the phases already read (`DEV_LOG_BASE`, `LOG_DIR`, ...).
 Phases use `cfg <key>`, `prompt_path <name>`, `template_path <name>`, and pass roles, never
 models, to `agent_ask` / `agent_think`. `load_migite_config` also caches the configured agent's
 description as `MIGITE_AGENT_*` (`load_agent_info`).
 
-The Python agents and standalone tools call `migite_config.load(repo_root)` themselves, so they
-work identically when invoked directly. `migite_paths.detect_org` consults `vault.org` after the
-`MIGITE_ORG` env var. `migite_call.configure_from(cfg)` selects the agent and applies
+The Python agents and standalone tools call `migite.config.load(repo_root)` themselves, so they
+work identically when invoked directly. `migite.paths.detect_org` consults `vault.org` after the
+`MIGITE_ORG` env var. `migite.gateway.configure_from(cfg)` selects the agent and applies
 timeouts, the headless permission mode, the role-to-model table, and the per-role effort table
-to every later call. Bash reaches the same gateway through `migite_agent.py ask --role <role>`,
+to every later call. Bash reaches the same gateway through `python -m migite.agent_cli ask --role <role>`,
 so the model and effort for a bash call site are resolved in exactly the same place.

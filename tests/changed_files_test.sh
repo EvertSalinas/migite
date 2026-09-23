@@ -1,8 +1,8 @@
-# tests/changed_files_test.sh — helpers.sh:changed_ruby_files / changed_spec_files
+# tests/changed_files_test.sh — lib/stack.sh:changed_ruby_files / changed_spec_files
 #
 # A file that hasn't been `git add`-ed yet is invisible to `git diff`, and thus
 # to rubocop/rspec — this blind spot recurred at least five times in production
-# (migite-improvements.md: 2026-07-23, 2026-08-05, 2026-08-11, 2026-08-12,
+# (docs/improvements.md: 2026-07-23, 2026-08-05, 2026-08-11, 2026-08-12,
 # 2026-08-17). Also covers the deleted-file fix from the same history: a
 # working-tree delete must not show up as a "changed" file to lint/test.
 

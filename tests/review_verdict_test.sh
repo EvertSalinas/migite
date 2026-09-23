@@ -1,4 +1,4 @@
-# tests/review_verdict_test.sh — helpers.sh:review_verdict
+# tests/review_verdict_test.sh — lib/gate.sh:review_verdict
 #
 # The commit-gate banner used to grep the whole review for
 # 'NEEDS FIXES\|APPROVED\|PASS\|READY TO COMMIT' and take the first matching
