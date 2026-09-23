@@ -62,7 +62,8 @@ class DefaultsTest(_Isolated):
         self.assertEqual(cfg.get("vault.base"), "~/dev-log")
         self.assertEqual(cfg.get("heal.max_attempts"), 3)
         self.assertEqual(cfg.get("gates.commit.policy"), "lenient")
-        self.assertEqual(cfg.get("permissions.interactive"), "bypassPermissions")
+        self.assertEqual(cfg.get("permissions.interactive"), "auto")      # was bypassPermissions: same meaning
+        self.assertEqual(cfg.get("permissions.heal"), "auto")
         self.assertEqual(cfg.get("permissions.headless"), "none")
         self.assertEqual(cfg.get("agent.backend"), "claude")
         self.assertIsNone(cfg.get("models.strong"))                        # tiers unset = backend default
@@ -193,6 +194,22 @@ class ValidationTest(_Isolated):
         with self.assertRaises(migite_config.ConfigError) as cm:
             self.load()
         self.assertIn("gates.commit.policy", str(cm.exception))
+
+    def test_permission_aliases_are_normalized_to_neutral_words(self):
+        self.write_repo({"permissions": {"interactive": "bypassPermissions", "heal": "acceptEdits", "headless": "default"}})
+        cfg = self.load()
+        self.assertEqual([cfg.get(f"permissions.{k}") for k in ("interactive", "heal", "headless")], ["auto", "edits", "ask"])
+
+    def test_neutral_permission_words_are_accepted(self):
+        self.write_repo({"permissions": {"interactive": "edits", "heal": "plan", "headless": "none"}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("permissions.heal"), "plan")
+
+    def test_unknown_permission_word_is_an_error(self):
+        self.write_repo({"permissions": {"interactive": "sometimes"}})
+        with self.assertRaises(migite_config.ConfigError) as cm:
+            self.load()
+        self.assertIn("permissions.interactive", str(cm.exception))
 
     def test_bad_int_is_an_error(self):
         self.write_repo({"heal": {"max_attempts": "lots"}})

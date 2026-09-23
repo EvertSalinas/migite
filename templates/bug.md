@@ -65,4 +65,4 @@
 
 **Screenshots / recordings:**
 
-**Anything else Claude should know:**
+**Anything else the agent should know:**

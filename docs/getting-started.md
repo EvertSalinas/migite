@@ -34,14 +34,15 @@ for f in migite migite-plan migite-review \
          migite-explore migite-explore.py \
          migite-audit migite-audit.py \
          migite-pr-review migite-pr-review.py \
-         migite_paths.py migite_claude.py migite_config.py migite_agent.py; do
+         migite_paths.py migite_call.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 ```
 
-Why the Python files are symlinked too: `migite-plan` and friends import `migite_paths`,
-`migite_claude`, and `migite_config` from the directory they are launched from, which is the
-symlink directory. `migite.d/` and `prompts/` are not symlinked; `migite` resolves its real
+The module symlinks let you run `migite_config.py` and friends by name. The tools themselves
+don't need them: Python resolves a symlinked script to its real directory, so `migite-plan` and
+the others import `migite_call`, `migite_config`, and the `agents/` package from the checkout.
+`migite.d/`, `prompts/`, and `agents/` are not symlinked; `migite` likewise resolves its real
 location through the symlink and finds them beside itself.
 
 <a id="macos"></a>
@@ -237,9 +238,9 @@ Phase 1.5 (TDD): Write spec files before implementation? [y/N]: n
 ```text
 ▶ Phase 2/4 — Implementing
 
-  Starting interactive session: Implementing
+  Starting interactive Claude Code session: Implementing
   Output file: .../scratchpad/bb-1234/implementation.md
-  Permission mode: bypassPermissions
+  Permission mode: auto
   Type /exit when done to return here
 ```
 

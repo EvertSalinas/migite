@@ -171,8 +171,8 @@ context is capped (~22,000 chars total, ~4,000/file, top 30 ranked files; the ch
 a further-truncated 12,000-char slice) with no warning surfaced when a large repo/initiative gets
 trimmed — a known limitation, not a bug, but worth knowing on a big repo.
 
-**Referencing external material.** Every Claude call here is a headless `claude --print` with no
-tool access (`MIGITE_PERMISSION_MODE` only ever adds `--permission-mode`, never a working
+**Referencing external material.** Every agent call here is headless with no tool access by
+default (`MIGITE_PERMISSION_MODE` only ever changes the permission word, never a working
 directory to read from) — a path merely mentioned in the brief can never be opened by the model
 itself. `--attach <file>` (repeatable) reads a file's raw content and folds it directly into the
 brief text before any Claude call happens, so it reaches all six lenses plus synthesis, challenge,

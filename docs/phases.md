@@ -63,7 +63,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 | Key | Action |
 |-----|--------|
 | `y` | Approve the plan and continue |
-| `f` | Give feedback — migite prompts for text, refines the plan in place with one `claude --print` call (Sonnet 5), shows a colored diff of what changed, then re-opens the gate |
+| `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier), shows a colored diff of what changed, then re-opens the gate |
 | `e` | Edit — opens `plan.md` directly in `$EDITOR` (default: vim) with zero latency |
 | `n` | Reject — re-runs the full `migite-plan` agent from scratch (fresh exploration + synthesis + critic), shows a colored diff after |
 | `q` | Abort the workflow |
@@ -109,7 +109,7 @@ No gate after Phase 2 — migite moves directly to the heal loop.
 
 After implementation, migite runs rubocop and rspec automatically. If failures exist:
 
-1. Claude fixes them non-interactively (`claude --print --permission-mode bypassPermissions`)
+1. The agent fixes them non-interactively (a headless call on the `heal` role with `permissions.heal`, `auto` by default)
 2. Checks re-run
 3. Repeats up to `MAX_HEAL_ATTEMPTS` (default 3)
 
@@ -199,21 +199,21 @@ appending the blockers to `gate-overrides.md` beside the review so the override 
 <a id="phase-3-5-knowledge"></a>
 ### Phase 3.5 — Knowledge capture
 
-A background `claude --print` pass extracts 1–3 reusable bullets from the completed run (plan + implementation + review) and appends them to `knowledge.md`. Entries link back to the review via Obsidian wikilinks (harmless plain text if you're not using Obsidian).
+A background headless pass (the `knowledge` role) extracts 1–3 reusable bullets from the completed run (plan + implementation + review) and appends them to `knowledge.md`. Entries link back to the review via Obsidian wikilinks (harmless plain text if you're not using Obsidian).
 
 Only domain-level insights are captured: business logic clarifications, non-obvious constraints, architectural decisions. Rails conventions and testing patterns are excluded.
 
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)
 
-Claude generates a PR description from the plan and review, following the prompt/template in
+The agent generates a PR description from the plan and review, following the prompt/template in
 this repo's [`templates/commit.md`](../templates/commit.md) (`deliver.sh` reads it via
 `$MIGITE_HOME`). Output goes to `pr-description.md` — ready to paste into GitHub.
 
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement
 
-A background `claude --print` pass (Sonnet 5) reviews the full run and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run — no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs — a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt — since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to Sonnet 5 as well.
+A background headless pass (the `improve` role, standard tier) reviews the full run and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run - no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs - a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt - since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to the standard tier as well.
 
 ---
 

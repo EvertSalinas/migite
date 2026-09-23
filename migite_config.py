@@ -15,7 +15,7 @@ file actually exists — with no config files, or JSON ones, migite runs without
 Python API:
     cfg = migite_config.load(repo_root)
     cfg.get("gates.commit.policy")     -> "lenient"
-    cfg.model("critic")                -> "claude-opus-5-5"   (role -> tier -> model id)
+    cfg.model("critic")                -> the agent's strong-tier model id   (role -> tier -> model id)
     cfg.prompt_path("plan", migite_home) -> Path
     cfg.source("models.strong")        -> "defaults" | "<file>" | "env:VAR"
 
@@ -38,18 +38,18 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+import agents
+
 REPO_FILE_NAMES = (".migite.yml", ".migite.yaml", ".migite.json")
 USER_FILE_NAMES = ("config.yml", "config.yaml", "config.json")
 
-# Model ids per agent backend and tier. THE only place a model id is written down.
-# Cursor and OpenCode default to None = don't pass --model, so each CLI uses its own
-# default model until the user pins tiers (`cursor-agent --list-models`, `opencode models`).
-BACKEND_MODEL_DEFAULTS: dict[str, dict[str, str | None]] = {
-    "claude":   {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-5", "strong": "claude-opus-5-5"},
-    "cursor":   {"fast": None, "standard": None, "strong": None},
-    "opencode": {"fast": None, "standard": None, "strong": None},
-}
-AGENT_BACKENDS = tuple(BACKEND_MODEL_DEFAULTS)
+# Agent names and each agent's model id per tier come from the agents package
+# (agents/<name>.py is the only place an agent's model id is written down).
+# Cursor and OpenCode leave tiers unset = no --model is passed, so each CLI uses
+# its own default until the user pins tiers (`cursor-agent --list-models`, `opencode models`).
+AGENT_BACKENDS = agents.names()
+PERMISSION_WORDS = agents.PERMISSIONS + tuple(agents.PERMISSION_ALIASES)
+PERMISSION_KEYS = ("permissions.interactive", "permissions.heal", "permissions.headless")
 
 DEFAULTS: dict[str, Any] = {
     "agent": {
@@ -64,12 +64,12 @@ DEFAULTS: dict[str, Any] = {
         "dir": "~/.dev-workflow/logs",   # LOG_DIR
     },
     "models": {
-        # None = the backend's default for that tier (BACKEND_MODEL_DEFAULTS); set a
+        # None = the agent's default for that tier (agents/<name>.py); set a
         # string to pin a tier for the active backend.
         "fast": None,
         "standard": None,
         "strong": None,
-        "roles": {},                     # optional per-role override: {"critic": "claude-opus-5-5", ...}
+        "roles": {},                     # optional per-role override: {"critic": "<model id>", ...}
         # --effort per tier (low | medium | high | xhigh | max | none). none = don't pass the flag,
         # so the CLI's own default applies. Haiku 4.5 does not accept --effort; it is never sent for
         # a haiku model regardless of these values.
@@ -90,8 +90,10 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "permissions": {
-        "interactive": "bypassPermissions",  # run_phase sessions (implement, fix, PR description)
-        "heal": "bypassPermissions",         # the auto-heal loop's headless fixes
+        # auto | edits | plan | ask | none. Claude Code's names (bypassPermissions,
+        # acceptEdits, default) are accepted as aliases and normalized.
+        "interactive": "auto",               # run_phase sessions (implement, fix, PR description)
+        "heal": "auto",                      # the auto-heal loop's headless fixes
         "headless": "none",                  # plan/review/knowledge/... (MIGITE_PERMISSION_MODE); none = no flag
     },
     "heal": {
@@ -134,6 +136,7 @@ ROLE_TIERS: dict[str, str] = {
     # migite bash phases
     "knowledge": "standard", "improve": "standard", "amend": "standard",
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
+    "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
     # migite-explore
     "lens": "standard", "explore_synth": "strong", "challenge": "strong",
     "explore_refine": "strong",   # the reviser should not be weaker than the challenger
@@ -153,15 +156,13 @@ ROLE_TIERS: dict[str, str] = {
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "none")
 
 
-def default_model(role: str, backend: str = "claude") -> str:
-    """The built-in default model for a role on a backend (BACKEND_MODEL_DEFAULTS tier
-    via ROLE_TIERS), with no config files or env consulted. The ONLY sanctioned way for
-    a script to name a model outside a loaded Config — module-level constants in the
-    tools use this so there is exactly one place a model id is written down. Returns
-    "" when the backend has no default for the tier (= don't pass --model)."""
+def default_model(role: str, backend: str = agents.DEFAULT) -> str:
+    """The built-in default model for a role on a backend (the agent's tier table via
+    ROLE_TIERS), with no config files or env consulted. Returns "" when the agent
+    has no default for the tier (= don't pass a model)."""
     if role not in ROLE_TIERS:
         raise KeyError(f"unknown model role {role!r}; known: {', '.join(sorted(ROLE_TIERS))}")
-    return BACKEND_MODEL_DEFAULTS[backend][ROLE_TIERS[role]] or ""
+    return agents.info(backend).models[ROLE_TIERS[role]] or ""
 
 # Environment variables that override file values (env > files). Keeps every
 # variable migite documented before the config file existed working unchanged.
@@ -183,9 +184,9 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "models.effort.standard": EFFORT_LEVELS,
     "models.effort.strong": EFFORT_LEVELS,
     "gates.commit.policy": ("lenient", "strict"),
-    "permissions.interactive": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
-    "permissions.heal": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
-    "permissions.headless": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
+    "permissions.interactive": PERMISSION_WORDS,
+    "permissions.heal": PERMISSION_WORDS,
+    "permissions.headless": PERMISSION_WORDS,
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
 }
@@ -215,14 +216,14 @@ logs:
 
 models:
   # Tiers are model ids for the ACTIVE backend. Unset = that backend's default:
-  #   claude:   fast=claude-haiku-4-5-20251001  standard=claude-sonnet-5  strong=claude-opus-5-5
+  #   claude:   fast=@FAST@  standard=@STANDARD@  strong=@STRONG@
   #   cursor / opencode: no --model is passed until you pin one (`cursor-agent --list-models`, `opencode models`)
-  # fast: claude-haiku-4-5-20251001   # explorers
-  # standard: claude-sonnet-5         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments
-  # strong: claude-opus-5-5           # plan synthesis/refine, critic, correctness + security review, verdicts
+  # fast: @FAST@   # explorers
+  # standard: @STANDARD@         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments, heal
+  # strong: @STRONG@           # plan synthesis/refine, critic, correctness + security review, verdicts
   # roles:                          # pin one call site without changing its tier (see docs/configuration.md for the list)
-  #   think: claude-sonnet-5
-  #   review_security: claude-opus-5-5
+  #   think: @STANDARD@
+  #   review_security: @STRONG@
   effort:                           # --effort per tier: low | medium | high | xhigh | max | none (none = CLI default)
     fast: none                      # Haiku 4.5 never receives --effort regardless
     standard: none
@@ -242,10 +243,10 @@ gates:
   plan:
     warn_after_rejections: 3
 
-permissions:
-  interactive: bypassPermissions   # implement / fix / PR-description sessions
-  heal: bypassPermissions          # auto-heal loop
-  headless: none                   # plan, review, knowledge, ... (none = don't pass --permission-mode)
+permissions:                 # auto | edits | plan | ask | none  (Claude Code's names also accepted)
+  interactive: auto          # implement / fix / PR-description sessions
+  heal: auto                 # auto-heal loop
+  headless: none             # plan, review, knowledge, ... (none = pass no permission flag)
 
 heal:
   max_attempts: 3
@@ -268,6 +269,10 @@ ui:
   # editor: nvim             # EDITOR
   prompt_inline_max: 100000  # MIGITE_PROMPT_INLINE_MAX
 """
+# The example model ids in the template come from the default agent's own table.
+for _tier in agents.TIERS:
+    STARTER_TEMPLATE = STARTER_TEMPLATE.replace(f"@{_tier.upper()}@", agents.info(agents.DEFAULT).models[_tier] or "")
+del _tier
 
 
 class ConfigError(Exception):
@@ -365,6 +370,8 @@ def _coerce(key: str, value: Any, source: str) -> Any:
         raise ConfigError(f"{key} must be true or false (got {value!r} from {source})")
     if key in ENUMS and str(value) not in ENUMS[key]:
         raise ConfigError(f"{key} must be one of {', '.join(ENUMS[key])} (got {value!r} from {source})")
+    if key in PERMISSION_KEYS:
+        return agents.normalize_permission(str(value))
     if key in ("models.roles", "models.roles_effort"):
         if not isinstance(value, dict):
             raise ConfigError(f"{key} must be a mapping of role -> value (from {source})")
@@ -411,10 +418,10 @@ class Config:
         explicit = self.get(f"models.{tier}")
         if explicit:
             return str(explicit)
-        return BACKEND_MODEL_DEFAULTS[self.backend()][tier] or ""
+        return agents.info(self.backend()).models[tier] or ""
 
     def backend(self) -> str:
-        return str(self.get("agent.backend") or "claude")
+        return str(self.get("agent.backend") or agents.DEFAULT)
 
     def models_by_role(self) -> dict[str, str]:
         return {role: self.model(role) for role in ROLE_TIERS}

@@ -24,7 +24,7 @@ if [[ -z "${MIGITE_PYTHON:-}" ]]; then
   fi
 fi
 export MIGITE_PYTHON
-export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_claude.py resolve it from here
+export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_call.py resolve it from here
 DATE="${DATE:-$(date +%Y-%m-%d)}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d-%H%M%S)}"
 # Helpers like write_prompt/thinking write into $LOG_DIR — give tests a throwaway one

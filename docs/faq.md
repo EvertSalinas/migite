@@ -6,7 +6,8 @@ loop and moves on to knowledge capture and the PR description. The commit is alw
 [the commit gate](./outputs.md#commit-gate-banner).
 
 **Do I need an Anthropic API key?**
-No. Every model call shells out to the `claude` CLI and shares Claude Code's login.
+No. Every model call shells out to the configured agent CLI (Claude Code by default, Cursor CLI or
+OpenCode via `agent.backend`) and uses that CLI's own login.
 
 **What does a run cost?**
 It is printed at the end of every run and written to `usage.json`; the commit-gate banner shows
@@ -16,7 +17,7 @@ only in `--print` mode. Expect roughly $3 to $5 in headless calls for a feature 
 tiering, less with `think` pinned to Sonnet. Set `budget.max_usd_per_run` for a soft cap.
 
 **Why does every headless call show about 23k cache-creation tokens?**
-That is Claude Code's own system context being sent with each `claude --print` call. It is a
+That is Claude Code's own system context being sent with each headless call. It is a
 cache hit after the first call in a run, so the per-call cost drops sharply from the second call
 on. The usage summary prints the total so you can see it.
 

@@ -2,7 +2,8 @@
 
 > 右手 (みぎて) — right hand. The trusted assistant that handles the groundwork so you can focus on what matters.
 
-Migite wraps Claude Code around every engineering task in the same shape: **plan** before you touch
+Migite wraps an agent CLI (Claude Code by default, Cursor CLI or OpenCode by config) around every
+engineering task in the same shape: **plan** before you touch
 a file, **gate** before you implement, **review** before you commit, and **write down** what was
 learned. It never commits for you. It extends your reach without replacing your judgment.
 
@@ -44,7 +45,7 @@ MIGITE_SRC="$HOME/Code/migite"; BIN="$HOME/.local/bin"; mkdir -p "$BIN"
 for f in migite migite-plan migite-review migite-blueprint migite-blueprint.py \
          migite-explore migite-explore.py migite-audit migite-audit.py \
          migite-pr-review migite-pr-review.py \
-         migite_paths.py migite_claude.py migite_config.py migite_agent.py; do
+         migite_paths.py migite_call.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc

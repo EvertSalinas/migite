@@ -85,7 +85,7 @@ source "$MIGITE_HOME/migite.d/deliver.sh"
 
 # `migite doctor [--repo <path>]` — dispatched before Setup (require_cmd, arg
 # parsing) since it must run even when those would fail (no Gemfile, missing
-# `claude`/`bundle`, etc.) — that's the whole point of a health check.
+# agent CLI or `bundle`, etc.) - that's the whole point of a health check.
 if [[ "${1:-}" == "doctor" ]]; then
   shift
   run_doctor "$@"
@@ -201,9 +201,9 @@ while [[ $# -gt 0 ]]; do
     --attach)
       # Repeatable. Each file's raw content is folded into task.md (see
       # run_plan in plan.sh) so migite-plan sees it as plain prompt text —
-      # its Claude calls are headless (`claude --print`, no --permission-mode
-      # ever passed, see docs/troubleshooting.md), so a referenced path in the
-      # intake can never be opened by the model itself.
+      # its agent calls are headless, with no permission flag passed by default
+      # (permissions.headless: none), so a referenced path in the intake can
+      # never be opened by the model itself.
       ATTACH_ARG="${2:-}"
       [[ -z "$ATTACH_ARG" ]] && error "Provide a file path after --attach"
       [[ ! -f "$ATTACH_ARG" ]] && error "Attachment file not found: $ATTACH_ARG"
@@ -264,15 +264,15 @@ ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$
 # ── Load configuration (needs REPO_ROOT for <repo>/.migite.yml) ──────────────
 load_migite_config "$REPO_ROOT"
 mkdir -p "$LOG_DIR"
-# Per-run usage ledger: one JSONL line per headless `claude --print` call
-# (tokens, cost, duration, model, label). Written by migite_claude.py from
-# both the Python agents and bash's claude_print; summarised at exit by
+# Per-run usage ledger: one JSONL line per headless agent call
+# (tokens, cost, duration, model, label). Written by the gateway (migite_call.py)
+# for both the Python agents and bash's agent_ask; summarised at exit by
 # print_usage_summary into <scratchpad>/usage.json. Exported so the agents
 # (and the tmux wrapper scripts, which re-export it) inherit it.
 MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
 export MIGITE_USAGE_LEDGER
 require_cmd "$(agent_binary)"
-log "Agent backend: $(cfg agent.backend claude) ($(agent_binary))"
+log "Agent: $(agent_field display_name) ($(agent_binary))"
 # --stack on the command line beats `stack:` in the config, which beats auto-detection.
 [[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
 IMPLEMENT_CMD_PATH="$(prompt_path implement)"

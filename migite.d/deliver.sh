@@ -73,9 +73,9 @@ Output ONLY the bullet points, no preamble. Each bullet starts with '- '.
 End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
 
   local KNOWLEDGE_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-knowledge.txt"
-  # Pinned to Sonnet — unpinned, this ran on whatever the user's default model
-  # was (possibly Opus) on every single task.
-  thinking "Extracting knowledge" "$KNOWLEDGE_LOG" "$KNOWLEDGE_PROMPT" "$(cfg_model_flags knowledge)"
+  # The knowledge role pins a tier, so this never runs on whatever the CLI's own
+  # default model happens to be.
+  agent_think "Extracting knowledge" knowledge "$KNOWLEDGE_LOG" "$KNOWLEDGE_PROMPT"
 
   # Append entry to knowledge file
   {
@@ -218,7 +218,7 @@ If nothing in this run warrants an improvement note, output nothing.
 Output ONLY the bullet points, no preamble. Each bullet starts with '- '."
 
   local IMPROVEMENTS_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-improvements.txt"
-  thinking "Self-improvement" "$IMPROVEMENTS_LOG" "$IMPROVEMENTS_PROMPT" "$(cfg_model_flags improve)"
+  agent_think "Self-improvement" improve "$IMPROVEMENTS_LOG" "$IMPROVEMENTS_PROMPT"
 
   if grep -q '[^[:space:]]' "$IMPROVEMENTS_LOG" 2>/dev/null; then
     {

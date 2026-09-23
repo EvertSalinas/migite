@@ -18,8 +18,8 @@ envelopes. For the phase-by-phase behaviour see [migite.md](./migite.md).
 migite/                       ← wherever you clone this repo
 ├── migite                    ← entrypoint (bash): config load, arg parsing, phase sequencing, EXIT trap
 ├── migite.d/                 ← phase fragments sourced by migite, sharing its variables
-│   ├── helpers.sh            ← output, claude_cmd/claude_print, changed-file helpers, stack profiles, sync, gate banner
-│   ├── config.sh             ← load_migite_config, cfg / cfg_model / cfg_model_flags / prompt_path, use_tmux, `migite config`
+│   ├── helpers.sh            ← output, agent_ask/agent_think/run_phase, changed-file helpers, stack profiles, sync, gate banner
+│   ├── config.sh             ← load_migite_config, load_agent_info, cfg / prompt_path, use_tmux, `migite config`
 │   ├── doctor.sh             ← `migite doctor`
 │   ├── amend.sh              ← --amend mode
 │   ├── plan.sh               ← Phase 1 (+ Jira fetch, plan gate) and Phase 1.5
@@ -32,13 +32,19 @@ migite/                       ← wherever you clone this repo
 ├── migite-blueprint(.py)     ← standalone: new-project definition
 ├── migite-audit(.py)         ← standalone: codebase audit
 ├── migite-pr-review(.py)     ← standalone: review a branch
-├── migite_claude.py          ← the one headless-call path: backend argv, output parsing, --json-schema, --effort, usage ledger
-├── migite_agent.py           ← agent backends (Claude Code, Cursor CLI, OpenCode): flags, permission mapping, output parsing
-├── migite_config.py          ← layered config resolver; the ONLY file that names a model id
+├── agents/                   ← one adapter per agent CLI: the ONLY place a CLI's flags, output format, or model ids appear
+│   ├── base.py               ← the interface: AgentInfo, AskRequest, SessionRequest, Launch, AskResult, permission words, scopes
+│   ├── claude.py             ← Claude Code
+│   ├── cursor.py             ← Cursor CLI
+│   └── opencode.py           ← OpenCode
+├── migite_call.py            ← the gateway: role → model and effort, capability fallbacks, prompt pointer, process, AgentError, usage ledger
+├── migite_agent.py           ← bash's door to the gateway: ask, session, info, check
+├── migite_claude.py          ← compatibility shim: the old name of migite_call.py
+├── migite_config.py          ← layered config resolver; role → tier → the agent's model
 ├── migite_paths.py           ← vault path resolver: org detection, base branch, slugify, run-dir lookup
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
 ├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
-├── tests/                    ← run.sh (bash suite), test_*.py (unittest), fake-claude (stand-in CLI), fixtures/
+├── tests/                    ← run.sh (bash suite), test_*.py (unittest, incl. the adapter contract), fake CLIs per agent, fixtures/
 ├── docs/                     ← this directory
 ├── .github/workflows/ci.yml  ← Python tests, bash suite, shellcheck
 └── migite-improvements.md    ← the self-improvement log, appended by Phase 4.5
@@ -59,8 +65,8 @@ them beside itself.
 - **Config is loaded on both sides.** Bash evals `migite_config.py env`; each agent calls
   `migite_config.load(repo_root)` itself. Both see the same layered result, so the agents behave
   identically when run by hand.
-- **One model-call path.** Bash's `claude_print` and the agents' `call_claude` wrappers both end
-  in `migite_claude.py`, which always requests the JSON envelope and appends to the usage ledger
+- **One model-call path.** Bash's `agent_ask` and the agents' `call_agent` wrappers both end
+  in `migite_call.py`, which asks the configured agent's adapter for machine-readable output and appends to the usage ledger
   named by `$MIGITE_USAGE_LEDGER`. tmux panes inherit the tmux server's environment, so the
   wrapper scripts re-export that variable.
 - **Gemfile one level down.** `migite` always `cd`s to the repo root, but Bundler only searches
@@ -141,11 +147,13 @@ derives the verdict from the document with the same anchored rule `helpers.sh`'s
 <a id="machine-readable"></a>
 ## Machine-readable envelopes and the usage ledger
 
-Every headless model call goes through **`migite_claude.py`** (imported by `migite-plan` and
-`migite-review`; reached from bash via `claude_print` in `helpers.sh`, which pipes the CLI's JSON
-through `migite_claude.py extract`). It always runs `claude --print --output-format json`, so
-each call yields the CLI envelope — `result`, `usage`, `total_cost_usd`, `duration_ms`, and with
-`--json-schema` a validated `structured_output` — and appends one line to the run's ledger
+Every headless model call goes through **`call_agent` in `migite_call.py`** (imported by
+`migite-plan`, `migite-review`, and the standalone tools; reached from bash via `agent_ask` in
+`helpers.sh`, which pipes the prompt through `migite_agent.py ask`). It asks the configured
+agent's adapter in `agents/` for a command line and parses that CLI's output into one shape. On Claude Code that is
+the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `duration_ms`, and with
+`--json-schema` a validated `structured_output`. Cursor and OpenCode report what they can; see
+[agents.md](./agents.md). Each call appends one line to the run's ledger
 (`$MIGITE_USAGE_LEDGER`, default `~/.dev-workflow/logs/<ts>-usage.jsonl`):
 
 ```json

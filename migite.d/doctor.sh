@@ -4,7 +4,7 @@
 # Sourced by migite. run_doctor is intentionally self-contained (parses its own
 # --repo flag, resolves REPO_ROOT/ORG/REPO_NAME/DEV_LOG_BASE itself) because it
 # must work even in cases the normal pipeline can't tolerate — a repo with no
-# Gemfile, a missing `claude`/`bundle`, an interrupted run leaving orphaned
+# Gemfile, a missing agent CLI or `bundle`, an interrupted run leaving orphaned
 # state — so it runs before migite's own Setup (`require_cmd`, mkdir, arg
 # parsing) rather than assuming any of that already succeeded. Never mutates
 # anything it inspects; exits 0 if clean, 1 if it found anything.
@@ -51,10 +51,14 @@ run_doctor() {
   echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
 
   # ── Tool resolution ────────────────────────────────────────────────────────
-  local doc_tool doc_agent
-  doc_agent="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" binary 2>/dev/null || echo claude)"
-  echo "ℹ Agent backend: $doc_agent"
-  for doc_tool in "$doc_agent" git "$MIGITE_PYTHON"; do
+  local doc_tool doc_agent_name
+  doc_agent_name="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" info --field name 2>/dev/null || echo claude)"
+  echo "ℹ Agent backend: $doc_agent_name"
+  # The adapter's own health check: binary on PATH, and its version when it answers.
+  if ! "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" check; then
+    issues=$((issues + 1))
+  fi
+  for doc_tool in git "$MIGITE_PYTHON"; do
     if command -v "$doc_tool" &>/dev/null; then
       echo "✔ Tool resolves: $doc_tool"
     else

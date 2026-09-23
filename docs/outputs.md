@@ -79,7 +79,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | `<ts>-<ticket>-improvements.txt` | Raw self-improvement notes |
 | `<ts>-prompt-<label>.txt` | Every prompt sent to interactive phases |
 | `<ts>-wrapper-<label>.sh` | tmux wrapper scripts |
-| `<ts>-usage.jsonl` | The run's usage ledger — one JSON line per headless `claude --print` call (tool, label, model, tokens, cost, duration, ok). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
+| `<ts>-usage.jsonl` | The run's usage ledger - one JSON line per headless agent call (tool, label, model, tokens, cost, duration, ok). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
 
 ---
 

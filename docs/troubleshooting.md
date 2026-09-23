@@ -66,25 +66,27 @@ Permission modes are set in one place — the `permissions` block of the config
 
 | Key | Default | Applies to |
 |---|---|---|
-| `permissions.interactive` | `bypassPermissions` | `run_phase` sessions: implement, gate fixes, PR description |
-| `permissions.heal` | `bypassPermissions` | the auto-heal loop's headless fixes |
+| `permissions.interactive` | `auto` | `run_phase` sessions: implement, gate fixes, PR description |
+| `permissions.heal` | `auto` | the auto-heal loop's headless fixes |
 | `permissions.headless` | `none` (no flag) | every other headless call in every tool: plan, review, knowledge, amendments, explore, audit, blueprint, pr-review |
 
-`MIGITE_PERMISSION_MODE` still works and maps onto `permissions.headless` (env beats files). The
-Jira fetch always passes its own explicit mode plus a two-tool allowlist, regardless of these.
+Values are `auto`, `edits`, `plan`, `ask`, or `none`; Claude Code's names (`bypassPermissions`,
+`acceptEdits`, `default`) are accepted as aliases. `MIGITE_PERMISSION_MODE` still works and maps
+onto `permissions.headless` (env beats files). The Jira fetch always runs with `auto` inside the
+`jira.read` tool scope, regardless of these.
 
 ```bash
-export MIGITE_PERMISSION_MODE=acceptEdits          # or, in .migite.yml:  permissions: { headless: acceptEdits }
+export MIGITE_PERMISSION_MODE=edits          # or, in .migite.yml:  permissions: { headless: edits }
 ```
 
-Omitting `--permission-mode` in `--print` mode means any tool use in that call is refused — the
+With `headless: none`, no permission flag is passed, so on Claude Code any tool use in that call is refused - the
 agent still produces output, just without being able to read/run anything, and with no visible
 error. This matters most for `migite-plan`/`migite-review`, which lean on file reads throughout.
 
-**If failures persist, the cause is almost certainly managed settings.** An enterprise policy can
-forbid `bypassPermissions`, in which case Claude Code silently falls back to prompting — which
-nothing can answer in a non-interactive `--print` call, or in `run_phase`'s hardcoded
-`bypassPermissions` sessions. Check with:
+**If failures persist on Claude Code, the cause is almost certainly managed settings.** An
+enterprise policy can forbid `bypassPermissions` (what `auto` becomes on Claude Code), in which
+case Claude Code silently falls back to prompting, which nothing can answer in a headless call
+or in a `run_phase` session started with `auto`. Check with:
 
 ```bash
 claude config list                      # look for a pinned/managed permission policy
@@ -95,19 +97,19 @@ If the second command can't run the tool, set modes your policy does allow in `.
 
 ```yaml
 permissions:
-  interactive: acceptEdits
-  heal: acceptEdits
-  headless: acceptEdits
+  interactive: edits
+  heal: edits
+  headless: edits
 ```
 
 <a id="nested"></a>
 ### Running migite from inside a Claude Code session
 
 Claude Code sets `CLAUDECODE` in its own terminal sessions, and a nested `claude` refuses to
-start while it's set. Every migite call site strips it — the Python agents drop it from the
-subprocess environment, and all bash launches go through `claude_cmd()` (`helpers.sh`), which
-is `env -u CLAUDECODE claude "$@"`. If you add a new `claude` invocation, use `claude_cmd`, not
-`claude` directly.
+start while it's set. The Claude adapter declares it (`env_unset` in `agents/claude.py`), and the
+gateway removes it from every headless call and every interactive session command, so no call
+site has to remember. Anything new that talks to an agent should go through `agent_ask`,
+`agent_think`, `run_phase`, or `migite_call.call_agent`, never launch a CLI directly.
 
 Note that **brakeman is not part of migite**. If you're seeing brakeman runs, they come from your
 `~/.claude/CLAUDE.md`, a project CLAUDE.md, or a skill — migite never invokes it.
@@ -147,7 +149,7 @@ call with that CLI's message. Two things are by design, not bugs:
 - `refusing a tool-enabled call` — only Claude Code can run a headless call with a scoped MCP tool
   allowlist; on other backends the Jira fetch is skipped and planning proceeds without the ticket
   body (the key still names the task).
-- The reviewer prints `backend has no structured output — text synthesis + markdown verdict` and
+- The reviewer prints `backend has no structured output - text synthesis + markdown verdict` and
   `review.json` says `"source": "markdown"`; the gate still reads a verdict, from the anchored
   markdown parser.
 
