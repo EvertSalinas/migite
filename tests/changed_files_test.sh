@@ -1,4 +1,4 @@
-# tests/changed_files_test.sh — helpers.sh:changed_ruby_files / changed_spec_files
+# tests/changed_files_test.sh — lib/stack.sh:changed_ruby_files / changed_spec_files
 #
 # A file that hasn't been `git add`-ed yet is invisible to `git diff`, and thus
 # to rubocop/rspec — this blind spot recurred at least five times in production

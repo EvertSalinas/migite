@@ -19,29 +19,25 @@
 
 set -euo pipefail
 
-MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Real directory of this script, through the ~/.local/bin symlink, so lib/ and
+# the Python modules are found in the checkout regardless of where it was invoked.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")" && pwd)"
+unset _self _link
+# shellcheck source=lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
 VAULT_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
-
-BOLD='\033[1m'
-CYAN='\033[0;36m'
-YELLOW='\033[0;33m'
-RESET='\033[0m'
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 # The git check lives after arg parsing - re-extract mode reads an exploration.md
 # from the vault and needs no repo at all.
-if [[ ! -x "$MIGITE_PYTHON" ]]; then
-  echo "✘ Python not found at $MIGITE_PYTHON" >&2
-  echo "  Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
-  exit 1
-fi
-
-if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
-  echo "✘ Python dependencies missing. Run:" >&2
-  echo "  $MIGITE_PYTHON -m pip install langgraph" >&2
-  exit 1
-fi
+require_langgraph
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 BRIEF_TEXT=""
@@ -162,7 +158,7 @@ if [[ -n "$FROM_EXPLORATION" ]]; then
     fi
     REEXTRACT_ARGS+=(--jira "$JIRA" --repo-root "$(git rev-parse --show-toplevel)")
   fi
-  exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-explore.py" "${REEXTRACT_ARGS[@]}"
+  exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite-explore.py" "${REEXTRACT_ARGS[@]}"
 fi
 
 # ── Git preflight (full runs only) ────────────────────────────────────────────
@@ -175,7 +171,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 
 # Layered config (flags > env > .migite.yml > ~/.config/migite > defaults) — the
 # bash side only needs vault.base here; migite-explore.py loads the rest itself.
-eval "$("$MIGITE_PYTHON" "$SCRIPT_DIR/migite_config.py" env --repo-root "$REPO_ROOT")" || exit 1
+eval "$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env --repo-root "$REPO_ROOT")" || exit 1
 VAULT_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
 
 # ── Collect the brief ─────────────────────────────────────────────────────────
@@ -197,7 +193,7 @@ fi
 
 # ── Knowledge file (if one exists for this repo) ──────────────────────────────
 REPO_NAME=$(basename "$REPO_ROOT")
-ORG=$("$MIGITE_PYTHON" "$SCRIPT_DIR/migite_paths.py" detect-org --repo-root "$REPO_ROOT")
+ORG=$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT")
 KNOWLEDGE_FILE="$VAULT_BASE/$ORG/$REPO_NAME/knowledge.md"
 
 # ── Run ───────────────────────────────────────────────────────────────────────
@@ -249,4 +245,4 @@ fi
 [[ -f "$KNOWLEDGE_FILE" ]] && PYTHON_ARGS+=(--knowledge "$KNOWLEDGE_FILE")
 [[ "$WANT_INTAKES" == "true" ]] && PYTHON_ARGS+=(--intakes)
 
-"$MIGITE_PYTHON" "$SCRIPT_DIR/migite-explore.py" "${PYTHON_ARGS[@]}"
+"$MIGITE_PYTHON" "$MIGITE_HOME/migite-explore.py" "${PYTHON_ARGS[@]}"

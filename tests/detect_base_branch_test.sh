@@ -1,4 +1,4 @@
-# tests/detect_base_branch_test.sh — helpers.sh:detect_base_branch
+# tests/detect_base_branch_test.sh — lib/stack.sh:detect_base_branch
 #
 # origin/HEAD is authoritative when set; otherwise migite falls back to
 # whichever of main/master/develop exists locally, and to a hardcoded "main"

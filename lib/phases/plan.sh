@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/plan.sh — Phase 1 (plan) and Phase 1.5 (TDD red phase).
+# lib/phases/plan.sh — Phase 1 (plan) and Phase 1.5 (TDD red phase).
 #
 # Sourced by migite. run_plan expects TASK, JIRA_TICKET, JIRA_URL, TASK_TYPE,
 # AUDIT_FILE, BLUEPRINT_FILE, INTAKE_FILE_ARG, ATTACH_FILES, ORG, REPO_NAME,

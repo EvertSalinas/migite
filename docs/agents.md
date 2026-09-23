@@ -91,7 +91,7 @@ agent reported, or the requested one, so runs on different agents can be compare
 Three layers, and only the bottom one knows anything about a particular CLI:
 
 ```
-migite core     bash phases (migite.d/*.sh) and the LangGraph tools
+migite core     bash phases (lib/phases/*.sh) and the LangGraph tools
     │           names a role, a label, a permission word, a scope; never a flag or a model
     ▼
 gateway         migite_call.py, the same code for every agent

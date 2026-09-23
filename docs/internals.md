@@ -144,7 +144,7 @@ migite-review \
 call** (`claude --json-schema`, see `REVIEW_SCHEMA`): the model returns `{verdict, reason,
 findings[], document}`, `document` becomes `review.md`, and the rest becomes `review.json`. If
 the structured call fails or returns something malformed, it falls back to a plain text call and
-derives the verdict from the document with the same anchored rule `helpers.sh`'s
+derives the verdict from the document with the same anchored rule `lib/gate.sh`'s
 `review_verdict()` uses (`source: "markdown"` in the envelope).
 
 <a id="machine-readable"></a>
@@ -152,7 +152,7 @@ derives the verdict from the document with the same anchored rule `helpers.sh`'s
 
 Every headless model call goes through **`call_agent` in `migite_call.py`** (imported by
 `migite-plan`, `migite-review`, and the standalone tools; reached from bash via `agent_ask` in
-`helpers.sh`, which pipes the prompt through `migite_agent.py ask`). It asks the configured
+`lib/agent.sh`, which pipes the prompt through `migite_agent.py ask`). It asks the configured
 agent's adapter in `agents/` for a command line and parses that CLI's output into one shape. On Claude Code that is
 the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `duration_ms`, and with
 `--json-schema` a validated `structured_output`. Cursor and OpenCode report what they can; see

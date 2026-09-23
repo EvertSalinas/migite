@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/deliver.sh — Phase 3.5 (knowledge capture), Phase 4 (PR
+# lib/phases/deliver.sh — Phase 3.5 (knowledge capture), Phase 4 (PR
 # description), and Phase 4.5 (self-improvement notes).
 #
 # Sourced by migite. run_deliver expects TASK_DIR, ORG, REPO_NAME,
@@ -165,13 +165,13 @@ EOF
   fi
   local SCRIPT_BLOCK
   if [[ "$RUN_EVENTFUL" == "true" ]]; then
-    SCRIPT_BLOCK="## Current migite script (entrypoint + sourced phase files under migite.d/)
+    SCRIPT_BLOCK="## Current migite script (entrypoint + sourced files under lib/ and lib/phases/)
 $(cat "$MIGITE_HOME/migite")
 
-$(for f in "$MIGITE_HOME"/migite.d/*.sh; do echo "### $(basename "$f")"; cat "$f"; echo; done)"
+$(for f in "$MIGITE_HOME"/lib/*.sh "$MIGITE_HOME"/lib/phases/*.sh; do echo "### ${f#"$MIGITE_HOME"/}"; cat "$f"; echo; done)"
   else
     SCRIPT_BLOCK="## migite script — function index (full source omitted: this run had no gate rejections or heal attempts)
-$(for f in "$MIGITE_HOME"/migite "$MIGITE_HOME"/migite.d/*.sh; do echo "### $(basename "$f")"; grep -nE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) *\{' "$f" | sed 's/() *{.*//'; echo; done)"
+$(for f in "$MIGITE_HOME"/migite "$MIGITE_HOME"/lib/*.sh "$MIGITE_HOME"/lib/phases/*.sh; do echo "### ${f#"$MIGITE_HOME"/}"; grep -nE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) *\{' "$f" | sed 's/() *{.*//'; echo; done)"
   fi
 
   local IMPROVEMENTS_PROMPT="You are reviewing a completed migite workflow run to identify specific, actionable improvements to the migite script itself.

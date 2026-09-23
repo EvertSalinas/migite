@@ -264,7 +264,7 @@ pre-2026-09 cheaper tiering, pin `think`, `explore_refine`, `review_correctness`
 stack: auto             # auto | rails | generic   (MIGITE_STACK; --stack on the command line wins)
 ```
 
-`auto` runs the detection in `helpers.sh` (`Gemfile` at the root or one level down → `rails`,
+`auto` runs the detection in `lib/stack.sh` (`Gemfile` at the root or one level down → `rails`,
 else `generic`). Setting it explicitly is for monorepos where detection picks wrong, or to force
 the no-tooling path. Describing stacks as data (lint/test commands, globs) is not supported yet —
 see the README roadmap.
@@ -414,7 +414,7 @@ files**:
 <a id="internals"></a>
 ## How the pieces read it
 
-`migite_config.py` is the single resolver. `migite` calls `load_migite_config` (`migite.d/config.sh`)
+`migite_config.py` is the single resolver. `migite` calls `load_migite_config` (`lib/config.sh`)
 right after the repo root is known; it `eval`s `migite_config.py env`, which prints one
 `MIGITE_CFG_<KEY>=value` assignment per leaf plus `MIGITE_CFG_MODEL_<ROLE>` for every resolved
 role, then maps them onto the variables the phases already read (`DEV_LOG_BASE`, `LOG_DIR`, ...).

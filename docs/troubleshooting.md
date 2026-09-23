@@ -121,7 +121,7 @@ Note that **brakeman is not part of migite**. If you're seeing brakeman runs, th
 There's no `bundle check`/rubocop/rspec startup preflight — a broken Ruby toolchain surfaces only
 when a phase actually tries to run it (look for `No version is set for command` or a bundler error
 in the relevant log). The one real preflight that exists is narrower: before spawning any LangGraph
-agent, `spawn_langgraph()` (`helpers.sh`) verifies `import langgraph` succeeds in
+agent, `spawn_langgraph()` (`lib/agent.sh`) verifies `import langgraph` succeeds in
 `$MIGITE_PYTHON` and fails loudly if it doesn't — that's a Python-dependency check, not a
 Ruby-tooling one.
 

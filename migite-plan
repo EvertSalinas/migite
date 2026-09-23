@@ -61,7 +61,7 @@ EXPLORE_AREAS = [
 ]
 
 # Used when --stack generic (no recognized stack profile — see detect_stack in
-# helpers.sh): one broad area instead of Rails' MVC-shaped split, since a
+# lib/stack.sh): one broad area instead of Rails' MVC-shaped split, since a
 # generic repo has no convention to organize exploration areas around.
 _GENERIC_SOURCE_EXTENSIONS = (
     "py", "js", "jsx", "ts", "tsx", "go", "rb", "java", "kt", "rs",

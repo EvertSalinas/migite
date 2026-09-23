@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/amend.sh — amend mode: scope a delta against an already-planned,
+# lib/phases/amend.sh — amend mode: scope a delta against an already-planned,
 # already-built task instead of starting a new plan.
 #
 # Sourced by migite. run_amend_mode expects BRANCH, ORG, REPO_NAME, DEV_LOG_BASE,

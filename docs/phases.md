@@ -118,7 +118,7 @@ Phase 3 always runs its own authoritative rubocop + rspec pass regardless — th
 <a id="lint-test-selection"></a>
 ### Which files get linted and tested
 
-Every phase gets its changed-file list from one set of shared helpers in `helpers.sh` —
+Every phase gets its changed-file list from one set of shared helpers in `lib/stack.sh` —
 `changed_ruby_files`, `changed_spec_files`, `changed_source_files` (Ruby minus specs, for the
 heal loop's autocorrect), and `changed_all_files` (any extension, for the diff-vs-notes warning).
 Each one is `git diff <base branch> --name-only --diff-filter=ACMR` **union**
@@ -136,7 +136,7 @@ happens when no spec files changed:
 |------|-----|
 | Base branch is auto-detected | `origin/HEAD`, then `main` / `master` / `develop`. Hardcoding `main` silently produced empty diffs on master-based repos, so rubocop was skipped for the wrong reason |
 | Deleted files excluded (`ACMR`) everywhere | Stale paths caused rubocop `No such file or directory` and rspec load errors — Phase 3 didn't apply this filter until it was caught and fixed |
-| `bundle exec` runs from the app's actual root, not necessarily the repo root | Bundler only searches upward from cwd for a Gemfile. When the Ruby app lives one level down (e.g. a `rails-app/` subdirectory alongside other tooling), `detect_stack` (`helpers.sh`) finds it via the `rails` stack profile's `stack_rails_app_root` and every `bundle_exec` call `cd`s there first — otherwise `git diff`'s repo-root-relative paths get re-resolved against the wrong directory and rubocop reports files missing |
+| `bundle exec` runs from the app's actual root, not necessarily the repo root | Bundler only searches upward from cwd for a Gemfile. When the Ruby app lives one level down (e.g. a `rails-app/` subdirectory alongside other tooling), `detect_stack` (`lib/stack.sh`) finds it via the `rails` stack profile's `stack_rails_app_root` and every `bundle_exec` call `cd`s there first — otherwise `git diff`'s repo-root-relative paths get re-resolved against the wrong directory and rubocop reports files missing |
 
 Untracked files respect `.gitignore` (`--exclude-standard`), and `changed_all_files` additionally
 drops anything under `scratchpad/` so migite's own artifacts never show up as "your" changes.

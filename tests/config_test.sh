@@ -1,4 +1,4 @@
-# tests/config_test.sh — migite.d/config.sh: load_migite_config, cfg, cfg_model,
+# tests/config_test.sh — lib/config.sh: load_migite_config, cfg, cfg_model,
 # prompt_path/template_path, use_tmux. Uses a JSON config (no PyYAML needed) in a
 # throwaway repo dir, with HOME/XDG pointed at an empty dir so the developer's own
 # ~/.config/migite never leaks into the assertions.

@@ -117,7 +117,7 @@ def call_agent(prompt: str, role: str, label: str = "", schema: dict | None = No
 
 
 def verdict_from_markdown(doc: str) -> str:
-    """Deterministic fallback mirroring helpers.sh review_verdict(): anchored on
+    """Deterministic fallback mirroring lib/gate.sh review_verdict(): anchored on
     the Verdict heading, never a whole-file keyword grep."""
     lines = doc.splitlines()
     for i, line in enumerate(lines):

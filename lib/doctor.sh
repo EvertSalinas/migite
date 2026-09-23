@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/doctor.sh — `migite doctor`: a read-only, non-mutating health check.
+# lib/doctor.sh — `migite doctor`: a read-only, non-mutating health check.
 #
 # Sourced by migite. run_doctor is intentionally self-contained (parses its own
 # --repo flag, resolves REPO_ROOT/ORG/REPO_NAME/DEV_LOG_BASE itself) because it
@@ -9,7 +9,7 @@
 # parsing) rather than assuming any of that already succeeded. Never mutates
 # anything it inspects; exits 0 if clean, 1 if it found anything.
 #
-# Expects MIGITE_HOME, MIGITE_PYTHON, DEV_LOG_BASE and helpers.sh's
+# Expects MIGITE_HOME, MIGITE_PYTHON, DEV_LOG_BASE and lib/common.sh's
 # detect_stack/STACK_PROFILES to already be available (sourced by migite
 # before this file).
 
@@ -46,7 +46,7 @@ run_doctor() {
   local doc_dev_log_base="${DEV_LOG_BASE:-$HOME/dev-log}"
 
   # ── Stack detection — read-only, never errors (generic is the catch-all
-  # profile, see STACK_PROFILES in helpers.sh).
+  # profile, see STACK_PROFILES in lib/stack.sh).
   detect_stack
   echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
 
@@ -214,20 +214,23 @@ run_doctor() {
     issues=$((issues + ${#dupes[@]}))
   fi
 
-  # ── helpers.sh size watch (informational) ───────────────────────────────────
-  # ~2,000 lines is a reasonable signal that a shared-helpers file should be
-  # split by concern. Not enforced here — just surfaced so migite.d/helpers.sh
-  # growth doesn't go unnoticed. Never adds to $issues; this can't fail doctor,
-  # only inform it.
-  local helpers_file="$MIGITE_HOME/migite.d/helpers.sh"
-  if [[ -f "$helpers_file" ]]; then
-    local helpers_lines
-    helpers_lines=$(wc -l < "$helpers_file" | tr -d ' ')
-    if [[ "$helpers_lines" -ge 2000 ]]; then
-      echo "⚠ helpers.sh is $helpers_lines lines — past the ~2,000-line split trigger, worth a look"
-    else
-      echo "ℹ helpers.sh: $helpers_lines lines (split trigger: ~2,000)"
+  # ── bash lib size watch (informational) ─────────────────────────────────────
+  # The helpers used to be one 845-line file; they're split by concern under
+  # lib/ now. Surface the largest file so a new grab-bag doesn't grow unnoticed.
+  # Never adds to $issues; this can't fail doctor, only inform it.
+  local lib_file lib_lines lib_total=0 lib_count=0 lib_largest="" lib_largest_lines=0
+  for lib_file in "$MIGITE_HOME"/lib/*.sh "$MIGITE_HOME"/lib/phases/*.sh; do
+    [[ -f "$lib_file" ]] || continue
+    lib_lines=$(wc -l < "$lib_file" | tr -d ' ')
+    lib_total=$((lib_total + lib_lines)); lib_count=$((lib_count + 1))
+    if [[ "$lib_lines" -gt "$lib_largest_lines" ]]; then
+      lib_largest_lines=$lib_lines; lib_largest="${lib_file#"$MIGITE_HOME"/}"
     fi
+  done
+  if [[ "$lib_largest_lines" -ge 600 ]]; then
+    echo "⚠ $lib_largest is $lib_largest_lines lines — past the ~600-line split trigger, worth a look"
+  else
+    echo "ℹ bash lib: $lib_total lines in $lib_count files (largest: $lib_largest, $lib_largest_lines; split trigger: ~600)"
   fi
 
   echo ""

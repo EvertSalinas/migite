@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/review.sh — Phase 3 (rubocop/rspec + LangGraph review) and
+# lib/phases/review.sh — Phase 3 (rubocop/rspec + LangGraph review) and
 # the commit gate.
 #
 # Sourced by migite. run_review expects PLAN_FILE, IMPLEMENTATION_FILE,
@@ -8,13 +8,13 @@
 # TOOLING_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
 # self-improvement prompt and by show_commit_context.
 #
-# Changed-file lists come from helpers.sh's changed_*_files (tracked union
+# Changed-file lists come from lib/stack.sh's changed_*_files (tracked union
 # untracked) — never an inline `git diff | grep`, which is how untracked new
 # files kept slipping past lint/test/review. Tooling failures come from
 # tooling_failed for the same reason.
 #
 # When $STACK == "generic" (no recognized stack profile matched — see
-# detect_stack in helpers.sh), rubocop/rspec are skipped entirely, both here
+# detect_stack in lib/stack.sh), rubocop/rspec are skipped entirely, both here
 # and in the commit-gate re-run loop; the LangGraph review still runs against
 # the plan + diff, just without tooling logs.
 

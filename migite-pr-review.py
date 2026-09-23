@@ -28,7 +28,7 @@ import migite_paths
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
-# Same ticket-in-branch-name heuristic as migite.d/amend.sh's BRANCH_TICKET —
+# Same ticket-in-branch-name heuristic as lib/phases/amend.sh's BRANCH_TICKET —
 # a branch like "feature/bb-3136-add-pdf-export" embeds the ticket key amid
 # other text, so this can't reuse migite_paths.extract_ticket_key (anchored,
 # whole-string match only).

@@ -222,7 +222,7 @@ migite --audit <path>
 
 Two principles that already govern how migite has evolved, written down as a citable reference:
 
-- **Narrow core, capability at the edges.** Prefer editing a prompt/template over adding new bash logic to `migite.d/*.sh` when the same result is reachable that way. Growing `migite.d/*.sh` for something a prompt template already covers adds permanent core surface for a one-off need.
+- **Narrow core, capability at the edges.** Prefer editing a prompt/template over adding new bash logic to `lib/**/*.sh` when the same result is reachable that way. Growing `lib/**/*.sh` for something a prompt template already covers adds permanent core surface for a one-off need.
 
 - **Doc-drift checklist.** Before calling a rename/move done, grep `README.md` and `docs/*.md` for the old name. Nothing in this repo enforces docs and implementation moving together, so it has to be a manual habit.
 

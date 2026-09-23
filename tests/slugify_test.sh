@@ -1,6 +1,6 @@
-# tests/slugify_test.sh — helpers.sh:slugify, and parity with migite_paths.slugify
+# tests/slugify_test.sh — lib/vault.sh:slugify, and parity with migite_paths.slugify
 #
-# `migite` (bash) names vault folders with helpers.sh's slugify; the standalone
+# `migite` (bash) names vault folders with lib/vault.sh's slugify; the standalone
 # tools (Python) look them up with migite_paths.slugify. There used to be four
 # implementations that disagreed on "_" and "+" (and the blueprint wrapper's
 # `tr` version left stray hyphens). The bash one is canonical; the Python one

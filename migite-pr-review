@@ -13,8 +13,19 @@
 
 set -euo pipefail
 
-MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Real directory of this script, through the ~/.local/bin symlink, so lib/ and
+# the Python modules are found in the checkout regardless of where it was invoked.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")" && pwd)"
+unset _self _link
+# shellcheck source=lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
 
 # ── Preflight ────────────────────────────────────────────────────────────────────
 if ! git rev-parse --is-inside-work-tree &>/dev/null; then
@@ -23,17 +34,7 @@ if ! git rev-parse --is-inside-work-tree &>/dev/null; then
 fi
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
-if [[ ! -x "$MIGITE_PYTHON" ]]; then
-  echo "✘ Python not found at $MIGITE_PYTHON" >&2
-  echo "  Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
-  exit 1
-fi
-
-if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
-  echo "✘ Python dependencies missing. Run:" >&2
-  echo "  $MIGITE_PYTHON -m pip install langgraph" >&2
-  exit 1
-fi
+require_langgraph
 
 # ── Require --branch ─────────────────────────────────────────────────────────────
 if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
@@ -42,4 +43,4 @@ if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
 fi
 
 # ── Run ──────────────────────────────────────────────────────────────────────────
-exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-pr-review.py" --repo-root "$REPO_ROOT" "$@"
+exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite-pr-review.py" --repo-root "$REPO_ROOT" "$@"

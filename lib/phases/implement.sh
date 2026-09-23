@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/implement.sh — Phase 2 (implement, staged or single-session)
+# lib/phases/implement.sh — Phase 2 (implement, staged or single-session)
 # and the Phase 2.5 auto-heal loop.
 #
 # Sourced by migite. run_implement expects AMEND_MODE, STAGED,

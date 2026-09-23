@@ -34,7 +34,7 @@ class AmbiguousRunDirError(Exception):
 
 
 def slugify(text: str) -> str:
-    """Byte-for-byte compatible with helpers.sh's bash `slugify` — the canonical
+    """Byte-for-byte compatible with lib/vault.sh's bash `slugify` — the canonical
     definition. Lowercase; every run of non-[a-z0-9] becomes one "-"; no
     leading/trailing "-"; max 50 chars; no trailing "-" left by the cut.
     `migite` (bash) creates vault folders with the bash version and the
@@ -255,7 +255,7 @@ def run_self_test() -> None:
             result == repo_dir / "add-users",
         )
 
-    # slugify — must match helpers.sh's bash slugify (tests/slugify_test.sh checks parity)
+    # slugify — must match lib/vault.sh's bash slugify (tests/slugify_test.sh checks parity)
     long_text = "jira ticket bb-3370 please fetch context from the discovery doc and figure it out"
     check(
         "slugify: 50-char truncation never leaves a trailing hyphen",
@@ -288,7 +288,7 @@ def main() -> None:
     p_base = sub.add_parser("detect-base-branch", help="Print the detected base branch for a repo root")
     p_base.add_argument("--repo-root", required=True)
 
-    p_slug = sub.add_parser("slugify", help="Print the canonical slug for a string (matches helpers.sh slugify)")
+    p_slug = sub.add_parser("slugify", help="Print the canonical slug for a string (matches lib/vault.sh slugify)")
     p_slug.add_argument("text")
 
     args = parser.parse_args()

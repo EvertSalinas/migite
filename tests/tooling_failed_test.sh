@@ -1,4 +1,4 @@
-# tests/tooling_failed_test.sh — helpers.sh:tooling_failed
+# tests/tooling_failed_test.sh — lib/stack.sh:tooling_failed
 #
 # Each pattern here was added to tooling_failed one at a time after a real
 # rubocop/rspec run passed its exit-code check while actually having failed

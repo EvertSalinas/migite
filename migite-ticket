@@ -13,31 +13,19 @@
 
 set -euo pipefail
 
-# Same Python resolution as migite: an explicit MIGITE_PYTHON, else a python3 that
-# actually runs, else the asdf fallback.
-if [[ -n "${MIGITE_PYTHON:-}" ]]; then
-  :
-elif command -v python3 &>/dev/null && python3 --version &>/dev/null; then
-  MIGITE_PYTHON="$(command -v python3)"
-else
-  MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
-fi
-if [[ ! -x "$MIGITE_PYTHON" ]] && ! command -v "$MIGITE_PYTHON" &>/dev/null; then
-  echo "✘ Python not found at $MIGITE_PYTHON. Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
-  exit 1
-fi
-
-# The real directory, through the ~/.local/bin symlink, so migite_ticket.py and
-# trackers/ are found beside it.
-_real="${BASH_SOURCE[0]}"
-if ! _real="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null)"; then
-  _real="${BASH_SOURCE[0]}"
-  while [[ -L "$_real" ]]; do
-    _link="$(readlink "$_real")"
-    if [[ "$_link" == /* ]]; then _real="$_link"; else _real="$(dirname "$_real")/$_link"; fi
-  done
-fi
-MIGITE_HOME="$(cd "$(dirname "$_real")" && pwd)"
+# Real directory of this script, through the ~/.local/bin symlink, so lib/ and
+# the Python modules are found in the checkout regardless of where it was invoked.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
+done
+MIGITE_HOME="$(cd "$(dirname "$_self")" && pwd)"
+unset _self _link
+# shellcheck source=lib/common.sh
+source "$MIGITE_HOME/lib/common.sh"
+migite_resolve_python
+require_python
 
 # The repo whose .migite.yml applies, when there is one.
 repo_args=()

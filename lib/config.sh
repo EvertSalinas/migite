@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/config.sh — load the layered configuration (migite_config.py) into
+# lib/config.sh — load the layered configuration (migite_config.py) into
 # the shell and map it onto the variables the rest of migite already reads.
 #
 # Sourced by migite. Expects MIGITE_HOME and MIGITE_PYTHON to be set.

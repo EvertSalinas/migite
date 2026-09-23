@@ -42,7 +42,7 @@ done
 The module symlinks let you run `migite_config.py` and friends by name. The tools themselves
 don't need them: Python resolves a symlinked script to its real directory, so `migite-plan` and
 the others import `migite_call`, `migite_config`, and the `agents/` package from the checkout.
-`migite.d/`, `prompts/`, and `agents/` are not symlinked; `migite` likewise resolves its real
+`lib/`, `prompts/`, and `agents/` are not symlinked; `migite` likewise resolves its real
 location through the symlink and finds them beside itself.
 
 <a id="macos"></a>
@@ -105,7 +105,7 @@ migite doctor
 ✔ Scratchpad/vault sync: no drift found
 ✔ Sentinels: none orphaned
 ✔ Knowledge duplicates: none found
-ℹ helpers.sh: 780 lines (split trigger: ~2,000)
+ℹ bash lib: 2855 lines in 13 files (largest: lib/phases/plan.sh, 527; split trigger: ~600)
 
 0 issues found.
 ```

@@ -44,8 +44,8 @@ jobs:
       # until the existing style findings have been triaged.
       - name: shellcheck (errors)
         run: |
-          shellcheck -S error -s bash migite migite.d/*.sh migite-explore migite-audit migite-blueprint migite-pr-review migite-ticket tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
+          shellcheck -S error -s bash migite lib/*.sh lib/phases/*.sh migite-explore migite-audit migite-blueprint migite-pr-review migite-ticket tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
       - name: shellcheck (warnings, informational)
         continue-on-error: true
         run: |
-          shellcheck -S warning -s bash migite migite.d/*.sh migite-explore migite-audit migite-blueprint migite-pr-review migite-ticket tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
+          shellcheck -S warning -s bash migite lib/*.sh lib/phases/*.sh migite-explore migite-audit migite-blueprint migite-pr-review migite-ticket tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode
