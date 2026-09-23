@@ -47,46 +47,48 @@ check "review_verdict: an unparseable review.json falls back to the markdown" \
   test "$(review_verdict "$mr_dir/review.md")" = "ready"
 rm -f "$mr_dir/review.json"
 
-# ── claude_print + ledger (fake claude on PATH) ──────────────────────────────
+# ── agent_ask + ledger (fake claude on PATH) ─────────────────────────────────
 _old_path="$PATH"
 PATH="$mr_dir/bin:$PATH"
 check "test harness: 'claude' resolves to the fake, never the real CLI" \
   test "$(command -v claude)" = "$mr_dir/bin/claude"
 export MIGITE_USAGE_LEDGER="$mr_dir/usage.jsonl"
 
-out=$(printf 'summarise this' | FAKE_CLAUDE_MODE=envelope claude_print "unit-test" --model claude-sonnet-5)
-check "claude_print: prints the envelope's result text, not the JSON" \
+out=$(printf 'summarise this' | FAKE_CLAUDE_MODE=envelope agent_ask "unit-test" knowledge)
+check "agent_ask: prints the envelope's result text, not the JSON" \
   bash -c '[[ "$1" == echo:summarise* ]]' _ "$out"
-check "claude_print: appends one ledger line" \
+check "agent_ask: appends one ledger line" \
   test "$(wc -l < "$MIGITE_USAGE_LEDGER" | tr -d ' ')" = "1"
-check "claude_print: ledger line carries the label and tool" \
+check "agent_ask: ledger line carries the label and tool" \
   bash -c 'grep -q "\"label\": \"unit-test\"" "$1" && grep -q "\"tool\": \"migite\"" "$1"' _ "$MIGITE_USAGE_LEDGER"
-check "claude_print: ledger line carries the cost" \
+check "agent_ask: ledger line carries the cost" \
   grep -q '"cost_usd": 0.0475' "$MIGITE_USAGE_LEDGER"
+check "agent_ask: the role picked the model (knowledge → standard tier)" \
+  grep -q '"model": "claude-sonnet-5"' "$MIGITE_USAGE_LEDGER"
 
-out=$(printf 'x' | FAKE_CLAUDE_MODE=text claude_print "plain" --model m)
-check "claude_print: plain-text CLI output passes through untouched (older CLI)" \
+out=$(printf 'x' | FAKE_CLAUDE_MODE=text agent_ask "plain" knowledge)
+check "agent_ask: plain-text CLI output passes through untouched (older CLI)" \
   bash -c '[[ "$1" == "plain text result for: x" ]]' _ "$out"
 
-rc=0; printf 'x' | FAKE_CLAUDE_MODE=exit1 claude_print "fail" --model m >/dev/null 2>&1 || rc=$?
-check "claude_print: propagates a non-zero claude exit" test "$rc" != "0"
+rc=0; printf 'x' | FAKE_CLAUDE_MODE=exit1 agent_ask "fail" knowledge >/dev/null 2>&1 || rc=$?
+check "agent_ask: propagates a non-zero CLI exit" test "$rc" != "0"
 
-rc=0; printf 'x' | FAKE_CLAUDE_MODE=is_error claude_print "err" --model m >/dev/null 2>&1 || rc=$?
-check "claude_print: an is_error envelope is a failure" test "$rc" != "0"
+rc=0; printf 'x' | FAKE_CLAUDE_MODE=is_error agent_ask "err" knowledge >/dev/null 2>&1 || rc=$?
+check "agent_ask: an is_error envelope is a failure" test "$rc" != "0"
 
-# ── thinking() end to end through claude_print ───────────────────────────────
+# ── agent_think end to end through agent_ask ─────────────────────────────────
 think_out="$mr_dir/thinking.txt"
-FAKE_CLAUDE_MODE=envelope thinking "Extracting knowledge" "$think_out" "the prompt body" "--model claude-sonnet-5" >/dev/null
-check "thinking: result text lands in the outfile" \
+FAKE_CLAUDE_MODE=envelope agent_think "Extracting knowledge" knowledge "$think_out" "the prompt body" >/dev/null
+check "agent_think: result text lands in the outfile" \
   bash -c '[[ "$(cat "$1")" == echo:the\ prompt* ]]' _ "$think_out"
-check "thinking: call is metered under its label" \
+check "agent_think: call is metered under its label" \
   grep -q '"label": "Extracting knowledge"' "$MIGITE_USAGE_LEDGER"
 
 # ── run_cost_so_far / print_usage_summary ────────────────────────────────────
 cost=$(run_cost_so_far)
 check "run_cost_so_far: '<N> calls, \$X.XX' from the ledger" \
   bash -c '[[ "$1" =~ ^[0-9]+\ calls,\ \$[0-9]+\.[0-9]{2}$ ]]' _ "$cost"
-check "run_cost_so_far: counts every metered call (envelope+text+fail+is_error+thinking = 5)" \
+check "run_cost_so_far: counts every metered call (envelope+text+fail+is_error+think = 5)" \
   bash -c '[[ "$1" == 5\ calls* ]]' _ "$cost"
 
 SCRATCHPAD_DIR="$mr_dir/scratch"; TASK_DIR="$mr_dir/vault"; mkdir -p "$SCRATCHPAD_DIR"

@@ -10,6 +10,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
 - [`migite config`](#command)
 - [Recipes](#recipes)
 - [Reference](#reference)
+  - [agent](#agent)
   - [vault, logs](#vault)
   - [models](#models)
   - [stack](#stack)
@@ -130,7 +131,7 @@ budget:
 ```yaml
 stack: generic                  # skip rubocop/rspec; plan, implement, review still run
 permissions:
-  headless: acceptEdits         # if your managed settings forbid bypassPermissions
+  headless: edits               # if your managed settings forbid auto-approval
 ```
 
 **Override one prompt for one project**
@@ -154,6 +155,35 @@ migite config | grep prompts           # confirm it is picked up
 The starter file written by `migite config --init` is the same as this reference with defaults
 filled in.
 
+<a id="agent"></a>
+### `agent`
+
+```yaml
+agent:
+  backend: claude        # claude | cursor | opencode   (MIGITE_AGENT)
+  command: null          # override the executable: a name on PATH or a full path
+```
+
+Which agent CLI every call goes through. Model tiers, effort, structured output, and the Jira
+fetch behave differently per backend; see [agents.md](./agents.md) for the capability matrix.
+
+<a id="tracker"></a>
+### `tracker`
+
+```yaml
+tracker:
+  provider: auto          # auto | jira-acli | jira-agent | none   (MIGITE_TRACKER)
+  jira:
+    acli: acli            # MIGITE_ACLI: Atlassian's CLI, a name on PATH or a full path
+    acceptance_field: null   # custom field id holding acceptance criteria, e.g. customfield_10035
+```
+
+Where `--jira` gets the ticket's content. `auto` uses `acli` when it is installed and logged in
+(`acli jira auth login --web`, once, through the browser), else one agent call through the
+Atlassian MCP tools when the agent supports the `jira.read` scope, else nothing. migite never
+handles a Jira credential; a token key in this block is refused as a config error. Setup and the
+`migite-ticket` command: [tickets.md](./tickets.md).
+
 <a id="vault"></a>
 ### `vault`, `logs`
 
@@ -173,6 +203,8 @@ every tool has a role; each role has a default tier.
 
 ```yaml
 models:
+  # Tiers are model ids for the ACTIVE backend. Unset = that backend's default
+  # (claude: haiku-4-5 / sonnet-5 / opus-5-5; cursor and opencode: no --model passed until you pin one).
   fast: claude-haiku-4-5-20251001   # tier: file exploration
   standard: claude-sonnet-5         # tier: lenses, analysts, audit areas, checklist review, knowledge, amendments
   strong: claude-opus-5-5           # tier: plan synthesis/refine, critic, correctness + security review, verdicts
@@ -203,6 +235,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `verdict` | strong | `migite-review` — structured verdict synthesis (decides the gate) |
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
 | `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
+| `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
 | `lens` | standard | `migite-explore` lenses |
 | `explore_synth`, `challenge`, `explore_refine` | strong | `migite-explore` synthesis, adversarial challenge, and the revision that applies it |
 | `analyst`, `extract` | standard | `migite-blueprint` analysts, milestone/knowledge extraction |
@@ -260,16 +293,26 @@ scratchpad (mirrored to the vault), so overrides leave a record.
 
 ```yaml
 permissions:
-  interactive: bypassPermissions   # implement / fix / PR-description sessions (run_phase)
-  heal: bypassPermissions          # the auto-heal loop's headless fixes
-  headless: none                   # plan, review, knowledge, amendments, standalone tools
+  interactive: auto          # implement / fix / PR-description sessions (run_phase)
+  heal: auto                 # the auto-heal loop's headless fixes
+  headless: none             # plan, review, knowledge, amendments, standalone tools
 ```
 
-Values: `bypassPermissions`, `acceptEdits`, `default`, `plan`, or `none` (don't pass
-`--permission-mode` at all, so the CLI's own default applies). `headless` replaces the old
-partial `MIGITE_PERMISSION_MODE` behaviour: it now applies uniformly to every headless call in
-every tool. The env var still works and maps onto this key. The Jira fetch keeps its own
-explicit mode and scoped tool allowlist regardless.
+Values are migite's own words, which each agent adapter maps onto its CLI's flags:
+
+| Word | Meaning | Claude Code alias |
+|---|---|---|
+| `auto` | approve every tool use without asking | `bypassPermissions` |
+| `edits` | approve file edits, ask for anything else | `acceptEdits` |
+| `plan` | read-only planning mode | `plan` |
+| `ask` | the CLI's own default: ask before acting | `default` |
+| `none` | pass no permission flag at all | |
+
+The Claude Code names are accepted as aliases and normalized, so configs written before the
+neutral words keep working. `headless` applies uniformly to every headless call in every tool;
+the `MIGITE_PERMISSION_MODE` env var still works and maps onto it. The Jira fetch always runs
+with `auto` inside the `jira.read` tool scope when it goes through the agent. See [agents.md](./agents.md) for what
+each word becomes on each CLI.
 
 <a id="heal"></a>
 ### `heal`
@@ -352,6 +395,9 @@ files**:
 | Variable | Config key |
 |---|---|
 | `DEV_LOG_BASE` | `vault.base` |
+| `MIGITE_AGENT` | `agent.backend` |
+| `MIGITE_TRACKER` | `tracker.provider` |
+| `MIGITE_ACLI` | `tracker.jira.acli` |
 | `MIGITE_ORG` | `vault.org` |
 | `LOG_DIR` | `logs.dir` |
 | `MIGITE_STACK` | `stack` |
@@ -372,10 +418,13 @@ files**:
 right after the repo root is known; it `eval`s `migite_config.py env`, which prints one
 `MIGITE_CFG_<KEY>=value` assignment per leaf plus `MIGITE_CFG_MODEL_<ROLE>` for every resolved
 role, then maps them onto the variables the phases already read (`DEV_LOG_BASE`, `LOG_DIR`, ...).
-Phases use `cfg <key>`, `cfg_model <role>`, `prompt_path <name>`, `template_path <name>`.
+Phases use `cfg <key>`, `prompt_path <name>`, `template_path <name>`, and pass roles, never
+models, to `agent_ask` / `agent_think`. `load_migite_config` also caches the configured agent's
+description as `MIGITE_AGENT_*` (`load_agent_info`).
 
 The Python agents and standalone tools call `migite_config.load(repo_root)` themselves, so they
 work identically when invoked directly. `migite_paths.detect_org` consults `vault.org` after the
-`MIGITE_ORG` env var. `migite_claude.configure_from(cfg)` applies timeouts, the headless
-permission mode, and the per-role effort table to every subsequent model call; bash call sites
-use `cfg_model_flags <role>`, which emits `--model` plus `--effort` when configured.
+`MIGITE_ORG` env var. `migite_call.configure_from(cfg)` selects the agent and applies
+timeouts, the headless permission mode, the role-to-model table, and the per-role effort table
+to every later call. Bash reaches the same gateway through `migite_agent.py ask --role <role>`,
+so the model and effort for a bash call site are resolved in exactly the same place.

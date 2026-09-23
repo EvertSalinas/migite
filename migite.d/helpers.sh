@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# migite.d/helpers.sh — shared output, prompt, and Claude-invocation helpers
+# migite.d/helpers.sh - shared output, prompt, and agent-call helpers
 #
 # Sourced by migite. Expects config vars (LOG_DIR, TIMESTAMP, DATE, MIGITE_PYTHON)
 # to already be set. Functions here read $SCRATCHPAD_DIR/$TASK_DIR-family globals
@@ -245,39 +245,61 @@ write_prompt() {
   echo "$prompt_file"
 }
 
-# Every `claude` launch below runs under `env -u CLAUDECODE`. Claude Code sets
-# that variable in its own sessions, and a nested `claude` refuses to start
-# while it's set — the Python agents and the Jira fetch already strip it, but
-# run_phase/heal_run/thinking didn't, so knowledge capture, self-improvement,
-# amendments, and the heal loop all failed whenever migite was launched from
-# inside a Claude Code terminal. One wrapper, used everywhere, so it can't
-# drift again.
-claude_cmd() {
-  env -u CLAUDECODE claude "$@"
+# ── The agent interface ───────────────────────────────────────────────────────
+# Bash never builds an agent CLI's flags or reads its output. Everything goes
+# through migite_agent.py, which picks the agent from agent.backend and hands the
+# work to the gateway (migite_call.py) and the adapter (agents/<name>.py).
+# load_agent_info (config.sh) caches the agent's description as MIGITE_AGENT_*.
+
+# agent_ask <label> <role> [--permission P] [--scope S] [--thinking]
+# One headless call on the configured agent: prompt on stdin, result text on
+# stdout, one usage line in $MIGITE_USAGE_LEDGER. The role picks the model and
+# effort; --permission defaults to permissions.headless. Exit 3 when the agent
+# can't honour a --scope (the call is refused, never run with every tool).
+agent_ask() {
+  local label="$1" role="$2"; shift 2
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" ask \
+    --tool migite --label "$label" --role "$role" "$@"
 }
 
-# claude_print <label> [claude flags...] — headless call, prompt on stdin,
-# result TEXT on stdout. Always runs `--output-format json` under the hood and
-# pipes the envelope through migite_claude.py `extract`, which prints the
-# `result` and appends one usage line (tokens, cost, duration, model) to
-# $MIGITE_USAGE_LEDGER. Callers must NOT pass --output-format themselves.
-# Falls back to passing stdout through untouched if the CLI didn't return the
-# JSON envelope (older CLI, plain-text error), so nothing downstream changes.
-claude_print() {
-  local label="$1"; shift
-  local raw rc=0 xrc=0
-  raw=$(mktemp)
-  # permissions.headless from the config applies unless the caller passed its own
-  # --permission-mode (the Jira fetch does, with a scoped tool allowlist).
-  local -a perm=()
-  local headless="${MIGITE_CFG_PERMISSIONS_HEADLESS:-none}"
-  if [[ "$headless" != "none" && " $* " != *" --permission-mode "* ]]; then
-    perm=(--permission-mode "$headless")
+# ticket_cmd <parse|fetch|sources> ... - ticket references and content, from
+# whichever source tracker.provider allows (migite_ticket.py). Bash never talks
+# to Jira itself.
+ticket_cmd() {
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" --repo-root "${REPO_ROOT:-$PWD}" "$@"
+}
+
+# agent_field <name> - one field of the agent's description (name, display_name,
+# binary, exit_hint, instruction_files, ...), from the cache when loaded.
+agent_field() {
+  local field="$1" var=""
+  case "$field" in
+    name) var=MIGITE_AGENT_NAME ;; display_name) var=MIGITE_AGENT_DISPLAY ;;
+    binary) var=MIGITE_AGENT_BINARY ;; exit_hint) var=MIGITE_AGENT_EXIT_HINT ;;
+    instruction_files) var=MIGITE_AGENT_INSTRUCTIONS ;;
+  esac
+  if [[ -n "$var" && -n "${!var:-}" ]]; then
+    echo "${!var}"
+  else
+    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" info --field "$field" 2>/dev/null
   fi
-  claude_cmd --print --output-format json "${perm[@]}" "$@" > "$raw" || rc=$?
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" extract --tool migite --label "$label" --exit-code "$rc" < "$raw" || xrc=$?
-  rm -f "$raw"
-  return "$xrc"
+}
+
+# agent_binary - the configured agent's executable (or agent.command).
+agent_binary() {
+  agent_field binary || echo claude
+}
+
+# agent_supports <capability> - structured_output | effort | usage | scope:<name>
+agent_supports() {
+  local cap="$1" caps
+  if [[ -n "${MIGITE_AGENT_NAME:-}" ]]; then
+    caps="${MIGITE_AGENT_CAPS:-}"
+  else
+    caps="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" info --shell 2>/dev/null \
+      | sed -n "s/^MIGITE_AGENT_CAPS=//p" | tr -d "'")"
+  fi
+  [[ " $caps " == *" $cap "* ]]
 }
 
 # json_field <file.json> <dotted.key> — prints one value; exit 1 if the file,
@@ -286,7 +308,7 @@ claude_print() {
 json_field() {
   local file="$1" key="$2"
   [[ -f "$file" ]] || return 1
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" field "$file" "$key" 2>/dev/null
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" field "$file" "$key" 2>/dev/null
 }
 
 # sync_json <file.json> <vault-dest> — mirror a JSON artifact to the vault.
@@ -305,7 +327,7 @@ run_cost_so_far() {
   [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 1
   local tmp calls cost
   tmp=$(mktemp)
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
   calls=$(json_field "$tmp" total.calls || echo 0)
   cost=$(json_field "$tmp" total.cost_usd || echo 0)
   rm -f "$tmp"
@@ -324,53 +346,45 @@ print_usage_summary() {
   echo -e "${BOLD}── Usage ───────────────────────────────────────${RESET}"
   if [[ -n "${SCRATCHPAD_DIR:-}" && -d "$SCRATCHPAD_DIR" ]]; then
     local out="$SCRATCHPAD_DIR/usage.json"
-    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
+    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
     [[ -n "${TASK_DIR:-}" ]] && sync_json "$out" "$TASK_DIR/usage.json"
   else
-    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" summary --ledger "$MIGITE_USAGE_LEDGER" || true
+    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" summary --ledger "$MIGITE_USAGE_LEDGER" || true
   fi
   echo -e "  Ledger: ${CYAN}$MIGITE_USAGE_LEDGER${RESET}"
   echo -e "${BOLD}────────────────────────────────────────────────${RESET}"
 }
 
-# Interactive prompts above this many bytes are handed to Claude as a pointer
-# to the prompt file instead of inline on the command line. Linux caps a
-# single argv string at 128 KB; the implement prompt is knowledge.md + plan +
-# command file and knowledge.md grows without bound, so this will be hit on a
-# long-lived repo. Below the cap the prompt stays inline, where it shows up as
-# the session's first message and is easier to eyeball.
-MIGITE_PROMPT_INLINE_MAX="${MIGITE_PROMPT_INLINE_MAX:-100000}"
-
-# run_phase <label> <output_file> <prompt> [permission_mode]
-# Opens an interactive Claude Code session in a split pane with the prompt pre-loaded.
-# permission_mode defaults to `permissions.interactive` from the config
-# (bypassPermissions unless changed). When done, type /exit to return to the workflow.
+# run_phase <label> <output_file> <prompt> [permission]
+# Opens an interactive session on the configured agent, in a tmux pane or inline,
+# with the prompt as its first message, and blocks until you exit it. permission
+# defaults to `permissions.interactive` (auto unless changed). A prompt too long
+# for one command-line argument (ui.prompt_inline_max) is passed as a pointer to
+# its prompt file; the gateway decides that, the same way for every agent.
 run_phase() {
   local label="$1"
   local outfile="$2"
   local prompt="$3"
-  local permission_mode="${4:-${MIGITE_CFG_PERMISSIONS_INTERACTIVE:-bypassPermissions}}"
+  local permission_mode="${4:-${MIGITE_CFG_PERMISSIONS_INTERACTIVE:-auto}}"
   local prompt_file
   prompt_file=$(write_prompt "$label" "$prompt")
-
-  # What actually goes on the command line: the prompt itself, or a pointer to it.
-  local prompt_arg_file="$prompt_file"
-  if [[ ${#prompt} -gt $MIGITE_PROMPT_INLINE_MAX ]]; then
-    prompt_arg_file="$LOG_DIR/$TIMESTAMP-prompt-${label// /-}-pointer.txt"
-    printf 'Your task brief for this session is in the file %s (%d bytes — too large to pass inline). Read that file IN FULL before doing anything else, then follow its instructions exactly as if they had been given to you directly.' \
-      "$prompt_file" "${#prompt}" > "$prompt_arg_file"
-    warn "Prompt is ${#prompt} bytes (> MIGITE_PROMPT_INLINE_MAX=$MIGITE_PROMPT_INLINE_MAX) — passing as a file pointer"
-  fi
+  local agent_name exit_hint
+  agent_name="$(agent_field display_name || echo "the agent")"
+  exit_hint="$(agent_field exit_hint || echo "exit the session")"
 
   echo ""
-  echo -e "${CYAN}  Starting interactive session: ${BOLD}$label${RESET}"
+  echo -e "${CYAN}  Starting interactive ${agent_name} session: ${BOLD}$label${RESET}"
   echo -e "  ${CYAN}Output file: ${outfile}${RESET}"
   echo -e "  ${CYAN}Permission mode: ${permission_mode}${RESET}"
-  echo -e "  ${YELLOW}Type /exit when done to return here${RESET}"
+  echo -e "  ${YELLOW}Type ${exit_hint} when done to return here${RESET}"
   echo ""
 
-  local -a perm_flag=()
-  [[ "$permission_mode" != "none" ]] && perm_flag=(--permission-mode "$permission_mode")
+  # One shell-quoted command line from the adapter: that CLI's flags for the
+  # permission word, the variables it must not inherit, and the first prompt.
+  local session_cmd
+  session_cmd="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" session \
+    --permission "$permission_mode" --prompt-file "$prompt_file")" \
+    || error "Could not build the interactive session command for the configured agent"
 
   if use_tmux; then
     # Strip everything except alphanumeric and dash — parens/spaces break tmux sh -c parsing
@@ -382,11 +396,11 @@ run_phase() {
     orig_pane=$(tmux display-message -p '#{pane_id}')
     {
       echo "#!/usr/bin/env bash"
-      printf 'env -u CLAUDECODE claude %s -- "$(cat '"'"'%s'"'"')"\n' "${perm_flag[*]}" "$prompt_arg_file"
+      printf '%s\n' "$session_cmd"
       printf 'exit_code=$?\n'
       printf 'if [[ $exit_code -ne 0 ]]; then\n'
       printf '  echo ""\n'
-      printf '  echo "  ✘ Claude session exited $exit_code — press enter to close this pane"\n'
+      printf '  echo "  ✘ %s session exited $exit_code, press enter to close this pane"\n' "$agent_name"
       printf '  read -r\n'
       printf 'fi\n'
       printf 'tmux wait-for -S %s\n' "$channel"
@@ -409,29 +423,36 @@ run_phase() {
     tmux select-pane -t "$orig_pane" 2>/dev/null || true
     notify "$label" "Session done — continuing workflow"
   else
-    claude_cmd "${perm_flag[@]}" -- "$(cat "$prompt_arg_file")"
+    eval "$session_cmd"
   fi
 }
 
-# thinking <label> <output_file> <prompt>
-# Runs `claude --print` in the background with a spinner (text-only, no tool use).
-# Prompt is passed via stdin to avoid ARG_MAX limits.
-thinking() {
-  local label="$1"
-  local outfile="$2"
-  local prompt="$3"
-  local extra_flags="${4:-}"
+# agent_think [--quiet] [--permission P] <label> <role> <output_file> <prompt>
+# agent_ask in the background with a spinner. The prompt goes in on stdin, the
+# result lands in output_file and is printed unless --quiet. Returns the call's
+# exit status. The auto-heal loop uses it with --quiet --permission from
+# permissions.heal; knowledge, amendments, and testing-plan updates without.
+agent_think() {
+  local quiet=false
+  local -a extra=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --quiet) quiet=true; shift ;;
+      --permission) extra+=(--permission "$2"); shift 2 ;;
+      *) break ;;
+    esac
+  done
+  local label="$1" role="$2" outfile="$3" prompt="$4"
   local prompt_file
   prompt_file=$(write_prompt "$label" "$prompt")
   local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
   local i=0
 
   echo ""
-  echo -e "${CYAN}  Claude is thinking: ${BOLD}$label${RESET}"
+  echo -e "${CYAN}  $(agent_field display_name || echo "The agent") is working: ${BOLD}$label${RESET}"
   echo -e "  ${CYAN}Prompt log: ${prompt_file}${RESET}"
 
-  # shellcheck disable=SC2086
-  printf '%s' "$prompt" | claude_print "$label" $extra_flags > "$outfile" &
+  printf '%s' "$prompt" | agent_ask "$label" "$role" ${extra[@]+"${extra[@]}"} > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -444,40 +465,8 @@ thinking() {
   wait "$pid"
   local exit_code=$?
 
-  cat "$outfile"
+  [[ "$quiet" == "true" ]] || cat "$outfile"
   return $exit_code
-}
-
-# heal_run <label> <outfile> <prompt>
-# Non-interactive Claude call with bypassPermissions — used by the auto-heal loop to
-# fix rubocop/rspec failures automatically, without blocking for human input.
-heal_run() {
-  local label="$1"
-  local outfile="$2"
-  local prompt="$3"
-  local prompt_file
-  prompt_file=$(write_prompt "$label" "$prompt")
-  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-  local i=0
-
-  echo ""
-  echo -e "${CYAN}  Auto-healing: ${BOLD}$label${RESET}"
-
-  local heal_perm="${MIGITE_CFG_PERMISSIONS_HEAL:-bypassPermissions}"
-  local -a heal_flag=()
-  [[ "$heal_perm" != "none" ]] && heal_flag=(--permission-mode "$heal_perm")
-  printf '%s' "$prompt" | claude_print "$label" "${heal_flag[@]}" > "$outfile" &
-  local pid=$!
-
-  while kill -0 "$pid" 2>/dev/null; do
-    printf "\r  ${CYAN}${frames[$i]}${RESET}  healing..."
-    i=$(( (i + 1) % ${#frames[@]} ))
-    sleep 0.1
-  done
-  printf "\r\033[K"
-
-  wait "$pid"
-  return $?
 }
 
 # spawn_langgraph <label> <channel-suffix> <script> [args...]
@@ -494,8 +483,8 @@ spawn_langgraph() {
   [[ -f "$script" ]] || error "LangGraph script not found: $script"
   [[ -x "$MIGITE_PYTHON" ]] || error "Python not found at $MIGITE_PYTHON — set MIGITE_PYTHON"
 
-  # Preflight: verify langgraph is installed in the target Python. (The
-  # `anthropic` SDK is NOT required — every model call shells out to `claude`.)
+  # Preflight: verify langgraph is installed in the target Python. (No model
+  # SDK is required: every model call goes to the configured agent CLI.)
   if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
     error "Python dependencies missing. Run: $MIGITE_PYTHON -m pip install langgraph"
   fi
@@ -602,7 +591,7 @@ resume_from_vault() {
 # (populated by migite's --attach flag) and renders it as a heading + raw
 # content block, so it can be folded into plain prompt text. Attachments feed
 # directly into every plan model call (synthesize/critic/refine, all headless
-# `claude --print` — see docs/troubleshooting.md), so a huge file multiplies
+# agent calls), so a huge file multiplies
 # token cost per call, not just once; truncated at a safety cap accordingly.
 # Echoes nothing if ATTACH_FILES is empty or unset.
 build_attachments_block() {

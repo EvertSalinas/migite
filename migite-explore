@@ -70,10 +70,10 @@ Options:
   --jira <ticket>             Jira ticket key or URL - groups this exploration under
                               the ticket's existing vault folder
   --attach <file>             Fold a file's raw content into the brief as reference
-                              material (repeatable). Every Claude call here is a
-                              headless `claude --print` with no tool access, so a
-                              path merely mentioned in the brief can never be opened
-                              by the model itself - this is the only way it sees it.
+                              material (repeatable). Every agent call here is
+                              headless with no tool access by default, so a path
+                              merely mentioned in the brief can never be opened by
+                              the model itself - this is the only way it sees it.
   --output <dir>              Output directory (default: vault)
   --focus <lens>              Limit to one lens: current_state | touchpoints |
                               coupling_and_risk | existing_seams | constraints | approaches
@@ -211,9 +211,9 @@ PYTHON_ARGS=(--repo-root "$REPO_ROOT")
 # --attach files are folded straight into the brief text (not passed through to
 # migite-explore.py, which stays unaware attachments exist) — state["brief"] is
 # interpolated verbatim into every lens/synthesis/challenge/refine prompt, so
-# this is the one place that reliably reaches all of them. Every Claude call
-# here is a headless `claude --print` with no tool access, so a path merely
-# mentioned in the brief text could never be opened by the model itself.
+# this is the one place that reliably reaches all of them. Every agent call
+# here is headless with no tool access by default, so a path merely mentioned in
+# the brief text could never be opened by the model itself.
 if [[ ${#ATTACH_FILES[@]} -gt 0 ]]; then
   BRIEF_TMP=$(mktemp)
   trap 'rm -f "$BRIEF_TMP"' EXIT

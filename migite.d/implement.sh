@@ -21,7 +21,7 @@ $(cat "$PLAN_FILE")
 ## Amendment $AMEND_NUM — implement ONLY this scoped delta
 $(cat "$AMENDMENT_FILE")
 
-## Migite workflow context (overrides CLAUDE.md defaults for this session)
+## Migite workflow context (overrides $(agent_field instruction_files) defaults for this session)
 - The original plan is already implemented — only implement the amendment's Scope section
 - Respect the amendment's Out of scope section — do not touch anything listed there
 - Do NOT run rubocop or rspec — migite runs them after this phase"
@@ -30,7 +30,7 @@ $(cat "$AMENDMENT_FILE")
 
 $(cat "$PLAN_FILE")
 
-## Migite workflow context (overrides CLAUDE.md defaults for this session)
+## Migite workflow context (overrides $(agent_field instruction_files) defaults for this session)
 - Planning is already complete and gate-approved — begin implementation directly
 - Do NOT run rubocop or rspec — migite runs them after this phase"
     fi
@@ -136,8 +136,8 @@ $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
 }
 
 # ── Auto-heal loop ────────────────────────────────────────────────────────────
-# Rubocop is mechanical — autocorrect it locally, with zero Claude calls, every
-# time checks run. Claude is only invoked for what autocorrect can't fix: real
+# Rubocop is mechanical - autocorrect it locally, with zero model calls, every
+# time checks run. The agent is only invoked for what autocorrect can't fix: real
 # rubocop offenses and rspec failures. The fix prompt only includes whichever
 # of those two is actually still failing. Bounded to MAX_HEAL_ATTEMPTS.
 run_auto_heal_loop() {
@@ -151,8 +151,8 @@ run_auto_heal_loop() {
   HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
   HEAL_ATTEMPT=0
 
-  # Rubocop: one autocorrect sweep, no Claude involved. Re-autocorrects on every
-  # recheck below too, so anything Claude's rspec fixes introduce gets swept for
+  # Rubocop: one autocorrect sweep, no model involved. Re-autocorrects on every
+  # recheck below too, so anything the agent's rspec fixes introduce gets swept for
   # free instead of round-tripping through another heal attempt.
   _heal_autofix_rubocop() {
     HEAL_CHANGED_RUBY=$(changed_source_files "$BASE_BRANCH")
@@ -202,7 +202,7 @@ $(cat "$IMPLEMENTATION_FILE")
 
 Fix all failures above. Do not run rubocop yourself — migite already runs \`rubocop -A\` after every attempt, so only genuinely unfixable-by-autocorrect offenses are shown here. When done, update: $IMPLEMENTATION_FILE"
 
-    heal_run "Auto-heal $HEAL_ATTEMPT" "$HEAL_FIX_LOG" "$HEAL_FIX_PROMPT"
+    agent_think --quiet --permission "$(cfg permissions.heal auto)" "Auto-heal $HEAL_ATTEMPT" heal "$HEAL_FIX_LOG" "$HEAL_FIX_PROMPT"
 
     log "Re-running checks after heal attempt $HEAL_ATTEMPT..."
     _heal_autofix_rubocop

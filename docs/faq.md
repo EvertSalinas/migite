@@ -6,7 +6,8 @@ loop and moves on to knowledge capture and the PR description. The commit is alw
 [the commit gate](./outputs.md#commit-gate-banner).
 
 **Do I need an Anthropic API key?**
-No. Every model call shells out to the `claude` CLI and shares Claude Code's login.
+No. Every model call shells out to the configured agent CLI (Claude Code by default, Cursor CLI or
+OpenCode via `agent.backend`) and uses that CLI's own login.
 
 **What does a run cost?**
 It is printed at the end of every run and written to `usage.json`; the commit-gate banner shows
@@ -16,16 +17,19 @@ only in `--print` mode. Expect roughly $3 to $5 in headless calls for a feature 
 tiering, less with `think` pinned to Sonnet. Set `budget.max_usd_per_run` for a soft cap.
 
 **Why does every headless call show about 23k cache-creation tokens?**
-That is Claude Code's own system context being sent with each `claude --print` call. It is a
+That is Claude Code's own system context being sent with each headless call. It is a
 cache hit after the first call in a run, so the per-call cost drops sharply from the second call
 on. The usage summary prints the total so you can see it.
 
 **Does `--jira` fetch the ticket's content?**
 Yes, for planning. The ticket's title, type, priority, status, description, and acceptance
-criteria are fetched through the Atlassian MCP before the planner runs, cached to
-`jira-context.md`, and given to synthesis and the explorers. It is the one call in the pipeline
-with tool access, scoped to two read-only lookups. If the fetch fails, planning continues
-without it and the key is still used for naming.
+criteria are fetched before the planner runs, cached to `jira-context.md`, and given to synthesis
+and the explorers. With Atlassian's `acli` installed and logged in (a one-time browser login),
+migite reads it through `acli`: no model call, no token, same on every agent. Without it, migite
+falls back to one agent call through the Atlassian MCP tools, restricted to the `jira.read` scope
+(Claude Code only). If neither can run
+or the fetch fails, planning continues without it and the key is still used for naming. See
+[tickets.md](./tickets.md).
 
 **Does `--jira` always open the intake editor?**
 Only on the first run for that ticket. An existing `intake.md` is reused silently, and

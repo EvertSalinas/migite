@@ -27,14 +27,10 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_claude
+import migite_call
 import migite_config
 import migite_paths
 
-# Defaults from migite_config's single table; main() replaces them from the loaded config.
-ANALYST_MODEL = migite_config.default_model("analyst")          # parallel analysts — pure reasoning
-SYNTH_MODEL   = migite_config.default_model("blueprint_synth")  # most consequential call in the tool
-EXTRACT_MODEL = migite_config.default_model("extract")          # milestone + knowledge extraction
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
@@ -135,15 +131,15 @@ Be direct. Name specific risks, not categories. Under 450 words.""",
 ]
 
 
-# ── Claude call ───────────────────────────────────────────────────────────────
+# ── Agent call ────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str, label: str = "", role: str = "") -> str:
-    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
-    return migite_claude.call_claude(prompt, model, tool="migite-blueprint", label=label, role=role).text
+def call_agent(prompt: str, role: str, label: str = "") -> str:
+    """Shared wrapper (migite_call): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return migite_call.call_agent(prompt, role, tool="migite-blueprint", label=label).text
 
 
 def apply_config(repo_root: str | None) -> None:
-    global ANALYST_MODEL, SYNTH_MODEL, EXTRACT_MODEL, VAULT_BASE
+    global VAULT_BASE
     try:
         cfg = migite_config.load(repo_root)
     except migite_config.ConfigError as e:
@@ -151,11 +147,13 @@ def apply_config(repo_root: str | None) -> None:
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
-    ANALYST_MODEL = cfg.model("analyst")
-    SYNTH_MODEL   = cfg.model("blueprint_synth")
-    EXTRACT_MODEL = cfg.model("extract")
     VAULT_BASE    = str(cfg.expanded_path("vault.base"))
-    migite_claude.configure_from(cfg)
+    migite_call.configure_from(cfg)
+    try:
+        migite_call.require_cli()
+    except migite_call.AgentError as e:
+        print(f"✘ {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -218,7 +216,7 @@ Lint/format tool:
 Package manager:
 Inferred: <yes|no>"""
     try:
-        stack = call_claude(prompt, model=ANALYST_MODEL, label="determine_stack", role="analyst")
+        stack = call_agent(prompt, label="determine_stack", role="analyst")
     except Exception as e:
         stack = f"Language: unknown\nFramework: unknown\n(stack inference failed: {e})"
     first_line = stack.splitlines()[0] if stack else "(empty)"
@@ -252,14 +250,14 @@ def analyze_dimension(state: DimensionInput) -> dict:
 
 {state['analyst_prompt']}"""
     try:
-        result = call_claude(prompt, model=ANALYST_MODEL, label=f"analyst:{dim}", role="analyst")
+        result = call_agent(prompt, label=f"analyst:{dim}", role="analyst")
     except Exception as e:
         result = f"Analysis failed: {e}"
     return {"analyses": [f"### {dim}\n{result}"]}
 
 
 def synthesize_blueprint(state: BlueprintState) -> dict:
-    print(f"  ▶ Synthesising blueprint ({SYNTH_MODEL})", flush=True)
+    print(f"  ▶ Synthesising blueprint ({migite_call.model_for('blueprint_synth') or 'default'})", flush=True)
     analyses_text = "\n\n".join(state["analyses"])
 
     prompt = f"""You are a senior software architect synthesising a project blueprint from specialist analyses.
@@ -337,7 +335,7 @@ Key files: <comma-separated list of the main files/directories this milestone wi
 Output only the blueprint document. No preamble or meta-commentary."""
 
     try:
-        blueprint = call_claude(prompt, model=SYNTH_MODEL, label="synthesize_blueprint", role="blueprint_synth")
+        blueprint = call_agent(prompt, label="synthesize_blueprint", role="blueprint_synth")
     except Exception as e:
         blueprint = f"# Blueprint: {state['project_name']}\nDate: {state['today']}\n\nSynthesis failed: {e}"
     return {"blueprint": blueprint}
@@ -393,7 +391,7 @@ naming conventions, authorization model, N+1 risks, gem choices>
 Produce one block per milestone. Output only the delimited blocks."""
 
     try:
-        milestones_raw = call_claude(prompt, model=EXTRACT_MODEL, label="extract_milestones", role="extract")
+        milestones_raw = call_agent(prompt, label="extract_milestones", role="extract")
     except Exception as e:
         milestones_raw = f"Milestone extraction failed: {e}"
     return {"milestones_raw": milestones_raw}
@@ -433,7 +431,7 @@ Produce a knowledge.md with these sections (markdown bullets, concise):
 Under 600 words total. Output only the knowledge.md content — no preamble."""
 
     try:
-        knowledge = call_claude(prompt, model=EXTRACT_MODEL, label="extract_knowledge_seed", role="extract")
+        knowledge = call_agent(prompt, label="extract_knowledge_seed", role="extract")
     except Exception as e:
         knowledge = f"Knowledge seed extraction failed: {e}"
     return {"knowledge_seed": knowledge}
@@ -574,7 +572,7 @@ def main() -> None:
         sys.exit(1)
 
     today = date.today().isoformat()
-    print(f"\n  migite-blueprint | analysts={ANALYST_MODEL}  synth={SYNTH_MODEL}", flush=True)
+    print(f"\n  migite-blueprint | analysts={migite_call.model_for('analyst') or 'default'}  synth={migite_call.model_for('blueprint_synth') or 'default'}", flush=True)
     if args.stack:
         print(f"  Stack:   {args.stack} (explicit)", flush=True)
     else:

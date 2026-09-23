@@ -17,13 +17,10 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_claude
+import migite_call
 import migite_config
 import migite_paths
 
-# Defaults from migite_config's single table; main() replaces them from the loaded config.
-EXPLORE_MODEL = migite_config.default_model("audit_area")
-THINK_MODEL   = migite_config.default_model("audit_synth")
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
@@ -96,11 +93,11 @@ AUDIT_AREAS = [
 ]
 
 
-# ── Claude call ─────────────────────────────────────────────────────────────────
+# ── Agent call ──────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str, label: str = "", role: str = "") -> str:
-    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
-    return migite_claude.call_claude(prompt, model, tool="migite-audit", label=label, role=role).text
+def call_agent(prompt: str, role: str, label: str = "") -> str:
+    """Shared wrapper (migite_call): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return migite_call.call_agent(prompt, role, tool="migite-audit", label=label).text
 
 
 # ── File reading ─────────────────────────────────────────────────────────────────
@@ -196,7 +193,7 @@ If nothing found output exactly: ✅ No issues in {area}.
 No preamble. Findings only."""
 
     try:
-        result = call_claude(prompt, model=EXPLORE_MODEL, label=f"audit:{area}", role="audit_area")
+        result = call_agent(prompt, label=f"audit:{area}", role="audit_area")
     except Exception as e:
         result = f"🔴 **Critical** — audit failed for {area}: {e}"
     return {"findings": [f"### {area}\n{result}"]}
@@ -241,7 +238,7 @@ Date: {today}
 Output only the report."""
 
     try:
-        report = call_claude(prompt, model=THINK_MODEL, label="synthesize_report", role="audit_synth")
+        report = call_agent(prompt, label="synthesize_report", role="audit_synth")
     except Exception as e:
         report = f"# Codebase Audit — {state['repo_name']}\n\nSynthesis failed: {e}"
     return {"report": report}
@@ -291,7 +288,7 @@ def main() -> None:
     ap.add_argument("--jira",   default="", help="Jira ticket key or URL — groups this audit under the ticket's existing folder")
     args = ap.parse_args()
 
-    global EXPLORE_MODEL, THINK_MODEL, VAULT_BASE
+    global VAULT_BASE
     try:
         cfg = migite_config.load(args.repo_root)
     except migite_config.ConfigError as e:
@@ -299,10 +296,13 @@ def main() -> None:
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
-    EXPLORE_MODEL = cfg.model("audit_area")
-    THINK_MODEL   = cfg.model("audit_synth")
     VAULT_BASE    = str(cfg.expanded_path("vault.base"))
-    migite_claude.configure_from(cfg)
+    migite_call.configure_from(cfg)
+    try:
+        migite_call.require_cli()
+    except migite_call.AgentError as e:
+        print(f"✘ {e}", file=sys.stderr)
+        sys.exit(1)
 
     repo_name = Path(args.repo_root).name
     org       = migite_paths.detect_org(args.repo_root)
@@ -326,7 +326,7 @@ def main() -> None:
         else str(Path(VAULT_BASE) / org / repo_name / f"audit-{today}.md")
     )
 
-    print(f"\n  migite-audit | model: explore={EXPLORE_MODEL}  think={THINK_MODEL}", flush=True)
+    print(f"\n  migite-audit | model: explore={migite_call.model_for('audit_area') or 'default'}  think={migite_call.model_for('audit_synth') or 'default'}", flush=True)
     print(f"  Repo: {org}/{repo_name}", flush=True)
     if args.focus:
         print(f"  Focus: {args.focus}", flush=True)

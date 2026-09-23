@@ -15,7 +15,7 @@ file actually exists — with no config files, or JSON ones, migite runs without
 Python API:
     cfg = migite_config.load(repo_root)
     cfg.get("gates.commit.policy")     -> "lenient"
-    cfg.model("critic")                -> "claude-opus-5-5"   (role -> tier -> model id)
+    cfg.model("critic")                -> the agent's strong-tier model id   (role -> tier -> model id)
     cfg.prompt_path("plan", migite_home) -> Path
     cfg.source("models.strong")        -> "defaults" | "<file>" | "env:VAR"
 
@@ -38,10 +38,36 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+import agents
+
 REPO_FILE_NAMES = (".migite.yml", ".migite.yaml", ".migite.json")
 USER_FILE_NAMES = ("config.yml", "config.yaml", "config.json")
 
+# Agent names and each agent's model id per tier come from the agents package
+# (agents/<name>.py is the only place an agent's model id is written down).
+# Cursor and OpenCode leave tiers unset = no --model is passed, so each CLI uses
+# its own default until the user pins tiers (`cursor-agent --list-models`, `opencode models`).
+AGENT_BACKENDS = agents.names()
+PERMISSION_WORDS = agents.PERMISSIONS + tuple(agents.PERMISSION_ALIASES)
+PERMISSION_KEYS = ("permissions.interactive", "permissions.heal", "permissions.headless")
+# Mirrors migite_ticket.PROVIDERS (a test keeps them equal; importing it here would be a cycle).
+TRACKER_PROVIDERS = ("auto", "jira-acli", "jira-agent", "none")
+
 DEFAULTS: dict[str, Any] = {
+    "agent": {
+        "backend": "claude",             # claude | cursor | opencode  (MIGITE_AGENT)
+        "command": None,                 # override the backend's executable (path or name)
+    },
+    "tracker": {
+        # Where a ticket's content comes from (migite_ticket.py). auto = jira-acli when
+        # acli is installed and logged in, else jira-agent when the agent can run a
+        # jira.read-scoped call, else none. (MIGITE_TRACKER)
+        "provider": "auto",              # auto | jira-acli | jira-agent | none
+        "jira": {
+            "acli": "acli",              # MIGITE_ACLI: Atlassian's CLI (name on PATH or a full path)
+            "acceptance_field": None,    # custom field id holding acceptance criteria, e.g. customfield_10035
+        },
+    },
     "vault": {
         "base": "~/dev-log",       # DEV_LOG_BASE
         "org": None,               # MIGITE_ORG; None = auto-detect from the repo's parent dir
@@ -50,10 +76,12 @@ DEFAULTS: dict[str, Any] = {
         "dir": "~/.dev-workflow/logs",   # LOG_DIR
     },
     "models": {
-        "fast": "claude-haiku-4-5-20251001",
-        "standard": "claude-sonnet-5",
-        "strong": "claude-opus-5-5",
-        "roles": {},                     # optional per-role override: {"critic": "claude-opus-5-5", ...}
+        # None = the agent's default for that tier (agents/<name>.py); set a
+        # string to pin a tier for the active backend.
+        "fast": None,
+        "standard": None,
+        "strong": None,
+        "roles": {},                     # optional per-role override: {"critic": "<model id>", ...}
         # --effort per tier (low | medium | high | xhigh | max | none). none = don't pass the flag,
         # so the CLI's own default applies. Haiku 4.5 does not accept --effort; it is never sent for
         # a haiku model regardless of these values.
@@ -74,8 +102,10 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "permissions": {
-        "interactive": "bypassPermissions",  # run_phase sessions (implement, fix, PR description)
-        "heal": "bypassPermissions",         # the auto-heal loop's headless fixes
+        # auto | edits | plan | ask | none. Claude Code's names (bypassPermissions,
+        # acceptEdits, default) are accepted as aliases and normalized.
+        "interactive": "auto",               # run_phase sessions (implement, fix, PR description)
+        "heal": "auto",                      # the auto-heal loop's headless fixes
         "headless": "none",                  # plan/review/knowledge/... (MIGITE_PERMISSION_MODE); none = no flag
     },
     "heal": {
@@ -118,6 +148,7 @@ ROLE_TIERS: dict[str, str] = {
     # migite bash phases
     "knowledge": "standard", "improve": "standard", "amend": "standard",
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
+    "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
     # migite-explore
     "lens": "standard", "explore_synth": "strong", "challenge": "strong",
     "explore_refine": "strong",   # the reviser should not be weaker than the challenger
@@ -137,18 +168,20 @@ ROLE_TIERS: dict[str, str] = {
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "none")
 
 
-def default_model(role: str) -> str:
-    """The built-in default model for a role (DEFAULTS tier via ROLE_TIERS), with no
-    config files or env consulted. The ONLY sanctioned way for a script to name a
-    model outside a loaded Config — module-level constants in the tools use this so
-    there is exactly one place a model id is written down."""
+def default_model(role: str, backend: str = agents.DEFAULT) -> str:
+    """The built-in default model for a role on a backend (the agent's tier table via
+    ROLE_TIERS), with no config files or env consulted. Returns "" when the agent
+    has no default for the tier (= don't pass a model)."""
     if role not in ROLE_TIERS:
         raise KeyError(f"unknown model role {role!r}; known: {', '.join(sorted(ROLE_TIERS))}")
-    return str(DEFAULTS["models"][ROLE_TIERS[role]])
+    return agents.info(backend).models[ROLE_TIERS[role]] or ""
 
 # Environment variables that override file values (env > files). Keeps every
 # variable migite documented before the config file existed working unchanged.
 ENV_OVERRIDES: dict[str, str] = {
+    "MIGITE_AGENT": "agent.backend",
+    "MIGITE_TRACKER": "tracker.provider",
+    "MIGITE_ACLI": "tracker.jira.acli",
     "DEV_LOG_BASE": "vault.base",
     "MIGITE_ORG": "vault.org",
     "LOG_DIR": "logs.dir",
@@ -160,13 +193,15 @@ ENV_OVERRIDES: dict[str, str] = {
 }
 
 ENUMS: dict[str, tuple[str, ...]] = {
+    "agent.backend": AGENT_BACKENDS,
+    "tracker.provider": TRACKER_PROVIDERS,
     "models.effort.fast": EFFORT_LEVELS,
     "models.effort.standard": EFFORT_LEVELS,
     "models.effort.strong": EFFORT_LEVELS,
     "gates.commit.policy": ("lenient", "strict"),
-    "permissions.interactive": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
-    "permissions.heal": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
-    "permissions.headless": ("bypassPermissions", "acceptEdits", "default", "plan", "none"),
+    "permissions.interactive": PERMISSION_WORDS,
+    "permissions.heal": PERMISSION_WORDS,
+    "permissions.headless": PERMISSION_WORDS,
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
 }
@@ -183,6 +218,16 @@ STARTER_TEMPLATE = """\
 # Every value below is the default; delete what you don't change. `migite config` shows the
 # effective result and where each value came from. Needs PyYAML: pip install pyyaml
 
+agent:
+  backend: claude            # claude | cursor | opencode  (MIGITE_AGENT). See docs/agents.md
+  # command: /path/to/cli    # override the executable (default: claude / cursor-agent / opencode)
+
+tracker:
+  provider: auto             # auto | jira-acli | jira-agent | none  (MIGITE_TRACKER). See docs/tickets.md
+  # jira:
+  #   acli: acli                          # MIGITE_ACLI: Atlassian's CLI; log in once with `acli jira auth login --web`
+  #   acceptance_field: customfield_10035 # optional: where your Jira keeps acceptance criteria
+
 vault:
   base: ~/dev-log            # DEV_LOG_BASE
   # org: Acme                # MIGITE_ORG — default: name of the directory containing the repo
@@ -191,12 +236,15 @@ logs:
   dir: ~/.dev-workflow/logs  # LOG_DIR
 
 models:
-  fast: claude-haiku-4-5-20251001   # explorers
-  standard: claude-sonnet-5         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments
-  strong: claude-opus-5-5           # plan synthesis/refine, critic, correctness + security review, verdicts
+  # Tiers are model ids for the ACTIVE backend. Unset = that backend's default:
+  #   claude:   fast=@FAST@  standard=@STANDARD@  strong=@STRONG@
+  #   cursor / opencode: no --model is passed until you pin one (`cursor-agent --list-models`, `opencode models`)
+  # fast: @FAST@   # explorers
+  # standard: @STANDARD@         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments, heal
+  # strong: @STRONG@           # plan synthesis/refine, critic, correctness + security review, verdicts
   # roles:                          # pin one call site without changing its tier (see docs/configuration.md for the list)
-  #   think: claude-sonnet-5
-  #   review_security: claude-opus-5-5
+  #   think: @STANDARD@
+  #   review_security: @STRONG@
   effort:                           # --effort per tier: low | medium | high | xhigh | max | none (none = CLI default)
     fast: none                      # Haiku 4.5 never receives --effort regardless
     standard: none
@@ -216,10 +264,10 @@ gates:
   plan:
     warn_after_rejections: 3
 
-permissions:
-  interactive: bypassPermissions   # implement / fix / PR-description sessions
-  heal: bypassPermissions          # auto-heal loop
-  headless: none                   # plan, review, knowledge, ... (none = don't pass --permission-mode)
+permissions:                 # auto | edits | plan | ask | none  (Claude Code's names also accepted)
+  interactive: auto          # implement / fix / PR-description sessions
+  heal: auto                 # auto-heal loop
+  headless: none             # plan, review, knowledge, ... (none = pass no permission flag)
 
 heal:
   max_attempts: 3
@@ -242,6 +290,10 @@ ui:
   # editor: nvim             # EDITOR
   prompt_inline_max: 100000  # MIGITE_PROMPT_INLINE_MAX
 """
+# The example model ids in the template come from the default agent's own table.
+for _tier in agents.TIERS:
+    STARTER_TEMPLATE = STARTER_TEMPLATE.replace(f"@{_tier.upper()}@", agents.info(agents.DEFAULT).models[_tier] or "")
+del _tier
 
 
 class ConfigError(Exception):
@@ -339,6 +391,8 @@ def _coerce(key: str, value: Any, source: str) -> Any:
         raise ConfigError(f"{key} must be true or false (got {value!r} from {source})")
     if key in ENUMS and str(value) not in ENUMS[key]:
         raise ConfigError(f"{key} must be one of {', '.join(ENUMS[key])} (got {value!r} from {source})")
+    if key in PERMISSION_KEYS:
+        return agents.normalize_permission(str(value))
     if key in ("models.roles", "models.roles_effort"):
         if not isinstance(value, dict):
             raise ConfigError(f"{key} must be a mapping of role -> value (from {source})")
@@ -381,7 +435,14 @@ class Config:
         roles = self.get("models.roles") or {}
         if role in roles:
             return str(roles[role])
-        return str(self.get(f"models.{ROLE_TIERS[role]}"))
+        tier = ROLE_TIERS[role]
+        explicit = self.get(f"models.{tier}")
+        if explicit:
+            return str(explicit)
+        return agents.info(self.backend()).models[tier] or ""
+
+    def backend(self) -> str:
+        return str(self.get("agent.backend") or agents.DEFAULT)
 
     def models_by_role(self) -> dict[str, str]:
         return {role: self.model(role) for role in ROLE_TIERS}
@@ -493,6 +554,9 @@ def load(repo_root: str | Path | None = None, *, env: Mapping[str, str] | None =
         loaded = _read_file(path)
         flat = _flatten(loaded)
         for key, value in flat.items():
+            if key.startswith("tracker.") and "token" in key.lower():
+                raise ConfigError(f"{path}: {key}: migite never reads a Jira token from a config file. "
+                                  f"Log in with `acli jira auth login --web` instead, and remove the token from {path}")
             if key not in known and not key.startswith("models.roles"):
                 # (models.roles and models.roles_effort are open mappings validated in _coerce)
                 warnings.append(f"{path}: unknown key '{key}' (ignored)")
@@ -555,13 +619,14 @@ def show(cfg: Config) -> str:
     for k, v, s in rows:
         out.append(f"  {k:<{width}}  {v[:vwidth]:<{vwidth}}  {s}")
     out.append("")
+    out.append(f"  agent backend: {cfg.backend()}" + (f" (command: {cfg.get('agent.command')})" if cfg.get("agent.command") else ""))
     out.append("  resolved models by role:")
     for role, model in sorted(cfg.models_by_role().items()):
         tier = ROLE_TIERS[role]
         pinned = " (pinned)" if role in (cfg.get("models.roles") or {}) else f" ({tier})"
         eff = cfg.effort(role)
         eff_note = f"  effort={eff}" if eff else ""
-        out.append(f"    {role:<38} {model}{pinned}{eff_note}")
+        out.append(f"    {role:<38} {model or '(backend default)'}{pinned}{eff_note}")
     out.append("")
     out.append("  files: " + (", ".join(str(p) for p in cfg.files) if cfg.files else "(none — defaults + env only)"))
     for w in cfg.warnings:

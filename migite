@@ -85,7 +85,7 @@ source "$MIGITE_HOME/migite.d/deliver.sh"
 
 # `migite doctor [--repo <path>]` — dispatched before Setup (require_cmd, arg
 # parsing) since it must run even when those would fail (no Gemfile, missing
-# `claude`/`bundle`, etc.) — that's the whole point of a health check.
+# agent CLI or `bundle`, etc.) - that's the whole point of a health check.
 if [[ "${1:-}" == "doctor" ]]; then
   shift
   run_doctor "$@"
@@ -100,8 +100,9 @@ if [[ "${1:-}" == "config" ]]; then
 fi
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
-require_cmd claude
 require_cmd git
+# The agent CLI (claude / cursor-agent / opencode) is required after the config is
+# loaded below, since agent.backend decides which one.
 # `bundle` is only required for the `rails` stack — checked after detect_stack,
 # once we know which stack this repo actually is.
 
@@ -169,14 +170,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --jira)
-      JIRA_TICKET="${2:-}"
-      [[ -z "$JIRA_TICKET" ]] && error "Provide a Jira ticket ID after --jira"
-      if echo "$JIRA_TICKET" | grep -qE 'https?://.*atlassian\.net/browse/'; then
-        JIRA_URL="$JIRA_TICKET"
-        JIRA_TICKET=$(echo "$JIRA_TICKET" | grep -oE '[A-Za-z]+-[0-9]+' | tail -1 | tr '[:lower:]' '[:upper:]' || true)
-        [[ -z "$JIRA_TICKET" ]] && error "Could not extract Jira ticket ID from URL"
-        log "Extracted Jira key from URL: $JIRA_TICKET"
-      fi
+      [[ -z "${2:-}" ]] && error "Provide a Jira ticket key or URL after --jira"
+      # One parser for keys and browse URLs (migite_ticket.py), shared with the Python tools.
+      _ticket_vars="$(ticket_cmd parse --shell "$2")" || error "Not a Jira ticket key or ticket URL: $2"
+      eval "$_ticket_vars"; unset _ticket_vars
+      JIRA_TICKET="$TICKET_KEY"; JIRA_URL="$TICKET_URL"
+      [[ -n "$JIRA_URL" ]] && log "Extracted Jira key from URL: $JIRA_TICKET"
       TASK="$JIRA_TICKET"
       log "Jira mode: $JIRA_TICKET"
       shift 2
@@ -200,9 +199,9 @@ while [[ $# -gt 0 ]]; do
     --attach)
       # Repeatable. Each file's raw content is folded into task.md (see
       # run_plan in plan.sh) so migite-plan sees it as plain prompt text —
-      # its Claude calls are headless (`claude --print`, no --permission-mode
-      # ever passed, see docs/troubleshooting.md), so a referenced path in the
-      # intake can never be opened by the model itself.
+      # its agent calls are headless, with no permission flag passed by default
+      # (permissions.headless: none), so a referenced path in the intake can
+      # never be opened by the model itself.
       ATTACH_ARG="${2:-}"
       [[ -z "$ATTACH_ARG" ]] && error "Provide a file path after --attach"
       [[ ! -f "$ATTACH_ARG" ]] && error "Attachment file not found: $ATTACH_ARG"
@@ -230,15 +229,15 @@ if [[ -n "$AUDIT_FILE" && -z "$TASK" && -z "$JIRA_TICKET" ]]; then
   TASK="audit-remediation"
 fi
 
-# Auto-extract Jira key from an Atlassian URL passed as a plain task argument
-if [[ -z "$JIRA_TICKET" && -n "$TASK" ]] && echo "$TASK" | grep -qE 'https?://.*atlassian\.net/browse/'; then
-  EXTRACTED_KEY=$(echo "$TASK" | grep -oE '[A-Z]+-[0-9]+' | head -1 || true)
-  if [[ -n "$EXTRACTED_KEY" ]]; then
-    JIRA_URL="$TASK"
-    JIRA_TICKET="$EXTRACTED_KEY"
+# A ticket browse URL passed as the plain task argument means --jira
+if [[ -z "$JIRA_TICKET" && -n "$TASK" && "$TASK" =~ ^https?://.*/browse/ ]]; then
+  if _ticket_vars="$(ticket_cmd parse --shell "$TASK" 2>/dev/null)"; then
+    eval "$_ticket_vars"
+    JIRA_TICKET="$TICKET_KEY"; JIRA_URL="$TICKET_URL"
     log "Extracted Jira key from URL: $JIRA_TICKET"
     TASK="$JIRA_TICKET"
   fi
+  unset _ticket_vars
 fi
 
 # ── Confirm we're in a git repo ───────────────────────────────────────────────
@@ -263,13 +262,15 @@ ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$
 # ── Load configuration (needs REPO_ROOT for <repo>/.migite.yml) ──────────────
 load_migite_config "$REPO_ROOT"
 mkdir -p "$LOG_DIR"
-# Per-run usage ledger: one JSONL line per headless `claude --print` call
-# (tokens, cost, duration, model, label). Written by migite_claude.py from
-# both the Python agents and bash's claude_print; summarised at exit by
+# Per-run usage ledger: one JSONL line per headless agent call
+# (tokens, cost, duration, model, label). Written by the gateway (migite_call.py)
+# for both the Python agents and bash's agent_ask; summarised at exit by
 # print_usage_summary into <scratchpad>/usage.json. Exported so the agents
 # (and the tmux wrapper scripts, which re-export it) inherit it.
 MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
 export MIGITE_USAGE_LEDGER
+require_cmd "$(agent_binary)"
+log "Agent: $(agent_field display_name) ($(agent_binary))"
 # --stack on the command line beats `stack:` in the config, which beats auto-detection.
 [[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
 IMPLEMENT_CMD_PATH="$(prompt_path implement)"

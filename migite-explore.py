@@ -25,7 +25,7 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_claude
+import migite_call
 import migite_config
 import migite_paths
 
@@ -33,18 +33,14 @@ import migite_paths
 # Exploration quality is the entire product here - there is no implementation
 # phase downstream to catch a shallow read, so lenses use the standard tier
 # rather than fast; synthesis, the adversarial challenge, and the refine that
-# applies it use the strong tier. Defaults from migite_config's single table;
-# main() replaces them from the loaded config.
-LENS_MODEL      = migite_config.default_model("lens")
-SYNTH_MODEL     = migite_config.default_model("explore_synth")
-CHALLENGE_MODEL = migite_config.default_model("challenge")
-REFINE_MODEL    = migite_config.default_model("explore_refine")
+# applies it use the strong tier. Calls name the role; the gateway resolves the
+# model for the configured agent.
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
 
 def apply_config(repo_root: str | None) -> None:
-    global LENS_MODEL, SYNTH_MODEL, CHALLENGE_MODEL, REFINE_MODEL, VAULT_BASE
+    global VAULT_BASE
     try:
         cfg = migite_config.load(repo_root)
     except migite_config.ConfigError as e:
@@ -52,12 +48,13 @@ def apply_config(repo_root: str | None) -> None:
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
-    LENS_MODEL      = cfg.model("lens")
-    SYNTH_MODEL     = cfg.model("explore_synth")
-    CHALLENGE_MODEL = cfg.model("challenge")
-    REFINE_MODEL    = cfg.model("explore_refine")
     VAULT_BASE      = str(cfg.expanded_path("vault.base"))
-    migite_claude.configure_from(cfg)
+    migite_call.configure_from(cfg)
+    try:
+        migite_call.require_cli()
+    except migite_call.AgentError as e:
+        print(f"✘ {e}", file=sys.stderr)
+        sys.exit(1)
 
 NOISE_SUFFIXES = (
     ".lock", ".sum", ".min.js", ".map", ".svg", ".png", ".jpg", ".jpeg",
@@ -139,12 +136,12 @@ EXPLORE_LENSES = [
 ]
 
 
-# ── Claude call ─────────────────────────────────────────────────────────────────
+# ── Agent call ──────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str, thinking: bool = False, label: str = "", role: str = "") -> str:
-    """Shared wrapper (migite_claude): JSON envelope, usage ledger, CLAUDECODE
-    stripping, timeouts, headless permission mode and per-role --effort from the config."""
-    return migite_claude.call_claude(prompt, model, thinking=thinking, tool="migite-explore", label=label, role=role).text
+def call_agent(prompt: str, role: str, thinking: bool = False, label: str = "") -> str:
+    """Shared wrapper (migite_call): configured backend, usage ledger, timeouts,
+    headless permission mode and per-role --effort from the config."""
+    return migite_call.call_agent(prompt, role, thinking=thinking, tool="migite-explore", label=label).text
 
 
 def run_cmd(cmd: str, cwd: str, timeout: int = 60) -> str:
@@ -375,7 +372,7 @@ Rules:
 Output findings only. No preamble."""
 
     try:
-        findings = call_claude(prompt, model=LENS_MODEL, label=f"lens:{lens}", role="lens")
+        findings = call_agent(prompt, label=f"lens:{lens}", role="lens")
     except Exception as e:
         findings = f"UNKNOWN: lens failed - {e}"
     return {"lens_reports": [f"### {lens}\n{findings}"]}
@@ -517,7 +514,7 @@ Honesty requirements:
 
 Output only the document."""
 
-    draft = call_claude(prompt, model=SYNTH_MODEL, thinking=True, label="synthesize_exploration", role="explore_synth")
+    draft = call_agent(prompt, thinking=True, label="synthesize_exploration", role="explore_synth")
     return {"exploration_draft": draft}
 
 
@@ -568,7 +565,7 @@ If the document is sound on every axis, output exactly:
 Output findings only. No preamble."""
 
     try:
-        findings = call_claude(prompt, model=CHALLENGE_MODEL, thinking=True, label="challenge_assumptions", role="challenge")
+        findings = call_agent(prompt, thinking=True, label="challenge_assumptions", role="challenge")
     except Exception as e:
         findings = f"🔴 **Critical** - challenge pass failed: {e}"
     return {"challenges": findings}
@@ -603,7 +600,7 @@ Preserve these formatting rules:
 Output only the revised document."""
 
     try:
-        refined = call_claude(prompt, model=REFINE_MODEL, thinking=True, label="refine_exploration", role="explore_refine")
+        refined = call_agent(prompt, thinking=True, label="refine_exploration", role="explore_refine")
     except Exception as e:
         print(f"    ⚠ Refine failed ({e}) - keeping draft", flush=True)
         return {"exploration_final": state["exploration_draft"]}
@@ -660,7 +657,7 @@ workstream must respect or resolve>
 Produce one block per workstream, in sequence order. Output only the delimited blocks."""
 
     try:
-        raw = call_claude(prompt, model=REFINE_MODEL, label="extract_workstreams", role="explore_refine")
+        raw = call_agent(prompt, label="extract_workstreams", role="explore_refine")
     except Exception as e:
         print(f"    ⚠ Workstream extraction failed: {e}", flush=True)
         raw = ""
@@ -839,7 +836,7 @@ def main() -> None:
         elif not output_dir:
             output_dir = str(Path(args.from_exploration).parent)
 
-        print(f"\n  migite-explore | re-extracting workstreams (extract={REFINE_MODEL})", flush=True)
+        print(f"\n  migite-explore | re-extracting workstreams (extract={migite_call.model_for('explore_refine') or 'default'})", flush=True)
         print(f"  Source: {args.from_exploration}", flush=True)
         print(f"  Output: {output_dir}\n", flush=True)
         try:
@@ -893,7 +890,7 @@ def main() -> None:
         else str(Path(VAULT_BASE) / org / repo_name / f"exploration-{slug}-{today}")
     )
 
-    print(f"\n  migite-explore | lens={LENS_MODEL}  synth={SYNTH_MODEL}  challenge={CHALLENGE_MODEL}", flush=True)
+    print(f"\n  migite-explore | lens={migite_call.model_for('lens') or 'default'}  synth={migite_call.model_for('explore_synth') or 'default'}  challenge={migite_call.model_for('challenge') or 'default'}", flush=True)
     print(f"  Repo:       {org}/{repo_name}", flush=True)
     print(f"  Initiative: {title}", flush=True)
     print(f"  Output:     {output_dir}", flush=True)

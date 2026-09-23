@@ -51,7 +51,7 @@ run_review() {
         warn "$rubocop_tooling_msg — rubocop did not actually run. Fix the toolchain before proceeding."
         TOOLING_ERROR="$rubocop_tooling_msg"
       elif grep -qE '[1-9][0-9]* offense' "$RUBOCOP_LOG"; then
-        warn "Rubocop offenses remain after autocorrect — Claude will address them in review"
+        warn "Rubocop offenses remain after autocorrect; the review will address them"
       else
         success "Rubocop clean"
       fi
@@ -131,9 +131,9 @@ run_review() {
     RUBOCOP_FINAL_OFFENSES=$(grep -oE '[0-9]+ offense' "$RUBOCOP_LOG" | head -1 | grep -oE '^[0-9]+' || echo "?")
   fi
 
-  notify "Phase 3 — Review ready" "Approve, fix with Claude, fix manually, or abort"
+  notify "Phase 3 - Review ready" "Approve, fix with $(agent_field display_name), fix manually, or abort"
 
-  # Commit gate — [y] commit / [f] Claude fixes / [n] you fix / [q] abort
+  # Commit gate - [y] commit / [f] the agent fixes / [n] you fix / [q] abort
   COMMIT_GATE_ATTEMPTS=0
   _rerun_checks_and_review() {
     if [[ "$STACK" == "generic" ]]; then
@@ -210,7 +210,7 @@ run_review() {
 
   while true; do
     show_commit_context
-    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort): "
+    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): "
     case "${GATE_CHOICE:-}" in
       y)
         if [[ "$(cfg gates.commit.policy lenient)" == "strict" ]]; then
@@ -263,7 +263,7 @@ ${REVIEW_CONTENT}
 - Do not change anything not mentioned in the findings
 - After fixing, write a short summary of what you changed to: ${FIX_IMPL_FILE}"
 
-        log "Opening Claude to fix review findings..."
+        log "Opening $(agent_field display_name) to fix review findings..."
         run_phase "Fixing review findings" "$FIX_IMPL_FILE" "$FIX_PROMPT"
         sync_artifact "$FIX_IMPL_FILE" "$TASK_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
 
@@ -292,7 +292,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
           local testing_plan_tmp
           testing_plan_tmp=$(mktemp)
-          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "$(cfg_model_flags testing_plan)"
+          agent_think "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" testing_plan "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT"
           if [[ -s "$testing_plan_tmp" ]]; then
             mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
             sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"

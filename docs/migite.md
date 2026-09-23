@@ -121,7 +121,7 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 | Key | Action |
 |-----|--------|
 | `y` | Approve — regenerates `testing-plan.md` in full, then continues to implementation |
-| `f` | Feedback — one more `claude --print` call revises the amendment document in place |
+| `f` | Feedback - one more headless call revises the amendment document in place |
 | `e` | Edit — opens `amendment-NN.md` directly in `$EDITOR` |
 | `q` | Abort the workflow |
 
@@ -177,8 +177,8 @@ Leaving the editor empty (or answering anything but `y`) skips it — no `task.m
 unless `--attach` was also given (see below), in which case `task.md` is still written from the
 attachments alone.
 
-**Attaching reference material (`--attach <file>`, repeatable).** `migite-plan`'s Claude calls are
-headless (`claude --print`, never given `--permission-mode` — see
+**Attaching reference material (`--attach <file>`, repeatable).** `migite-plan`'s agent calls are
+headless, with no permission flag passed by default (`permissions.headless: none` - see
 [Permission failures](./troubleshooting.md#troubleshooting-permissions)), so a file path merely
 mentioned in the intake (a data map, a spec doc, a design mock) can never be opened by the model
 itself. `--attach` reads the file's raw content and folds it into `task.md` as a `## Attachment:

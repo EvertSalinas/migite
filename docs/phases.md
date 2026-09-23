@@ -52,7 +52,7 @@ load_context
 
 Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis, refinement, and the testing plan use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
 
-**Jira ticket fetching.** When `--jira` was used, `plan.sh` fetches the actual ticket (title, type, priority, status, description, acceptance criteria) via the Atlassian MCP before `migite-plan` runs — the one call in the entire pipeline granted tool access, and it's scoped to just the two read-only Jira-lookup tools, never the full toolset. The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into both `synthesize_plan` and the explorers' keyword extraction. If the fetch fails — MCP not configured, not authenticated, wrong key, no access — planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
+**Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into both `synthesize_plan` and the explorers' keyword extraction. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
 
 After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. The gate then opens:
 
@@ -63,7 +63,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 | Key | Action |
 |-----|--------|
 | `y` | Approve the plan and continue |
-| `f` | Give feedback — migite prompts for text, refines the plan in place with one `claude --print` call (Sonnet 5), shows a colored diff of what changed, then re-opens the gate |
+| `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier), shows a colored diff of what changed, then re-opens the gate |
 | `e` | Edit — opens `plan.md` directly in `$EDITOR` (default: vim) with zero latency |
 | `n` | Reject — re-runs the full `migite-plan` agent from scratch (fresh exploration + synthesis + critic), shows a colored diff after |
 | `q` | Abort the workflow |
@@ -109,7 +109,7 @@ No gate after Phase 2 — migite moves directly to the heal loop.
 
 After implementation, migite runs rubocop and rspec automatically. If failures exist:
 
-1. Claude fixes them non-interactively (`claude --print --permission-mode bypassPermissions`)
+1. The agent fixes them non-interactively (a headless call on the `heal` role with `permissions.heal`, `auto` by default)
 2. Checks re-run
 3. Repeats up to `MAX_HEAL_ATTEMPTS` (default 3)
 
@@ -199,21 +199,21 @@ appending the blockers to `gate-overrides.md` beside the review so the override 
 <a id="phase-3-5-knowledge"></a>
 ### Phase 3.5 — Knowledge capture
 
-A background `claude --print` pass extracts 1–3 reusable bullets from the completed run (plan + implementation + review) and appends them to `knowledge.md`. Entries link back to the review via Obsidian wikilinks (harmless plain text if you're not using Obsidian).
+A background headless pass (the `knowledge` role) extracts 1–3 reusable bullets from the completed run (plan + implementation + review) and appends them to `knowledge.md`. Entries link back to the review via Obsidian wikilinks (harmless plain text if you're not using Obsidian).
 
 Only domain-level insights are captured: business logic clarifications, non-obvious constraints, architectural decisions. Rails conventions and testing patterns are excluded.
 
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)
 
-Claude generates a PR description from the plan and review, following the prompt/template in
+The agent generates a PR description from the plan and review, following the prompt/template in
 this repo's [`templates/commit.md`](../templates/commit.md) (`deliver.sh` reads it via
 `$MIGITE_HOME`). Output goes to `pr-description.md` — ready to paste into GitHub.
 
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement
 
-A background `claude --print` pass (Sonnet 5) reviews the full run and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run — no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs — a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt — since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to Sonnet 5 as well.
+A background headless pass (the `improve` role, standard tier) reviews the full run and appends 0–3 actionable observations to `migite-improvements.md` in this repo. Observations must be grounded in what happened during the run - no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs - a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt - since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to the standard tier as well.
 
 ---
 

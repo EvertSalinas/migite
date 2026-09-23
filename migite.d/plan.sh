@@ -36,14 +36,12 @@ run_plan() {
   local INTAKE_SLUG_FALLBACK="$PRELIMINARY_SLUG"
 
   # ── Jira context (only when --jira was used) ────────────────────────────────
-  # JIRA_TICKET/JIRA_URL are labels only until this point — nothing has ever
-  # fetched the ticket's actual content. This is the one call in the whole
-  # pipeline that's granted tool access (scoped to the two read-only Atlassian
-  # lookups, never the full toolset) so planning can see real scope/acceptance
-  # criteria instead of just a key. Cached in the scratchpad so redos/resumes
-  # within the same task don't re-fetch. Any failure (MCP not configured, not
-  # authenticated, wrong key, no access) degrades gracefully — planning just
-  # proceeds without ticket context, same as a missing knowledge.md/audit/blueprint.
+  # The key names the task; the ticket's content is fetched by migite-ticket from
+  # whichever source the config allows (tracker.provider: Atlassian's acli when it
+  # is logged in, else the agent's Atlassian MCP tools inside the jira.read scope). Cached in the
+  # scratchpad so redos and resumes within the same task don't re-fetch. When no
+  # source is available or the fetch fails, planning proceeds without the ticket
+  # body, same as a missing knowledge.md, audit, or blueprint.
   local JIRA_CONTEXT_FILE=""
   if [[ -n "$JIRA_TICKET" ]]; then
     JIRA_CONTEXT_FILE="$SCRATCHPAD_DIR/jira-context.md"
@@ -53,45 +51,16 @@ run_plan() {
       log "Reusing cached Jira context for $JIRA_TICKET"
     else
       log "Fetching Jira ticket $JIRA_TICKET..."
-      local JIRA_FETCH_PROMPT="Fetch the Jira ticket ${JIRA_TICKET}${JIRA_URL:+ ($JIRA_URL)} using the Atlassian MCP tools. If a URL is given, try its hostname as the cloudId first; otherwise use getAccessibleAtlassianResources to find it.
-
-Output ONLY this structure, no preamble:
-
-## Jira ticket: $JIRA_TICKET
-**Title:** <ticket summary>
-**Type:** <issue type>
-**Priority:** <priority>
-**Status:** <status>
-**Description:**
-<full description, plain text, Jira markup stripped>
-
-**Acceptance criteria:**
-<any acceptance-criteria / definition-of-done content found in the description, or \"None specified in the ticket\">
-
-If the ticket cannot be fetched (no MCP access, not authenticated, wrong key, no permission), output exactly:
-JIRA_FETCH_FAILED: <short reason>"
-
-      local JIRA_FETCH_TMP
-      JIRA_FETCH_TMP=$(mktemp)
-      printf '%s' "$JIRA_FETCH_PROMPT" \
-        | claude_print "jira-fetch" --permission-mode bypassPermissions \
-            --allowedTools "mcp__claude_ai_Atlassian__getJiraIssue mcp__claude_ai_Atlassian__getAccessibleAtlassianResources" \
-            $(cfg_model_flags jira) \
-        > "$JIRA_FETCH_TMP" 2>/dev/null || true
-
-      if [[ -s "$JIRA_FETCH_TMP" ]] && ! grep -q '^JIRA_FETCH_FAILED' "$JIRA_FETCH_TMP"; then
-        mv "$JIRA_FETCH_TMP" "$JIRA_CONTEXT_FILE"
-        sync_artifact "$JIRA_CONTEXT_FILE" "$JIRA_CONTEXT_VAULT"
-        success "Jira ticket fetched — added to planning context"
-      else
-        if [[ -s "$JIRA_FETCH_TMP" ]]; then
-          warn "Jira fetch failed: $(cat "$JIRA_FETCH_TMP")"
-        else
-          warn "Jira fetch returned nothing — planning without ticket context"
-        fi
-        rm -f "$JIRA_FETCH_TMP"
-        JIRA_CONTEXT_FILE=""
-      fi
+      local _ticket_rc=0
+      ticket_cmd fetch "${JIRA_URL:-$JIRA_TICKET}" --out "$JIRA_CONTEXT_FILE" || _ticket_rc=$?
+      case "$_ticket_rc" in
+        0) sync_artifact "$JIRA_CONTEXT_FILE" "$JIRA_CONTEXT_VAULT"
+           success "Jira ticket fetched, added to planning context" ;;
+        2) warn "No ticket source available (see above); planning without ticket context"
+           JIRA_CONTEXT_FILE="" ;;
+        *) warn "Jira fetch failed (see above); planning without ticket context"
+           JIRA_CONTEXT_FILE="" ;;
+      esac
     fi
   fi
 
@@ -387,11 +356,11 @@ JIRA_FETCH_FAILED: <short reason>"
 
   # Human review gate
   # y — approve and continue
-  # f — give feedback, refine plan in place (no re-exploration, one claude --print call)
+  # f - give feedback, refine plan in place (no re-exploration, one headless agent call)
   # n — full redo (re-run all 7 explorers + synthesis + critic)
   # q — abort
   PLAN_GATE_ATTEMPTS=0
-  # Guards the "f" (feedback) refine call below: it's a one-shot `claude --print`
+  # Guards the "f" (feedback) refine call below: it's a one-shot headless call
   # asked to "output only the revised plan document", but it can instead return a
   # narrative recap of the changes it made. Since the instructions tell it to keep
   # the same structure, a genuine revision preserves most of the original headings —
@@ -451,7 +420,7 @@ JIRA_FETCH_FAILED: <short reason>"
         _refine_tmp=$(mktemp)
         printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
           "$(cat "$PLAN_FILE")" "$_plan_feedback" \
-          | claude_print "plan-refine" $(cfg_model_flags plan_refine) \
+          | agent_ask "plan-refine" plan_refine \
           > "$_refine_tmp" 2>/dev/null || true
         if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
           mv "$_refine_tmp" "$PLAN_FILE"

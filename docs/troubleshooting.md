@@ -12,6 +12,8 @@ Symptoms first; each entry names the check that proves the cause.
 | a headless phase exits immediately when launched from inside Claude Code | [Nested sessions](#nested) |
 | the commit gate keeps saying NEEDS FIXES | [Review loops](#troubleshooting-needs-fixes) |
 | `migite doctor` reports scratchpad/vault drift | [Drift](#drift) |
+| `Not logged in` from Cursor, `No API key configured` from OpenCode, or `refusing a tool-enabled call` | [Other backends](#backends) |
+| `planning without ticket context`, `acli is not logged in`, or `no ticket source available` | [Jira fetch](#jira) |
 
 <a id="config-errors"></a>
 ### Config errors
@@ -65,25 +67,27 @@ Permission modes are set in one place — the `permissions` block of the config
 
 | Key | Default | Applies to |
 |---|---|---|
-| `permissions.interactive` | `bypassPermissions` | `run_phase` sessions: implement, gate fixes, PR description |
-| `permissions.heal` | `bypassPermissions` | the auto-heal loop's headless fixes |
+| `permissions.interactive` | `auto` | `run_phase` sessions: implement, gate fixes, PR description |
+| `permissions.heal` | `auto` | the auto-heal loop's headless fixes |
 | `permissions.headless` | `none` (no flag) | every other headless call in every tool: plan, review, knowledge, amendments, explore, audit, blueprint, pr-review |
 
-`MIGITE_PERMISSION_MODE` still works and maps onto `permissions.headless` (env beats files). The
-Jira fetch always passes its own explicit mode plus a two-tool allowlist, regardless of these.
+Values are `auto`, `edits`, `plan`, `ask`, or `none`; Claude Code's names (`bypassPermissions`,
+`acceptEdits`, `default`) are accepted as aliases. `MIGITE_PERMISSION_MODE` still works and maps
+onto `permissions.headless` (env beats files). The Jira fetch's agent fallback always runs with
+`auto` inside the `jira.read` tool scope, regardless of these.
 
 ```bash
-export MIGITE_PERMISSION_MODE=acceptEdits          # or, in .migite.yml:  permissions: { headless: acceptEdits }
+export MIGITE_PERMISSION_MODE=edits          # or, in .migite.yml:  permissions: { headless: edits }
 ```
 
-Omitting `--permission-mode` in `--print` mode means any tool use in that call is refused — the
+With `headless: none`, no permission flag is passed, so on Claude Code any tool use in that call is refused - the
 agent still produces output, just without being able to read/run anything, and with no visible
 error. This matters most for `migite-plan`/`migite-review`, which lean on file reads throughout.
 
-**If failures persist, the cause is almost certainly managed settings.** An enterprise policy can
-forbid `bypassPermissions`, in which case Claude Code silently falls back to prompting — which
-nothing can answer in a non-interactive `--print` call, or in `run_phase`'s hardcoded
-`bypassPermissions` sessions. Check with:
+**If failures persist on Claude Code, the cause is almost certainly managed settings.** An
+enterprise policy can forbid `bypassPermissions` (what `auto` becomes on Claude Code), in which
+case Claude Code silently falls back to prompting, which nothing can answer in a headless call
+or in a `run_phase` session started with `auto`. Check with:
 
 ```bash
 claude config list                      # look for a pinned/managed permission policy
@@ -94,19 +98,19 @@ If the second command can't run the tool, set modes your policy does allow in `.
 
 ```yaml
 permissions:
-  interactive: acceptEdits
-  heal: acceptEdits
-  headless: acceptEdits
+  interactive: edits
+  heal: edits
+  headless: edits
 ```
 
 <a id="nested"></a>
 ### Running migite from inside a Claude Code session
 
 Claude Code sets `CLAUDECODE` in its own terminal sessions, and a nested `claude` refuses to
-start while it's set. Every migite call site strips it — the Python agents drop it from the
-subprocess environment, and all bash launches go through `claude_cmd()` (`helpers.sh`), which
-is `env -u CLAUDECODE claude "$@"`. If you add a new `claude` invocation, use `claude_cmd`, not
-`claude` directly.
+start while it's set. The Claude adapter declares it (`env_unset` in `agents/claude.py`), and the
+gateway removes it from every headless call and every interactive session command, so no call
+site has to remember. Anything new that talks to an agent should go through `agent_ask`,
+`agent_think`, `run_phase`, or `migite_call.call_agent`, never launch a CLI directly.
 
 Note that **brakeman is not part of migite**. If you're seeing brakeman runs, they come from your
 `~/.claude/CLAUDE.md`, a project CLAUDE.md, or a skill — migite never invokes it.
@@ -135,6 +139,39 @@ decision, a missing factory, or a genuinely wrong review finding. Use `e` at the
 `review.md` directly and strike the bad finding, or `n` to fix it yourself and re-run checks when
 ready. With `gates.commit.policy: strict`, a capital `Y` approves over the remaining blockers and
 records them in `gate-overrides.md`.
+
+<a id="backends"></a>
+### Other backends (Cursor, OpenCode)
+
+`agent.backend` picks the CLI. Each has its own login: `cursor-agent login` (or `CURSOR_API_KEY`),
+`opencode auth login`. An `is_error` result from Cursor or an `error` event from OpenCode fails the
+call with that CLI's message. Two things are by design, not bugs:
+
+- `cannot restrict a call to the jira.read scope`: only Claude Code can run a headless call limited
+  to the Atlassian MCP tools. On other backends, install and log in to `acli` so the Jira fetch uses
+  it instead ([Jira fetch](#jira)); without it, planning proceeds without the ticket body (the key
+  still names the task).
+- The reviewer prints `backend has no structured output - text synthesis + markdown verdict` and
+  `review.json` says `"source": "markdown"`; the gate still reads a verdict, from the anchored
+  markdown parser.
+
+Model tiers are unset for these backends until you pin them; see [agents.md](./agents.md#models-per-backend).
+
+<a id="jira"></a>
+### Jira fetch
+
+Start with `migite-ticket sources`: it lists each source, whether it can run here, and why not.
+
+| Message | Cause | Fix |
+|---|---|---|
+| `acli is not installed` | `acli` isn't on PATH | install it ([tickets.md](./tickets.md#setup)), or set `tracker.jira.acli` / `MIGITE_ACLI` to its path; the agent source is used meanwhile if it can run |
+| `acli is not logged in to Jira` | no login yet, or it expired | `acli jira auth login --web`, then `acli jira auth status` |
+| `Issue does not exist or you do not have permission to see it` | wrong key, or `acli` is logged in to another site or account | open the link in a browser; `acli jira auth status` shows the site, `acli jira auth switch` changes it |
+| the browser login is refused | your organisation hasn't allowed the Atlassian CLI | ask whoever manages your Atlassian site, or use `tracker.provider: jira-agent` |
+| `acli timed out` | network, or Jira is slow | retry; the plan continues without ticket context meanwhile |
+
+A token in `.migite.yml` is refused on purpose: migite never reads Jira credentials from a file.
+Log in with `acli` instead, and revoke the token if the file was ever committed.
 
 <a id="drift"></a>
 ### `migite doctor` reports scratchpad/vault drift

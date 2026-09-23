@@ -62,8 +62,11 @@ class DefaultsTest(_Isolated):
         self.assertEqual(cfg.get("vault.base"), "~/dev-log")
         self.assertEqual(cfg.get("heal.max_attempts"), 3)
         self.assertEqual(cfg.get("gates.commit.policy"), "lenient")
-        self.assertEqual(cfg.get("permissions.interactive"), "bypassPermissions")
+        self.assertEqual(cfg.get("permissions.interactive"), "auto")      # was bypassPermissions: same meaning
+        self.assertEqual(cfg.get("permissions.heal"), "auto")
         self.assertEqual(cfg.get("permissions.headless"), "none")
+        self.assertEqual(cfg.get("agent.backend"), "claude")
+        self.assertIsNone(cfg.get("models.strong"))                        # tiers unset = backend default
         self.assertTrue(cfg.get("heal.full_suite_fallback"))
         self.assertEqual(cfg.source("models.strong"), "defaults")
 
@@ -140,7 +143,7 @@ class PrecedenceTest(_Isolated):
         self.assertEqual(cfg.get("models.strong"), "repo-strong")
         self.assertEqual(cfg.get("models.fast"), "user-fast")      # user layer survives where repo is silent
         self.assertEqual(cfg.get("heal.max_attempts"), 5)
-        self.assertEqual(cfg.get("models.standard"), "claude-sonnet-5")  # default survives
+        self.assertEqual(cfg.model("knowledge"), "claude-sonnet-5")      # unset tier → backend default
         self.assertTrue(cfg.source("models.strong").endswith(".migite.json"))
         self.assertTrue(cfg.source("models.fast").endswith("config.json"))
         self.assertEqual(len(cfg.files), 2)
@@ -191,6 +194,22 @@ class ValidationTest(_Isolated):
         with self.assertRaises(migite_config.ConfigError) as cm:
             self.load()
         self.assertIn("gates.commit.policy", str(cm.exception))
+
+    def test_permission_aliases_are_normalized_to_neutral_words(self):
+        self.write_repo({"permissions": {"interactive": "bypassPermissions", "heal": "acceptEdits", "headless": "default"}})
+        cfg = self.load()
+        self.assertEqual([cfg.get(f"permissions.{k}") for k in ("interactive", "heal", "headless")], ["auto", "edits", "ask"])
+
+    def test_neutral_permission_words_are_accepted(self):
+        self.write_repo({"permissions": {"interactive": "edits", "heal": "plan", "headless": "none"}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("permissions.heal"), "plan")
+
+    def test_unknown_permission_word_is_an_error(self):
+        self.write_repo({"permissions": {"interactive": "sometimes"}})
+        with self.assertRaises(migite_config.ConfigError) as cm:
+            self.load()
+        self.assertIn("permissions.interactive", str(cm.exception))
 
     def test_bad_int_is_an_error(self):
         self.write_repo({"heal": {"max_attempts": "lots"}})

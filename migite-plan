@@ -23,18 +23,14 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_claude
+import migite_call
 import migite_config
 import migite_paths
 
 # ── Models ─────────────────────────────────────────────────────────────────────
-# Fast tier for file analysis; strong tier for plan synthesis/refine and the
-# critic (where a missed finding is most costly). No model id is written here —
-# these come from migite_config's single default table, and main() replaces
-# them with the loaded config (models.* / models.roles.{explore,think,critic}).
-EXPLORE_MODEL = migite_config.default_model("explore")
-THINK_MODEL   = migite_config.default_model("think")
-CRITIC_MODEL  = migite_config.default_model("critic")
+# Calls name a role, never a model: explore (fast tier) for file analysis, think
+# and critic (strong tier) for synthesis, refine, and the critique. The gateway
+# resolves each role for the configured agent (models.* in the config).
 
 # Prompts ship in the repo's prompts/ dir next to this script. resolve() follows
 # the ~/.local/bin symlink to the real checkout. Missing files are a hard error
@@ -111,16 +107,15 @@ def condense_audit(audit_text: str, limit: int = 4000) -> str:
     return (findings_block + "\n\n" + raw_tail).strip()
 
 
-# ── Claude subprocess call ──────────────────────────────────────────────────────
+# ── Agent call ───────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = THINK_MODEL, thinking: bool = False, label: str = "",
-                role: str = "think") -> str:
-    """Thin wrapper over the shared migite_claude.call_claude: same text-in/text-out
+def call_agent(prompt: str, role: str = "think", thinking: bool = False, label: str = "") -> str:
+    """Thin wrapper over the shared migite_call.call_agent: same text-in/text-out
     contract the nodes below expect, plus per-call usage recorded to the run's
     ledger ($MIGITE_USAGE_LEDGER) under this tool name and the node label. `role`
     selects the configured --effort level (models.effort / models.roles_effort)."""
-    return migite_claude.call_claude(
-        prompt, model, thinking=thinking, tool="migite-plan", label=label, role=role
+    return migite_call.call_agent(
+        prompt, role, thinking=thinking, tool="migite-plan", label=label
     ).text
 
 
@@ -396,7 +391,7 @@ Analyse the **{area}** area above for this task. Report:
 Be specific — name files and methods. Under 350 words."""
 
     try:
-        findings = call_claude(prompt, model=EXPLORE_MODEL, label=f"explore:{area}", role="explore")
+        findings = call_agent(prompt, label=f"explore:{area}", role="explore")
     except Exception as e:
         findings = f"Exploration failed: {e}"
     return {"explorations": [f"### {area}\n{findings}"]}
@@ -451,7 +446,7 @@ These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
 
 Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
 
-    draft = call_claude(prompt, model=THINK_MODEL, thinking=True, label="synthesize_plan")
+    draft = call_agent(prompt, thinking=True, label="synthesize_plan")
     retries = 0
 
     # Guard against the model returning a one-line stub confirmation ("Plan written
@@ -467,7 +462,7 @@ Write the complete development plan. Output only the plan document — no preamb
             "one-line description of what you would write."
         )
         retries = 1
-        draft = call_claude(retry_prompt, model=THINK_MODEL, thinking=True, label="synthesize_plan:retry")
+        draft = call_agent(retry_prompt, thinking=True, label="synthesize_plan:retry")
         if looks_like_stub(draft):
             raise RuntimeError(
                 "migite-plan: synthesis produced a stub instead of an actual plan "
@@ -493,7 +488,7 @@ def run_architecture_critic(state: PlanState) -> dict:
 
 {blueprint_block}{audit_block}## Plan to review:
 {state['plan_draft']}"""
-    findings = call_claude(prompt, model=CRITIC_MODEL, thinking=True, label="architecture_critic", role="critic")
+    findings = call_agent(prompt, thinking=True, label="architecture_critic", role="critic")
     return {"critic_findings": findings}
 
 
@@ -520,7 +515,7 @@ Formatting rules to preserve and enforce in the revised output:
 - Tables for comparisons, not inline prose
 
 Output only the revised plan document."""
-    refined = call_claude(prompt, model=THINK_MODEL, thinking=True, label="refine_plan")
+    refined = call_agent(prompt, thinking=True, label="refine_plan")
     status = "applied"
 
     # Guard against the model returning a narrative recap of its changes, or a bare
@@ -541,7 +536,7 @@ Output only the revised plan document."""
             "or description of changes instead. Output the FULL revised plan itself, "
             "with the same headings as the original plan, not a recap of what changed."
         )
-        refined = call_claude(retry_prompt, model=THINK_MODEL, thinking=True, label="refine_plan:retry")
+        refined = call_agent(retry_prompt, thinking=True, label="refine_plan:retry")
         status = "applied_after_retry"
         kept = len(draft_headings & extract_headings(refined))
         overlap_regressed = bool(draft_headings) and (kept / len(draft_headings) < 0.6)
@@ -588,7 +583,7 @@ If the plan involves no endpoints or user-facing behaviour to verify by hand (e.
 refactor with only spec coverage), say so explicitly under each section and state what to verify
 instead (e.g. "run the full spec suite for X") rather than inventing steps that don't apply."""
 
-    testing_plan = call_claude(prompt, model=THINK_MODEL, label="generate_testing_plan")
+    testing_plan = call_agent(prompt, label="generate_testing_plan")
     return {"testing_plan": testing_plan}
 
 
@@ -614,16 +609,16 @@ def write_outputs(state: PlanState) -> dict:
     # is derived deterministically from the documents already written, so it can
     # never disagree with them; usage comes from this process's ledger records.
     critic = state["critic_findings"]
-    critic_counts = migite_claude.severity_counts(critic)
+    critic_counts = migite_call.severity_counts(critic)
     failed_explorers = [
         block.splitlines()[0].lstrip("# ").strip()
         for block in state["explorations"]
         if "Exploration failed:" in block
     ]
-    ledger_path = os.environ.get(migite_claude.LEDGER_ENV)
-    own_records = [r for r in migite_claude.read_ledger(ledger_path) if r.get("tool") == "migite-plan"] if ledger_path else []
+    ledger_path = os.environ.get(migite_call.LEDGER_ENV)
+    own_records = [r for r in migite_call.read_ledger(ledger_path) if r.get("tool") == "migite-plan"] if ledger_path else []
     envelope = {
-        **migite_claude.envelope_base("migite-plan"),
+        **migite_call.envelope_base("migite-plan"),
         "base_branch": state["base_branch"],
         "stack": state.get("stack", ""),
         "task_type": state.get("task_type", ""),
@@ -644,10 +639,10 @@ def write_outputs(state: PlanState) -> dict:
             "critic": str(critic_path),
             "testing_plan": str(testing_plan_path),
         },
-        "usage": migite_claude.summarize(own_records)["total"] if own_records else None,
+        "usage": migite_call.summarize(own_records)["total"] if own_records else None,
     }
     json_path = plan_path.with_name("plan.json")
-    migite_claude.write_json(json_path, envelope)
+    migite_call.write_json(json_path, envelope)
     print(f"    ✔ plan.json → {json_path}", flush=True)
 
     Path(state["sentinel"]).touch()
@@ -699,7 +694,7 @@ def main() -> None:
     args = ap.parse_args()
 
     # Layered config: models, timeouts, headless permission mode, prompt overrides.
-    global EXPLORE_MODEL, THINK_MODEL, CRITIC_MODEL, PLAN_CMD_PATH, CRITIC_CMD_PATH
+    global PLAN_CMD_PATH, CRITIC_CMD_PATH
     try:
         cfg = migite_config.load(args.repo_root)
     except migite_config.ConfigError as e:
@@ -707,10 +702,12 @@ def main() -> None:
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
-    EXPLORE_MODEL = cfg.model("explore")
-    THINK_MODEL   = cfg.model("think")
-    CRITIC_MODEL  = cfg.model("critic")
-    migite_claude.configure_from(cfg)
+    migite_call.configure_from(cfg)
+    try:
+        migite_call.require_cli()
+    except migite_call.AgentError as e:
+        print(f"  ✘ migite-plan: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
     PLAN_CMD_PATH   = cfg.prompt_path("plan", MIGITE_HOME, args.repo_root)
     CRITIC_CMD_PATH = cfg.prompt_path("architecture_critic", MIGITE_HOME, args.repo_root)
 
@@ -733,7 +730,7 @@ def main() -> None:
         print(f"  migite-plan | supplementary task.md loaded ({len(task_file)} chars)", flush=True)
     if jira_context:
         print(f"  migite-plan | Jira ticket context loaded ({len(jira_context)} chars)", flush=True)
-    print(f"  migite-plan | explore={EXPLORE_MODEL}  think={THINK_MODEL}  critic={CRITIC_MODEL}", flush=True)
+    print(f"  migite-plan | explore={migite_call.model_for('explore') or 'default'}  think={migite_call.model_for('think') or 'default'}  critic={migite_call.model_for('critic') or 'default'}", flush=True)
 
     graph = build_graph()
     try:

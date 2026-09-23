@@ -8,7 +8,7 @@
 #   eval's `migite_config.py env` → MIGITE_CFG_<KEY> for every leaf and
 #   MIGITE_CFG_MODEL_<ROLE> for every resolved model role, then assigns the
 #   legacy variables (DEV_LOG_BASE, LOG_DIR, MAX_HEAL_ATTEMPTS, EDITOR, ...)
-#   from them. Env vars already beat file values inside the resolver, so a
+#   from them, then caches the configured agent's description (load_agent_info). Env vars already beat file values inside the resolver, so a
 #   user who never writes a .migite.yml sees exactly the old behaviour.
 #   A config error (bad YAML, invalid enum) aborts the run — running on
 #   defaults after the user wrote a config would be worse than stopping.
@@ -18,7 +18,7 @@ load_migite_config() {
   local dump
   local -a rr=()
   [[ -n "$repo_root" ]] && rr=(--repo-root "$repo_root")
-  if ! dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env "${rr[@]}")"; then
+  if ! dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env ${rr[@]+"${rr[@]}"})"; then
     # The resolver prints an `echo ... >&2; false` line on error — eval it so the message shows, then stop.
     eval "$dump" || true
     error "Fix the configuration above (or unset MIGITE_CONFIG) and re-run"
@@ -29,7 +29,6 @@ load_migite_config() {
   DEV_LOG_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
   LOG_DIR="${MIGITE_CFG_LOGS_DIR/#\~/$HOME}"
   MAX_HEAL_ATTEMPTS="$MIGITE_CFG_HEAL_MAX_ATTEMPTS"
-  MIGITE_PROMPT_INLINE_MAX="$MIGITE_CFG_UI_PROMPT_INLINE_MAX"
   [[ -n "$MIGITE_CFG_UI_EDITOR" ]] && EDITOR="$MIGITE_CFG_UI_EDITOR"
   [[ -n "$MIGITE_CFG_VAULT_ORG" ]] && export MIGITE_ORG="$MIGITE_CFG_VAULT_ORG"
   # Python agents read this env var for their headless permission mode; keep it in sync
@@ -41,39 +40,21 @@ load_migite_config() {
     while IFS= read -r w; do [[ -n "$w" ]] && warn "config: $w"; done <<< "$MIGITE_CFG_WARNINGS"
   fi
   [[ -n "${MIGITE_CFG_FILES:-}" ]] && log "Config: $MIGITE_CFG_FILES"
+  load_agent_info "$repo_root"
   return 0
 }
 
-# cfg_model <role> — resolved model id for a call-site role (see ROLE_TIERS in
-# migite_config.py). When the config hasn't been loaded into this shell (helpers
-# exercised standalone, e.g. in tests), ask the resolver for the built-in default
-# instead of keeping a second hand-maintained copy of the tier table here — the
-# previous `case` block drifted from migite_config.py every time a model changed.
-cfg_model() {
-  local role="$1" var
-  var="MIGITE_CFG_MODEL_$(echo "$role" | tr '[:lower:]' '[:upper:]')"
-  if [[ -n "${!var:-}" ]]; then
-    echo "${!var}"
-    return
-  fi
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" get "model:$role"
-}
-
-# cfg_model_flags <role> — `--model <id>` plus `--effort <level>` when the config
-# sets one for the role's tier (models.effort) or the role itself
-# (models.roles_effort). Never emits --effort for a Haiku model, which rejects
-# the flag. Use this in place of `--model "$(cfg_model role)"` so every bash
-# call site gets the effort setting for free.
-cfg_model_flags() {
-  local role="$1" model level var
-  model="$(cfg_model "$role")"
-  var="MIGITE_CFG_EFFORT_$(echo "$role" | tr '[:lower:]' '[:upper:]')"
-  level="${!var:-}"
-  if [[ -n "$level" && "$level" != "none" && "$model" != *haiku* ]]; then
-    printf -- '--model %s --effort %s' "$model" "$level"
-  else
-    printf -- '--model %s' "$model"
-  fi
+# load_agent_info [repo_root] - MIGITE_AGENT_NAME, _DISPLAY, _BINARY, _EXIT_HINT,
+# _INSTRUCTIONS, and _CAPS (space-separated: structured_output effort usage
+# scope:<name>) for the configured agent, from `migite_agent.py info --shell`.
+# Bash reads these instead of knowing anything about a particular CLI.
+load_agent_info() {
+  local repo_root="${1:-${REPO_ROOT:-}}" dump
+  local -a rr=()
+  [[ -n "$repo_root" ]] && rr=(--repo-root "$repo_root")
+  dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" ${rr[@]+"${rr[@]}"} info --shell)" \
+    || error "Could not describe the configured agent (agent.backend)"
+  eval "$dump"
 }
 
 # cfg <dotted.key> [default] — one config value as exported by load_migite_config.

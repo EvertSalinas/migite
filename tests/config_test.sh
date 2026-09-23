@@ -33,14 +33,21 @@ _cfg_reset_env() {
     test "$(cfg gates.commit.policy)" = "lenient"
   check "cfg: unknown key returns the given default" \
     test "$(cfg not.a.key fallback)" = "fallback"
-  check "cfg_model: explore → fast tier (haiku)" \
-    test "$(cfg_model explore)" = "claude-haiku-4-5-20251001"
-  check "cfg_model: verdict → strong tier (opus 5.5)" \
-    test "$(cfg_model verdict)" = "claude-opus-5-5"
-  check "cfg_model: think → strong tier by default (drafter no weaker than critic)" \
-    test "$(cfg_model think)" = "claude-opus-5-5"
-  check "cfg_model_flags: no effort configured → --model only" \
-    test "$(cfg_model_flags knowledge)" = "--model claude-sonnet-5"
+  check "resolved model: explore → fast tier (haiku)" \
+    test "$MIGITE_CFG_MODEL_EXPLORE" = "claude-haiku-4-5-20251001"
+  check "resolved model: verdict → strong tier (opus 5.5)" \
+    test "$MIGITE_CFG_MODEL_VERDICT" = "claude-opus-5-5"
+  check "resolved model: think → strong tier by default (drafter no weaker than critic)" \
+    test "$MIGITE_CFG_MODEL_THINK" = "claude-opus-5-5"
+  check "resolved model: heal → standard tier" \
+    test "$MIGITE_CFG_MODEL_HEAL" = "claude-sonnet-5"
+  check "resolved effort: none configured → empty" \
+    test -z "$MIGITE_CFG_EFFORT_KNOWLEDGE"
+  check "load_migite_config: caches the agent's description (claude by default)" \
+    bash -c '[[ "$1" == claude && "$2" == "Claude Code" && " $3 " == *" scope:jira.read "* ]]' _ \
+      "${MIGITE_AGENT_NAME:-}" "${MIGITE_AGENT_DISPLAY:-}" "${MIGITE_AGENT_CAPS:-}"
+  check "permissions: neutral defaults (interactive auto, headless none)" \
+    bash -c '[[ "$1" == auto && "$2" == none ]]' _ "$(cfg permissions.interactive)" "$(cfg permissions.headless)"
   check "prompt_path: falls back to the repo copy when no override dir" \
     test "$(prompt_path plan)" = "$MIGITE_HOME/prompts/plan.md"
   check "load_migite_config: no files → MIGITE_CFG_FILES empty" \
@@ -76,8 +83,10 @@ echo "custom plan prompt" > "$cfg_dir/repo/.migite/prompts/plan.md"
     test "$MAX_HEAL_ATTEMPTS" = "2"
   check "load_migite_config: ui.editor sets EDITOR when EDITOR was unset" \
     test "${EDITOR:-}" = "nano"
-  check "load_migite_config: permissions.headless exported as MIGITE_PERMISSION_MODE" \
-    test "${MIGITE_PERMISSION_MODE:-}" = "acceptEdits"
+  check "load_migite_config: permissions.headless (Claude alias acceptEdits) normalized to edits and exported" \
+    test "${MIGITE_PERMISSION_MODE:-}" = "edits"
+  check "cfg: permissions.interactive alias normalized too" \
+    test "$(cfg permissions.interactive)" = "edits"
   check "load_migite_config: unknown key surfaces as a warning" \
     bash -c 'printf "%s" "$1" | grep -q "unknown key .extra_key"' _ "$out"
   check "load_migite_config: loaded file is reported" \
@@ -86,20 +95,18 @@ echo "custom plan prompt" > "$cfg_dir/repo/.migite/prompts/plan.md"
     test "$(cfg gates.commit.policy)" = "strict"
   check "cfg: boolean false exported as the string 'false'" \
     test "$(cfg heal.full_suite_fallback)" = "false"
-  check "cfg_model: tier change reaches every role in the tier (critic → file-strong)" \
-    test "$(cfg_model critic)" = "file-strong"
-  check "cfg_model: role pin wins over its tier (knowledge)" \
-    test "$(cfg_model knowledge)" = "pinned-knowledge"
-  check "cfg_model: unpinned role in another tier unchanged (amend → sonnet)" \
-    test "$(cfg_model amend)" = "claude-sonnet-5"
-  check "cfg_model_flags: tier effort → --model X --effort xhigh (critic)" \
-    test "$(cfg_model_flags critic)" = "--model file-strong --effort xhigh"
-  check "cfg_model_flags: role effort beats tier (knowledge → low)" \
-    test "$(cfg_model_flags knowledge)" = "--model pinned-knowledge --effort low"
-  check "cfg_model_flags: never sends --effort to a Haiku model even when the fast tier sets one" \
-    test "$(cfg_model_flags explore)" = "--model claude-haiku-4-5-20251001"
-  check "cfg_model_flags: role with no effort anywhere → --model only (amend)" \
-    test "$(cfg_model_flags amend)" = "--model claude-sonnet-5"
+  check "resolved model: tier change reaches every role in the tier (critic → file-strong)" \
+    test "$MIGITE_CFG_MODEL_CRITIC" = "file-strong"
+  check "resolved model: role pin wins over its tier (knowledge)" \
+    test "$MIGITE_CFG_MODEL_KNOWLEDGE" = "pinned-knowledge"
+  check "resolved model: unpinned role in another tier unchanged (amend → sonnet)" \
+    test "$MIGITE_CFG_MODEL_AMEND" = "claude-sonnet-5"
+  check "resolved effort: tier effort reaches the role (critic → xhigh)" \
+    test "$MIGITE_CFG_EFFORT_CRITIC" = "xhigh"
+  check "resolved effort: role effort beats tier (knowledge → low)" \
+    test "$MIGITE_CFG_EFFORT_KNOWLEDGE" = "low"
+  check "resolved effort: role with no effort anywhere → empty (amend)" \
+    test -z "$MIGITE_CFG_EFFORT_AMEND"
   check "prompt_path: prompts.dir override (relative to repo root) wins when the file exists" \
     test "$(prompt_path plan)" = "$cfg_dir/repo/.migite/prompts/plan.md"
   check "prompt_path: override dir without the file falls back to the repo copy" \
