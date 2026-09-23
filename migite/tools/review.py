@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# migite-review — autonomous LangGraph review agent
+# migite.tools.review (migite-review) — autonomous LangGraph review agent
 #
 # Reads plan.md, implementation notes, rubocop/rspec logs, and git diff.
 # Fans out 4 parallel specialist reviewers, synthesises a verdict, and writes
 # review.md + sentinel. Called by migite's spawn_langgraph().
 #
 # Usage:
-#   migite-review --plan <file> --implementation <file> \
+#   python -m migite.tools.review --plan <file> --implementation <file> \
 #                 --rubocop-log <file> --rspec-log <file> \
 #                 --repo-root <dir> --review-output <file> --sentinel <file>
 
@@ -23,11 +23,11 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_call
-import migite_config
-import migite_paths
+from migite import gateway
+from migite import config
+from migite import paths
 
-# Defaults from migite_config's single table; main() replaces them from the loaded
+# Defaults from config's single table; main() replaces them from the loaded
 # config (one role per review dimension, plus `verdict`).
 
 # Structured-output schema for the verdict synthesis. An agent with structured output
@@ -64,7 +64,7 @@ VERDICT_KEY = {"NEEDS FIXES": "needs_fixes", "READY TO COMMIT": "ready"}
 # Ships in the repo's prompts/ dir next to this script (resolve() follows the
 # ~/.local/bin symlink); `prompts.dir` in the config can override it per project.
 # Hard error if missing — see read_prompt().
-MIGITE_HOME = Path(__file__).resolve().parent
+MIGITE_HOME = Path(__file__).resolve().parents[2]   # migite/tools/<x>.py → the checkout
 REVIEW_CMD_PATH = MIGITE_HOME / "prompts" / "review.md"
 
 
@@ -105,11 +105,11 @@ REVIEW_DIMENSIONS = [
 
 # ── Agent call ───────────────────────────────────────────────────────────────────
 
-def call_agent(prompt: str, role: str, label: str = "", schema: dict | None = None) -> migite_call.CallResult:
-    """Shared wrapper (see migite_call): records usage under this tool + label;
+def call_agent(prompt: str, role: str, label: str = "", schema: dict | None = None) -> gateway.CallResult:
+    """Shared wrapper (see gateway): records usage under this tool + label;
     with `schema`, the result carries schema-validated `.structured` output;
     `role` selects the configured --effort level."""
-    return migite_call.call_agent(prompt, role, tool="migite-review", label=label, schema=schema)
+    return gateway.call_agent(prompt, role, tool="migite-review", label=label, schema=schema)
 
 
 # Each reviewer is its own config role (review_<dimension>), so correctness and
@@ -197,7 +197,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
 
 def review_dimension(state: DimensionInput) -> dict:
     dim = state["dimension"]
-    print(f"    ◦ {dim}  ({migite_call.model_for(f'review_{dim}') or 'default'})", flush=True)
+    print(f"    ◦ {dim}  ({gateway.model_for(f'review_{dim}') or 'default'})", flush=True)
     testing_plan_block = ""
     if dim == "testing_plan":
         content = state.get("testing_plan") or "(no testing-plan.md found for this task)"
@@ -270,10 +270,10 @@ Return a JSON object matching the provided schema:
 - `reason`: the single factor that decided it (1-3 sentences)
 - `findings`: every de-duplicated finding as an object (severity, dimension, file, line, problem, fix)
 - `document`: the COMPLETE review document in the format above, as markdown, with the same verdict"""
-    if not migite_call.supports("structured_output"):
-        print(f"  ▶ {migite_call.AGENT.name} backend has no structured output - text synthesis + markdown verdict", flush=True)
+    if not gateway.supports("structured_output"):
+        print(f"  ▶ {gateway.AGENT.name} backend has no structured output - text synthesis + markdown verdict", flush=True)
     try:
-        if not migite_call.supports("structured_output"):
+        if not gateway.supports("structured_output"):
             raise RuntimeError("structured output unsupported on this backend")
         res = call_agent(structured_prompt, label="synthesize_verdict", schema=REVIEW_SCHEMA, role="verdict")
         s = res.structured if isinstance(res.structured, dict) else None
@@ -288,7 +288,7 @@ Return a JSON object matching the provided schema:
             return {"verdict": s["document"], "review_meta": meta}
         print("  ⚠ Structured verdict missing or malformed — falling back to text synthesis", flush=True)
     except Exception as e:
-        if migite_call.supports("structured_output"):
+        if gateway.supports("structured_output"):
             print(f"  ⚠ Structured synthesis failed ({str(e)[:160]}) — falling back to text synthesis", flush=True)
 
     # Fallback: plain document, verdict and counts derived deterministically from it.
@@ -321,16 +321,16 @@ def write_review(state: ReviewState) -> dict:
     if findings:
         counts = {sev: sum(1 for f in findings if f.get("severity") == sev) for sev in ("critical", "warning", "note")}
     else:
-        counts = migite_call.severity_counts(state["verdict"])
+        counts = gateway.severity_counts(state["verdict"])
     dimensions = {}
     for block in state["findings"]:
         head, _, body = block.partition("\n")
         dim = head.lstrip("# ").strip()
-        dimensions[dim] = {**migite_call.severity_counts(body), "failed": "reviewer failed" in body}
-    ledger_path = os.environ.get(migite_call.LEDGER_ENV)
-    own_records = [r for r in migite_call.read_ledger(ledger_path) if r.get("tool") == "migite-review"] if ledger_path else []
+        dimensions[dim] = {**gateway.severity_counts(body), "failed": "reviewer failed" in body}
+    ledger_path = os.environ.get(gateway.LEDGER_ENV)
+    own_records = [r for r in gateway.read_ledger(ledger_path) if r.get("tool") == "migite-review"] if ledger_path else []
     envelope = {
-        **migite_call.envelope_base("migite-review"),
+        **gateway.envelope_base("migite-review"),
         "base_branch": state["base_branch"],
         "verdict": meta.get("verdict", "unknown"),
         "verdict_label": meta.get("verdict_label", ""),
@@ -340,10 +340,10 @@ def write_review(state: ReviewState) -> dict:
         "dimensions": dimensions,
         "source": meta.get("source", "markdown"),
         "outputs": {"review": str(review_path)},
-        "usage": migite_call.summarize(own_records)["total"] if own_records else None,
+        "usage": gateway.summarize(own_records)["total"] if own_records else None,
     }
     json_path = review_path.with_name("review.json")
-    migite_call.write_json(json_path, envelope)
+    gateway.write_json(json_path, envelope)
     print(f"    ✔ review.json → {json_path}  (verdict={envelope['verdict']}, "
           f"{counts['critical']}🔴 {counts['warning']}🟡 {counts['note']}🟢, source={envelope['source']})", flush=True)
 
@@ -386,21 +386,21 @@ def main() -> None:
 
     global REVIEW_CMD_PATH
     try:
-        cfg = migite_config.load(args.repo_root)
-    except migite_config.ConfigError as e:
+        cfg = config.load(args.repo_root)
+    except config.ConfigError as e:
         print(f"  ✘ migite-review: config error: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
-    migite_call.configure_from(cfg)
+    gateway.configure_from(cfg)
     try:
-        migite_call.require_cli()
-    except migite_call.AgentError as e:
+        gateway.require_cli()
+    except gateway.AgentError as e:
         print(f"  ✘ migite-review: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
     REVIEW_CMD_PATH = cfg.prompt_path("review", MIGITE_HOME, args.repo_root)
 
-    base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
+    base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
 
     def read_or_empty(path: str) -> str:
         p = Path(path)
@@ -413,8 +413,8 @@ def main() -> None:
     testing_plan   = read_or_empty(args.testing_plan) if args.testing_plan else ""
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
-    dims = "  ".join(f"{d}={migite_call.model_for(f'review_{d}') or 'default'}" for d, _ in REVIEW_DIMENSIONS)
-    print(f"\n  migite-review | {dims}  verdict={migite_call.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
+    dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d, _ in REVIEW_DIMENSIONS)
+    print(f"\n  migite-review | {dims}  verdict={gateway.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
 
     graph = build_graph()
     try:

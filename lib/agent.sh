@@ -2,15 +2,15 @@
 # lib/agent.sh - how bash talks to the configured agent and the Python tools.
 #
 # Bash never builds an agent CLI's flags or reads its output. Everything goes
-# through migite_agent.py (headless asks, interactive sessions, agent info),
-# migite_ticket.py (tickets) and migite_call.py (JSON envelopes, usage ledger).
+# through migite/agent_cli.py (headless asks, interactive sessions, agent info),
+# migite/tickets.py (tickets) and migite/gateway.py (JSON envelopes, usage ledger).
 # run_phase / spawn_langgraph open the tmux panes the interactive phases and the
 # LangGraph tools run in. Expects MIGITE_HOME, MIGITE_PYTHON, LOG_DIR, TIMESTAMP.
 
 # ── The agent interface ───────────────────────────────────────────────────────
 # Bash never builds an agent CLI's flags or reads its output. Everything goes
-# through migite_agent.py, which picks the agent from agent.backend and hands the
-# work to the gateway (migite_call.py) and the adapter (agents/<name>.py).
+# through migite/agent_cli.py, which picks the agent from agent.backend and hands the
+# work to the gateway (migite/gateway.py) and the adapter (migite/agents/<name>.py).
 # load_agent_info (config.sh) caches the agent's description as MIGITE_AGENT_*.
 
 # agent_ask <label> <role> [--permission P] [--scope S] [--thinking]
@@ -20,15 +20,15 @@
 # can't honour a --scope (the call is refused, never run with every tool).
 agent_ask() {
   local label="$1" role="$2"; shift 2
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" ask \
+  "$MIGITE_PYTHON" -m migite.agent_cli --repo-root "${REPO_ROOT:-$PWD}" ask \
     --tool migite --label "$label" --role "$role" "$@"
 }
 
 # ticket_cmd <parse|fetch|sources> ... - ticket references and content, from
-# whichever source tracker.provider allows (migite_ticket.py). Bash never talks
+# whichever source tracker.provider allows (migite/tickets.py). Bash never talks
 # to Jira itself.
 ticket_cmd() {
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" --repo-root "${REPO_ROOT:-$PWD}" "$@"
+  "$MIGITE_PYTHON" -m migite.tickets --repo-root "${REPO_ROOT:-$PWD}" "$@"
 }
 
 # agent_field <name> - one field of the agent's description (name, display_name,
@@ -43,7 +43,7 @@ agent_field() {
   if [[ -n "$var" && -n "${!var:-}" ]]; then
     echo "${!var}"
   else
-    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" info --field "$field" 2>/dev/null
+    "$MIGITE_PYTHON" -m migite.agent_cli --repo-root "${REPO_ROOT:-$PWD}" info --field "$field" 2>/dev/null
   fi
 }
 
@@ -58,7 +58,7 @@ agent_supports() {
   if [[ -n "${MIGITE_AGENT_NAME:-}" ]]; then
     caps="${MIGITE_AGENT_CAPS:-}"
   else
-    caps="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" info --shell 2>/dev/null \
+    caps="$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "${REPO_ROOT:-$PWD}" info --shell 2>/dev/null \
       | sed -n "s/^MIGITE_AGENT_CAPS=//p" | tr -d "'")"
   fi
   [[ " $caps " == *" $cap "* ]]
@@ -70,7 +70,7 @@ agent_supports() {
 json_field() {
   local file="$1" key="$2"
   [[ -f "$file" ]] || return 1
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" field "$file" "$key" 2>/dev/null
+  "$MIGITE_PYTHON" -m migite.gateway field "$file" "$key" 2>/dev/null
 }
 
 # run_cost_so_far — "<N> calls, $X.XX" from the run's usage ledger, or exit 1
@@ -80,7 +80,7 @@ run_cost_so_far() {
   [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 1
   local tmp calls cost
   tmp=$(mktemp)
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+  "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" --json "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
   calls=$(json_field "$tmp" total.calls || echo 0)
   cost=$(json_field "$tmp" total.cost_usd || echo 0)
   rm -f "$tmp"
@@ -99,10 +99,10 @@ print_usage_summary() {
   echo -e "${BOLD}── Usage ───────────────────────────────────────${RESET}"
   if [[ -n "${SCRATCHPAD_DIR:-}" && -d "$SCRATCHPAD_DIR" ]]; then
     local out="$SCRATCHPAD_DIR/usage.json"
-    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
+    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
     [[ -n "${TASK_DIR:-}" ]] && sync_json "$out" "$TASK_DIR/usage.json"
   else
-    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_call.py" summary --ledger "$MIGITE_USAGE_LEDGER" || true
+    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" || true
   fi
   echo -e "  Ledger: ${CYAN}$MIGITE_USAGE_LEDGER${RESET}"
   echo -e "${BOLD}────────────────────────────────────────────────${RESET}"
@@ -144,7 +144,7 @@ run_phase() {
   # One shell-quoted command line from the adapter: that CLI's flags for the
   # permission word, the variables it must not inherit, and the first prompt.
   local session_cmd
-  session_cmd="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" session \
+  session_cmd="$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "${REPO_ROOT:-$PWD}" session \
     --permission "$permission_mode" --prompt-file "$prompt_file")" \
     || error "Could not build the interactive session command for the configured agent"
 
@@ -231,18 +231,19 @@ agent_think() {
   return $exit_code
 }
 
-# spawn_langgraph <label> <channel-suffix> <script> [args...]
-# Runs a Python LangGraph script and blocks until it exits.
+# spawn_langgraph <label> <channel-suffix> <module> [args...]
+# Runs a LangGraph tool (a module under migite/tools/, e.g. migite.tools.plan)
+# and blocks until it exits.
 # All output (stdout + stderr) is teed to a timestamped log file.
 # In tmux: opens a new pane (split below); keeps it open on failure so you can read the error.
 # Outside tmux: runs inline, output streams to the terminal.
 spawn_langgraph() {
   local label="$1"
   local suffix="$2"
-  local script="$3"
+  local module="$3"
   shift 3
 
-  [[ -f "$script" ]] || error "LangGraph script not found: $script"
+  [[ -f "$MIGITE_HOME/${module//.//}.py" ]] || error "LangGraph module not found: $module"
   require_python
   require_langgraph
 
@@ -262,8 +263,9 @@ spawn_langgraph() {
       # tmux panes inherit the tmux SERVER's environment, not this shell's —
       # re-export the ledger path so the agent's usage lands in this run's file.
       [[ -n "${MIGITE_USAGE_LEDGER:-}" ]] && printf 'export MIGITE_USAGE_LEDGER=%q\n' "$MIGITE_USAGE_LEDGER"
+      printf 'export PYTHONPATH=%q\n' "$PYTHONPATH"
       local cmd
-      cmd="$(printf '%q' "$MIGITE_PYTHON") $(printf '%q' "$script")"
+      cmd="$(printf '%q' "$MIGITE_PYTHON") -m $(printf '%q' "$module")"
       local arg
       for arg in "$@"; do
         cmd+=" $(printf '%q' "$arg")"
@@ -297,6 +299,6 @@ spawn_langgraph() {
     notify "$label" "Agent done — gate coming up"
   else
     # Inline: merge stderr, tee to log; || true lets sentinel check own the failure
-    "$MIGITE_PYTHON" "$script" "$@" 2>&1 | tee "$agent_log" || true
+    "$MIGITE_PYTHON" -m "$module" "$@" 2>&1 | tee "$agent_log" || true
   fi
 }

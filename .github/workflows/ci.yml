@@ -24,7 +24,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Resolver self-test
-        run: python migite_paths.py --self-test
+        run: python -m migite.paths --self-test
 
       # tests/run.sh uses a fake `claude` on PATH (tests/fake-claude) — no real
       # model call is ever made, and no CLI install is needed.

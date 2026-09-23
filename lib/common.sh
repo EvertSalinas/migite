@@ -44,6 +44,11 @@ resolve_path() {
 }
 
 # ── Python ────────────────────────────────────────────────────────────────────
+# The Python side lives in the migite/ package of this checkout. Every call below
+# is `python -m migite.<module>`, found through PYTHONPATH, so nothing in the
+# checkout needs a symlink and the tools run the same from any directory.
+export PYTHONPATH="$MIGITE_HOME${PYTHONPATH:+:$PYTHONPATH}"
+
 # migite_resolve_python — sets MIGITE_PYTHON: an explicit MIGITE_PYTHON is
 # trusted as-is; else a python3 that actually runs; else the asdf fallback.
 # `command -v python3` alone isn't enough: an asdf shim always exists on PATH

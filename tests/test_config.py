@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""tests/test_migite_config.py — layered configuration: precedence, env overrides,
+"""tests/test_config.py — layered configuration: precedence, env overrides,
 validation, model-role resolution, prompt overrides, shell export, CLI.
-Run: python3 -m unittest tests/test_migite_config.py"""
+Run: python3 -m unittest tests/test_config.py"""
 
 import json
 import os
@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import migite_config  # noqa: E402
+from migite import config  # noqa: E402
 
 try:
     import yaml  # noqa: F401
@@ -33,16 +33,16 @@ class _Isolated(unittest.TestCase):
         self.repo = Path(self.tmp.name) / "repo"
         (self.home / ".config" / "migite").mkdir(parents=True)
         self.repo.mkdir()
-        for var in list(migite_config.ENV_OVERRIDES) + ["MIGITE_CONFIG", "XDG_CONFIG_HOME"]:
+        for var in list(config.ENV_OVERRIDES) + ["MIGITE_CONFIG", "XDG_CONFIG_HOME"]:
             os.environ.pop(var, None)
         os.environ["HOME"] = str(self.home)
         os.environ["XDG_CONFIG_HOME"] = str(self.home / ".config")
-        migite_config._CACHE.clear()
+        config._CACHE.clear()
 
     def tearDown(self):
         os.environ.clear()
         os.environ.update(self._env)
-        migite_config._CACHE.clear()
+        config._CACHE.clear()
         self.tmp.cleanup()
 
     def write_repo(self, data: dict, name=".migite.json"):
@@ -52,7 +52,7 @@ class _Isolated(unittest.TestCase):
         (self.home / ".config" / "migite" / name).write_text(json.dumps(data))
 
     def load(self):
-        return migite_config.load(self.repo, use_cache=False)
+        return config.load(self.repo, use_cache=False)
 
 
 class DefaultsTest(_Isolated):
@@ -89,7 +89,7 @@ class DefaultsTest(_Isolated):
             cfg.model("nonexistent_role")
 
     def test_every_role_has_a_tier(self):
-        self.assertTrue(set(migite_config.ROLE_TIERS.values()) <= {"fast", "standard", "strong"})
+        self.assertTrue(set(config.ROLE_TIERS.values()) <= {"fast", "standard", "strong"})
 
     def test_effort_defaults_to_none_everywhere(self):
         cfg = self.load()
@@ -116,20 +116,20 @@ class EffortTest(_Isolated):
 
     def test_invalid_effort_level_is_an_error(self):
         self.write_repo({"models": {"effort": {"strong": "turbo"}}})
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
         self.write_repo({"models": {"roles_effort": {"critic": "turbo"}}})
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
 
     def test_unknown_role_in_roles_effort_is_an_error(self):
         self.write_repo({"models": {"roles_effort": {"planner": "high"}}})
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
 
     def test_effort_exported_to_shell(self):
         self.write_repo({"models": {"effort": {"strong": "xhigh"}, "roles_effort": {"knowledge": "low"}}})
-        out = migite_config.to_shell(self.load())
+        out = config.to_shell(self.load())
         self.assertIn("MIGITE_CFG_EFFORT_CRITIC=xhigh", out)
         self.assertIn("MIGITE_CFG_EFFORT_KNOWLEDGE=low", out)
         self.assertIn("MIGITE_CFG_EFFORT_EXPLORE=''", out)
@@ -171,7 +171,7 @@ class PrecedenceTest(_Isolated):
 
     def test_migite_config_pointing_nowhere_is_an_error(self):
         os.environ["MIGITE_CONFIG"] = str(Path(self.tmp.name) / "missing.yml")
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
 
     def test_role_pin_beats_tier(self):
@@ -191,7 +191,7 @@ class ValidationTest(_Isolated):
 
     def test_invalid_enum_is_an_error(self):
         self.write_repo({"gates": {"commit": {"policy": "yolo"}}})
-        with self.assertRaises(migite_config.ConfigError) as cm:
+        with self.assertRaises(config.ConfigError) as cm:
             self.load()
         self.assertIn("gates.commit.policy", str(cm.exception))
 
@@ -207,13 +207,13 @@ class ValidationTest(_Isolated):
 
     def test_unknown_permission_word_is_an_error(self):
         self.write_repo({"permissions": {"interactive": "sometimes"}})
-        with self.assertRaises(migite_config.ConfigError) as cm:
+        with self.assertRaises(config.ConfigError) as cm:
             self.load()
         self.assertIn("permissions.interactive", str(cm.exception))
 
     def test_bad_int_is_an_error(self):
         self.write_repo({"heal": {"max_attempts": "lots"}})
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
 
     def test_bool_coercion_from_env_strings(self):
@@ -222,18 +222,18 @@ class ValidationTest(_Isolated):
 
     def test_unknown_model_role_is_an_error(self):
         self.write_repo({"models": {"roles": {"planner": "x"}}})
-        with self.assertRaises(migite_config.ConfigError) as cm:
+        with self.assertRaises(config.ConfigError) as cm:
             self.load()
         self.assertIn("planner", str(cm.exception))
 
     def test_invalid_json_is_an_error(self):
         (self.repo / ".migite.json").write_text("{not json")
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
 
     def test_top_level_must_be_a_mapping(self):
         (self.repo / ".migite.json").write_text("[1, 2]")
-        with self.assertRaises(migite_config.ConfigError):
+        with self.assertRaises(config.ConfigError):
             self.load()
 
     @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
@@ -243,10 +243,10 @@ class ValidationTest(_Isolated):
         self.assertEqual(cfg.get("models.strong"), "from-yaml")
         self.assertEqual(cfg.get("gates.commit.policy"), "strict")
         # The starter template must itself be valid and equal to the defaults
-        (self.repo / ".migite.yml").write_text(migite_config.STARTER_TEMPLATE)
+        (self.repo / ".migite.yml").write_text(config.STARTER_TEMPLATE)
         cfg = self.load()
         self.assertEqual(cfg.warnings, [])
-        for key, value in migite_config._flatten(migite_config.DEFAULTS).items():
+        for key, value in config._flatten(config.DEFAULTS).items():
             if key == "models.roles":
                 continue
             self.assertEqual(cfg.get(key), value, f"starter template differs from default for {key}")
@@ -276,7 +276,7 @@ class PathsTest(_Isolated):
         self.assertEqual(cfg.template_path("commit", ROOT, self.repo), self.home / "tpl" / org / "commit.md")
         self.assertEqual(cfg.template_path("feature", ROOT, self.repo), ROOT / "templates" / "feature.md")  # not overridden
         self.write_repo({"templates": {"dir": "~/tpl/by-repo/{repo}"}})
-        migite_config._CACHE.clear()
+        config._CACHE.clear()
         cfg = self.load()
         self.assertEqual(cfg.template_path("bug", ROOT, self.repo), self.home / "tpl" / "by-repo" / "repo" / "bug.md")
         self.assertIsNone(self.load().override_dir("prompts", self.repo))
@@ -291,7 +291,7 @@ class ShellExportTest(_Isolated):
     def test_to_shell_quotes_and_flattens(self):
         self.write_repo({"vault": {"base": "/tmp/my vault", "org": "Acme"}, "models": {"roles": {"critic": "pinned"}},
                          "budget": {"max_usd_per_run": 2.5}})
-        out = migite_config.to_shell(self.load())
+        out = config.to_shell(self.load())
         self.assertIn("MIGITE_CFG_VAULT_BASE='/tmp/my vault'", out)
         self.assertIn("MIGITE_CFG_VAULT_ORG=Acme", out)
         self.assertIn("MIGITE_CFG_GATES_COMMIT_POLICY=lenient", out)
@@ -308,8 +308,8 @@ class ShellExportTest(_Isolated):
 
 class CliTest(_Isolated):
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, str(ROOT / "migite_config.py"), "--repo-root", str(self.repo), *args],
-                              capture_output=True, text=True, env=os.environ)
+        return subprocess.run([sys.executable, "-m", "migite.config", "--repo-root", str(self.repo), *args],
+                              capture_output=True, text=True, env=os.environ, cwd=ROOT)
 
     def test_env_get_show_validate(self):
         self.write_repo({"models": {"strong": "cli-strong"}, "bogus": 1})
@@ -319,8 +319,8 @@ class CliTest(_Isolated):
         self.assertIn("unknown key", env.stdout)   # carried in MIGITE_CFG_WARNINGS (shell-quoted)
         self.assertIn("bogus", env.stdout)
         # --repo-root is accepted after the subcommand too (how config.sh calls it)
-        alt = subprocess.run([sys.executable, str(ROOT / "migite_config.py"), "get", "--repo-root", str(self.repo), "models.strong"],
-                             capture_output=True, text=True, env=os.environ)
+        alt = subprocess.run([sys.executable, "-m", "migite.config", "get", "--repo-root", str(self.repo), "models.strong"],
+                             capture_output=True, text=True, env=os.environ, cwd=ROOT)
         self.assertEqual(alt.stdout.strip(), "cli-strong")
         self.assertEqual(self.run_cli("get", "models.strong").stdout.strip(), "cli-strong")
         self.assertEqual(self.run_cli("get", "model:critic").stdout.strip(), "cli-strong")

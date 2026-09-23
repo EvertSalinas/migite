@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# migite-plan — autonomous LangGraph planning agent
+# migite.tools.plan (migite-plan) — autonomous LangGraph planning agent
 #
 # Reads intake.md, fans out parallel codebase explorations, synthesises a plan,
 # runs the architecture critic, refines the plan, then writes plan.md +
 # architecture-critic.md + sentinel. Called by migite's spawn_langgraph().
 #
 # Usage:
-#   migite-plan --intake <file> --plan-output <file> --critic-output <file> \
+#   python -m migite.tools.plan --intake <file> --plan-output <file> --critic-output <file> \
 #               --repo-root <dir> --sentinel <file> [--task-type <type>] [--knowledge <file>]
 
 import argparse
@@ -23,20 +23,20 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_call
-import migite_config
-import migite_paths
+from migite import gateway
+from migite import config
+from migite import paths
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 # Calls name a role, never a model: explore (fast tier) for file analysis, think
 # and critic (strong tier) for synthesis, refine, and the critique. The gateway
 # resolves each role for the configured agent (models.* in the config).
 
-# Prompts ship in the repo's prompts/ dir next to this script. resolve() follows
-# the ~/.local/bin symlink to the real checkout. Missing files are a hard error
+# Prompts ship in the repo's prompts/ dir; resolve() finds the checkout from this
+# module's real path. Missing files are a hard error
 # in main() — the old "read if exists else ''" silently ran the planner with no
 # plan format at all on a fresh machine.
-MIGITE_HOME = Path(__file__).resolve().parent
+MIGITE_HOME = Path(__file__).resolve().parents[2]   # migite/tools/<x>.py → the checkout
 PROMPTS_DIR = MIGITE_HOME / "prompts"
 # Defaults; main() re-resolves them through the config so `prompts.dir` can override per project.
 PLAN_CMD_PATH = PROMPTS_DIR / "plan.md"
@@ -110,11 +110,11 @@ def condense_audit(audit_text: str, limit: int = 4000) -> str:
 # ── Agent call ───────────────────────────────────────────────────────────────────
 
 def call_agent(prompt: str, role: str = "think", thinking: bool = False, label: str = "") -> str:
-    """Thin wrapper over the shared migite_call.call_agent: same text-in/text-out
+    """Thin wrapper over the shared gateway.call_agent: same text-in/text-out
     contract the nodes below expect, plus per-call usage recorded to the run's
     ledger ($MIGITE_USAGE_LEDGER) under this tool name and the node label. `role`
     selects the configured --effort level (models.effort / models.roles_effort)."""
-    return migite_call.call_agent(
+    return gateway.call_agent(
         prompt, role, thinking=thinking, tool="migite-plan", label=label
     ).text
 
@@ -609,16 +609,16 @@ def write_outputs(state: PlanState) -> dict:
     # is derived deterministically from the documents already written, so it can
     # never disagree with them; usage comes from this process's ledger records.
     critic = state["critic_findings"]
-    critic_counts = migite_call.severity_counts(critic)
+    critic_counts = gateway.severity_counts(critic)
     failed_explorers = [
         block.splitlines()[0].lstrip("# ").strip()
         for block in state["explorations"]
         if "Exploration failed:" in block
     ]
-    ledger_path = os.environ.get(migite_call.LEDGER_ENV)
-    own_records = [r for r in migite_call.read_ledger(ledger_path) if r.get("tool") == "migite-plan"] if ledger_path else []
+    ledger_path = os.environ.get(gateway.LEDGER_ENV)
+    own_records = [r for r in gateway.read_ledger(ledger_path) if r.get("tool") == "migite-plan"] if ledger_path else []
     envelope = {
-        **migite_call.envelope_base("migite-plan"),
+        **gateway.envelope_base("migite-plan"),
         "base_branch": state["base_branch"],
         "stack": state.get("stack", ""),
         "task_type": state.get("task_type", ""),
@@ -639,10 +639,10 @@ def write_outputs(state: PlanState) -> dict:
             "critic": str(critic_path),
             "testing_plan": str(testing_plan_path),
         },
-        "usage": migite_call.summarize(own_records)["total"] if own_records else None,
+        "usage": gateway.summarize(own_records)["total"] if own_records else None,
     }
     json_path = plan_path.with_name("plan.json")
-    migite_call.write_json(json_path, envelope)
+    gateway.write_json(json_path, envelope)
     print(f"    ✔ plan.json → {json_path}", flush=True)
 
     Path(state["sentinel"]).touch()
@@ -696,16 +696,16 @@ def main() -> None:
     # Layered config: models, timeouts, headless permission mode, prompt overrides.
     global PLAN_CMD_PATH, CRITIC_CMD_PATH
     try:
-        cfg = migite_config.load(args.repo_root)
-    except migite_config.ConfigError as e:
+        cfg = config.load(args.repo_root)
+    except config.ConfigError as e:
         print(f"  ✘ migite-plan: config error: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
-    migite_call.configure_from(cfg)
+    gateway.configure_from(cfg)
     try:
-        migite_call.require_cli()
-    except migite_call.AgentError as e:
+        gateway.require_cli()
+    except gateway.AgentError as e:
         print(f"  ✘ migite-plan: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
     PLAN_CMD_PATH   = cfg.prompt_path("plan", MIGITE_HOME, args.repo_root)
@@ -719,7 +719,7 @@ def main() -> None:
     jira_context = Path(args.jira_context).read_text() if args.jira_context and Path(args.jira_context).exists() else ""
     plan_cmd   = read_prompt(PLAN_CMD_PATH)
     critic_cmd = read_prompt(CRITIC_CMD_PATH)
-    base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
+    base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
 
     print(f"  migite-plan | base branch: {base_branch}", flush=True)
     if audit:
@@ -730,7 +730,7 @@ def main() -> None:
         print(f"  migite-plan | supplementary task.md loaded ({len(task_file)} chars)", flush=True)
     if jira_context:
         print(f"  migite-plan | Jira ticket context loaded ({len(jira_context)} chars)", flush=True)
-    print(f"  migite-plan | explore={migite_call.model_for('explore') or 'default'}  think={migite_call.model_for('think') or 'default'}  critic={migite_call.model_for('critic') or 'default'}", flush=True)
+    print(f"  migite-plan | explore={gateway.model_for('explore') or 'default'}  think={gateway.model_for('think') or 'default'}  critic={gateway.model_for('critic') or 'default'}", flush=True)
 
     graph = build_graph()
     try:

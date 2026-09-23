@@ -3,9 +3,9 @@
 Everything specific to one CLI lives in its own module here: flags, output
 parsing, model ids, permission mapping, tool scopes, the variables it must not
 inherit, its exit command, and the files it reads for project rules. The rest of
-migite talks to the gateway (migite_call.py), which talks to this package.
+migite talks to the gateway (migite/gateway.py), which talks to this package.
 
-Adding an agent: write agents/<name>.py with one Agent subclass, add it to
+Adding an agent: write migite/agents/<name>.py with one Agent subclass, add it to
 AGENTS below, add a fake CLI under tests/ for it, and add it to the table in
 tests/test_agents_contract.py. The contract tests then run against it.
 

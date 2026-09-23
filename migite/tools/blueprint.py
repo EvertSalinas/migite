@@ -27,9 +27,9 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_call
-import migite_config
-import migite_paths
+from migite import gateway
+from migite import config
+from migite import paths
 
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
@@ -134,24 +134,24 @@ Be direct. Name specific risks, not categories. Under 450 words.""",
 # ── Agent call ────────────────────────────────────────────────────────────────
 
 def call_agent(prompt: str, role: str, label: str = "") -> str:
-    """Shared wrapper (migite_call): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
-    return migite_call.call_agent(prompt, role, tool="migite-blueprint", label=label).text
+    """Shared wrapper (gateway): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return gateway.call_agent(prompt, role, tool="migite-blueprint", label=label).text
 
 
 def apply_config(repo_root: str | None) -> None:
     global VAULT_BASE
     try:
-        cfg = migite_config.load(repo_root)
-    except migite_config.ConfigError as e:
+        cfg = config.load(repo_root)
+    except config.ConfigError as e:
         print(f"✘ config error: {e}", file=sys.stderr)
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
     VAULT_BASE    = str(cfg.expanded_path("vault.base"))
-    migite_call.configure_from(cfg)
+    gateway.configure_from(cfg)
     try:
-        migite_call.require_cli()
-    except migite_call.AgentError as e:
+        gateway.require_cli()
+    except gateway.AgentError as e:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -257,7 +257,7 @@ def analyze_dimension(state: DimensionInput) -> dict:
 
 
 def synthesize_blueprint(state: BlueprintState) -> dict:
-    print(f"  ▶ Synthesising blueprint ({migite_call.model_for('blueprint_synth') or 'default'})", flush=True)
+    print(f"  ▶ Synthesising blueprint ({gateway.model_for('blueprint_synth') or 'default'})", flush=True)
     analyses_text = "\n\n".join(state["analyses"])
 
     prompt = f"""You are a senior software architect synthesising a project blueprint from specialist analyses.
@@ -464,7 +464,7 @@ def write_outputs(state: BlueprintState) -> dict:
             content = content.strip()
             title_match = re.search(r"^Title:\s*(.+)$", content, re.MULTILINE)
             title = title_match.group(1).strip() if title_match else f"milestone-{n}"
-            slug = migite_paths.slugify(title)  # one shared slugify — see migite_paths
+            slug = paths.slugify(title)  # one shared slugify — see paths
             filename = f"intake-{n:02d}-{slug}.md"
             (out / filename).write_text(content)
             print(f"    ✔ {filename}", flush=True)
@@ -572,7 +572,7 @@ def main() -> None:
         sys.exit(1)
 
     today = date.today().isoformat()
-    print(f"\n  migite-blueprint | analysts={migite_call.model_for('analyst') or 'default'}  synth={migite_call.model_for('blueprint_synth') or 'default'}", flush=True)
+    print(f"\n  migite-blueprint | analysts={gateway.model_for('analyst') or 'default'}  synth={gateway.model_for('blueprint_synth') or 'default'}", flush=True)
     if args.stack:
         print(f"  Stack:   {args.stack} (explicit)", flush=True)
     else:

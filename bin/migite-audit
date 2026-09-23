@@ -36,4 +36,4 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 require_langgraph
 
 # ── Run ──────────────────────────────────────────────────────────────────────────
-exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite-audit.py" --repo-root "$REPO_ROOT" "$@"
+exec "$MIGITE_PYTHON" -m migite.tools.audit --repo-root "$REPO_ROOT" "$@"

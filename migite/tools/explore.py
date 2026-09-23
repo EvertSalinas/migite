@@ -25,9 +25,9 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_call
-import migite_config
-import migite_paths
+from migite import gateway
+from migite import config
+from migite import paths
 
 # ── Models ──────────────────────────────────────────────────────────────────────
 # Exploration quality is the entire product here - there is no implementation
@@ -42,17 +42,17 @@ VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 def apply_config(repo_root: str | None) -> None:
     global VAULT_BASE
     try:
-        cfg = migite_config.load(repo_root)
-    except migite_config.ConfigError as e:
+        cfg = config.load(repo_root)
+    except config.ConfigError as e:
         print(f"✘ config error: {e}", file=sys.stderr)
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
     VAULT_BASE      = str(cfg.expanded_path("vault.base"))
-    migite_call.configure_from(cfg)
+    gateway.configure_from(cfg)
     try:
-        migite_call.require_cli()
-    except migite_call.AgentError as e:
+        gateway.require_cli()
+    except gateway.AgentError as e:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -139,9 +139,9 @@ EXPLORE_LENSES = [
 # ── Agent call ──────────────────────────────────────────────────────────────────
 
 def call_agent(prompt: str, role: str, thinking: bool = False, label: str = "") -> str:
-    """Shared wrapper (migite_call): configured backend, usage ledger, timeouts,
+    """Shared wrapper (gateway): configured backend, usage ledger, timeouts,
     headless permission mode and per-role --effort from the config."""
-    return migite_call.call_agent(prompt, role, thinking=thinking, tool="migite-explore", label=label).text
+    return gateway.call_agent(prompt, role, thinking=thinking, tool="migite-explore", label=label).text
 
 
 def run_cmd(cmd: str, cwd: str, timeout: int = 60) -> str:
@@ -693,7 +693,7 @@ def write_outputs(state: ExploreState) -> dict:
                 content = content.strip()
                 tm = re.search(r"^Title:\s*(.+)$", content, re.MULTILINE)
                 title = tm.group(1).strip() if tm else f"workstream-{n}"
-                filename = f"intake-{n:02d}-{migite_paths.slugify(title)}.md"
+                filename = f"intake-{n:02d}-{paths.slugify(title)}.md"
                 (out / filename).write_text(content)
                 print(f"    ✔ {filename}", flush=True)
         else:
@@ -822,13 +822,13 @@ def main() -> None:
                 print("✘ --repo-root is required to resolve --jira without --output", file=sys.stderr)
                 sys.exit(1)
             repo_name = Path(args.repo_root).name
-            org       = migite_paths.detect_org(args.repo_root)
+            org       = paths.detect_org(args.repo_root)
             try:
-                run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.jira)
-            except migite_paths.InvalidRunKeyError as e:
+                run_dir = paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.jira)
+            except paths.InvalidRunKeyError as e:
                 print(f"✘ {e}", file=sys.stderr)
                 sys.exit(1)
-            except migite_paths.AmbiguousRunDirError as e:
+            except paths.AmbiguousRunDirError as e:
                 print(f"✘ Ambiguous run folder for '{e.slug}': {', '.join(e.candidates)}", file=sys.stderr)
                 print("  Pass --output explicitly to disambiguate.", file=sys.stderr)
                 sys.exit(1)
@@ -836,7 +836,7 @@ def main() -> None:
         elif not output_dir:
             output_dir = str(Path(args.from_exploration).parent)
 
-        print(f"\n  migite-explore | re-extracting workstreams (extract={migite_call.model_for('explore_refine') or 'default'})", flush=True)
+        print(f"\n  migite-explore | re-extracting workstreams (extract={gateway.model_for('explore_refine') or 'default'})", flush=True)
         print(f"  Source: {args.from_exploration}", flush=True)
         print(f"  Output: {output_dir}\n", flush=True)
         try:
@@ -866,21 +866,21 @@ def main() -> None:
     )
 
     repo_name = Path(args.repo_root).name
-    org       = migite_paths.detect_org(args.repo_root)
+    org       = paths.detect_org(args.repo_root)
     today     = date.today().isoformat()
     title     = derive_title(brief)
-    slug      = migite_paths.slugify(args.name) if args.name else migite_paths.slugify(title)
+    slug      = paths.slugify(args.name) if args.name else paths.slugify(title)
 
     run_dir = None
     if not args.output and (args.jira or args.name):
         try:
-            run_dir = migite_paths.resolve_run_dir(
+            run_dir = paths.resolve_run_dir(
                 VAULT_BASE, org, repo_name, id=args.jira or None, name=args.name or None
             )
-        except migite_paths.InvalidRunKeyError as e:
+        except paths.InvalidRunKeyError as e:
             print(f"✘ {e}", file=sys.stderr)
             sys.exit(1)
-        except migite_paths.AmbiguousRunDirError as e:
+        except paths.AmbiguousRunDirError as e:
             print(f"✘ Ambiguous run folder for '{e.slug}': {', '.join(e.candidates)}", file=sys.stderr)
             print("  Pass --output explicitly to disambiguate.", file=sys.stderr)
             sys.exit(1)
@@ -890,7 +890,7 @@ def main() -> None:
         else str(Path(VAULT_BASE) / org / repo_name / f"exploration-{slug}-{today}")
     )
 
-    print(f"\n  migite-explore | lens={migite_call.model_for('lens') or 'default'}  synth={migite_call.model_for('explore_synth') or 'default'}  challenge={migite_call.model_for('challenge') or 'default'}", flush=True)
+    print(f"\n  migite-explore | lens={gateway.model_for('lens') or 'default'}  synth={gateway.model_for('explore_synth') or 'default'}  challenge={gateway.model_for('challenge') or 'default'}", flush=True)
     print(f"  Repo:       {org}/{repo_name}", flush=True)
     print(f"  Initiative: {title}", flush=True)
     print(f"  Output:     {output_dir}", flush=True)

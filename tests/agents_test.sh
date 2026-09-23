@@ -1,5 +1,5 @@
 # tests/agents_test.sh - the bash side of the agent interface: agent_ask and
-# agent_think through `migite_agent.py ask` on each backend, the session command
+# agent_think through `python -m migite.agent_cli ask` on each backend, the session command
 # run_phase uses, the cached agent description (load_agent_info), neutral
 # permission words, named scopes, and doctor's health check. Fake CLIs
 # (tests/fake-claude, fake-cursor-agent, fake-opencode) are put first on PATH under
@@ -102,7 +102,7 @@ check "agent_think --permission: reaches the CLI" grep -q -- "--force" "$FAKE_AG
 
 # the session command run_phase runs, per backend
 pf="$ag_dir/prompt.txt"; printf 'do the thing' > "$pf"
-session_cmd() { "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" session --prompt-file "$pf" "$@"; }
+session_cmd() { "$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" session --prompt-file "$pf" "$@"; }
 use_agent claude
 check "session: claude → env -u CLAUDECODE claude --permission-mode bypassPermissions -- <prompt>" \
   test "$(session_cmd --permission auto)" = "env -u CLAUDECODE claude --permission-mode bypassPermissions -- 'do the thing'"
@@ -117,7 +117,7 @@ check "session: opencode → opencode --prompt <prompt> --auto" \
 check "session: plan on opencode → no approval flag" \
   test "$(session_cmd --permission plan)" = "opencode --prompt 'do the thing'"
 big="$ag_dir/big.txt"; head -c 200000 /dev/zero | tr '\0' 'x' > "$big"
-bigcmd=$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" session --prompt-file "$big" 2>/dev/null)
+bigcmd=$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" session --prompt-file "$big" 2>/dev/null)
 check "session: a prompt over ui.prompt_inline_max becomes a pointer to its prompt file" \
   bash -c '[[ "$1" == *"Your task brief is in the file $2"* && ${#1} -lt 2000 ]]' _ "$bigcmd" "$big"
 

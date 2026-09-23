@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""migite_call - the gateway between migite and whichever agent is configured.
+"""gateway - the gateway between migite and whichever agent is configured.
 
 Everything that talks to an agent CLI goes through here. Callers say what they
 want in migite's terms: a role (never a model id), a label for the ledger, an
@@ -17,13 +17,13 @@ does the same work for every agent:
   * appends one usage line per headless call to $MIGITE_USAGE_LEDGER.
 
 What a CLI's flags and output look like is the adapter's business, in
-agents/<name>.py. This module never names a flag or a model.
+migite/agents/<name>.py. This module never names a flag or a model.
 
-`migite_claude.py` is a compatibility shim for this module's old name.
+`migite/gateway.py` is a compatibility shim for this module's old name.
 
-CLI (used by bash; headless calls and sessions go through migite_agent.py):
-  migite_call.py summary --ledger FILE [--json OUT]   print a usage table, optionally write JSON
-  migite_call.py field FILE KEY[.SUBKEY...]           print one value from a JSON file
+CLI (used by bash; headless calls and sessions go through migite/agent_cli.py):
+  python -m migite.gateway summary --ledger FILE [--json OUT]   print a usage table, optionally write JSON
+  python -m migite.gateway field FILE KEY[.SUBKEY...]           print one value from a JSON file
 """
 
 from __future__ import annotations
@@ -41,8 +41,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import agents
-import migite_config
+from migite import agents
+from migite import config
 
 LEDGER_ENV = "MIGITE_USAGE_LEDGER"
 SCHEMA_VERSION = 1
@@ -50,7 +50,7 @@ SCHEMA_VERSION = 1
 # Set by configure_from(cfg). Until then: the default agent, built-in timeouts,
 # no permission flag, built-in model defaults, no effort.
 AGENT: agents.Agent = agents.get()
-CONFIG: migite_config.Config | None = None
+CONFIG: config.Config | None = None
 DEFAULT_TIMEOUT = 600
 THINKING_TIMEOUT = 900
 DEFAULT_PERMISSION = "none"
@@ -68,9 +68,9 @@ class ScopeUnsupported(AgentError):
 
 # ── configuration ─────────────────────────────────────────────────────────────
 
-def configure_from(cfg: migite_config.Config) -> None:
+def configure_from(cfg: config.Config) -> None:
     """Point every later call at the agent, models, efforts, timeouts, and permission
-    the loaded config selects. Each tool calls this once after migite_config.load()."""
+    the loaded config selects. Each tool calls this once after config.load()."""
     global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT
     AGENT = agents.from_config(cfg)
     CONFIG = cfg
@@ -95,7 +95,7 @@ def model_for(role: str) -> str:
     """The model id a role runs on for the active agent; "" means the CLI's own default."""
     if CONFIG is not None:
         return CONFIG.model(role)
-    return migite_config.default_model(role, AGENT.name)
+    return config.default_model(role, AGENT.name)
 
 
 def supports(capability: str) -> bool:
@@ -443,7 +443,7 @@ def _cmd_field(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="migite_call: usage ledger and JSON envelope helpers for bash")
+    ap = argparse.ArgumentParser(description="gateway: usage ledger and JSON envelope helpers for bash")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p_sum = sub.add_parser("summary", help="summarise a usage ledger")

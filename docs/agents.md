@@ -94,24 +94,24 @@ Three layers, and only the bottom one knows anything about a particular CLI:
 migite core     bash phases (lib/phases/*.sh) and the LangGraph tools
     │           names a role, a label, a permission word, a scope; never a flag or a model
     ▼
-gateway         migite_call.py, the same code for every agent
+gateway         migite/gateway.py, the same code for every agent
     │           role → model and effort, capability fallbacks, the long-prompt pointer,
     │           process start, timeout, AgentError, the usage ledger
     ▼
-adapters        agents/base.py        the interface and shared types
-                agents/claude.py      flags, output parser, model ids, permission map,
-                agents/cursor.py      scopes, variables to unset, exit command,
-                agents/opencode.py    instruction files, display name
+adapters        migite/agents/base.py        the interface and shared types
+                migite/agents/claude.py      flags, output parser, model ids, permission map,
+                migite/agents/cursor.py      scopes, variables to unset, exit command,
+                migite/agents/opencode.py    instruction files, display name
 ```
 
-- **Python tools** call `migite_call.call_agent(prompt, role, label=..., schema=..., scopes=...)`.
+- **Python tools** call `migite.gateway.call_agent(prompt, role, label=..., schema=..., scopes=...)`.
 - **Bash** calls `agent_ask <label> <role>` (headless, prompt on stdin), `agent_think` (the same
-  with a spinner), and `run_phase` (interactive). All three go through `migite_agent.py`, whose
+  with a spinner), and `run_phase` (interactive). All three go through `migite/agent_cli.py`, whose
   subcommands are `ask`, `session`, `info`, and `check`.
-- **The agent's description** (`migite_agent.py info --shell`) is cached as `MIGITE_AGENT_*` when
+- **The agent's description** (`python -m migite.agent_cli info --shell`) is cached as `MIGITE_AGENT_*` when
   the config loads, so bash messages and capability checks read variables, not CLI knowledge.
 
-The interface each adapter implements (`agents/base.py`):
+The interface each adapter implements (`migite/agents/base.py`):
 
 ```python
 class Agent:
@@ -128,8 +128,8 @@ Adapters are pure translation: they never start a process and never read the con
 
 ## Adding an agent
 
-1. **Write the adapter.** Create `agents/<name>.py` with one `Agent` subclass. Start from
-   `agents/cursor.py`, the smallest one:
+1. **Write the adapter.** Create `migite/agents/<name>.py` with one `Agent` subclass. Start from
+   `migite/agents/cursor.py`, the smallest one:
 
    ```python
    from .base import Agent, AgentInfo, AskRequest, AskResult, Launch, SessionRequest, plain_text_result
@@ -144,7 +144,7 @@ Adapters are pure translation: they never start a process and never read the con
        def session_launch(self, req: SessionRequest) -> Launch: ...
    ```
 
-2. **Register it** in `AGENTS` in `agents/__init__.py`. The config accepts the new
+2. **Register it** in `AGENTS` in `migite/agents/__init__.py`. The config accepts the new
    `agent.backend` value from then on.
 3. **Add a fake CLI** under `tests/` that prints the agent's real output format, and add a row
    for it to `FAKES` in `tests/test_agents_contract.py`. The contract tests then check the new

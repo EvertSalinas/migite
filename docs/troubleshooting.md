@@ -107,10 +107,10 @@ permissions:
 ### Running migite from inside a Claude Code session
 
 Claude Code sets `CLAUDECODE` in its own terminal sessions, and a nested `claude` refuses to
-start while it's set. The Claude adapter declares it (`env_unset` in `agents/claude.py`), and the
+start while it's set. The Claude adapter declares it (`env_unset` in `migite/agents/claude.py`), and the
 gateway removes it from every headless call and every interactive session command, so no call
 site has to remember. Anything new that talks to an agent should go through `agent_ask`,
-`agent_think`, `run_phase`, or `migite_call.call_agent`, never launch a CLI directly.
+`agent_think`, `run_phase`, or `migite.gateway.call_agent`, never launch a CLI directly.
 
 Note that **brakeman is not part of migite**. If you're seeing brakeman runs, they come from your
 `~/.claude/CLAUDE.md`, a project CLAUDE.md, or a skill — migite never invokes it.

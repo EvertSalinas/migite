@@ -3,13 +3,13 @@
 #
 # The scratchpad is the source of truth for a run; the vault (DEV_LOG_BASE) is
 # the read-only mirror for browsing. slugify names task folders (byte-for-byte
-# compatible with migite_paths.slugify - tests/slugify_test.sh checks parity),
+# compatible with migite.paths.slugify - tests/slugify_test.sh checks parity),
 # stamp_file/sync_* keep the mirror current, resume_from_vault recovers a run
 # whose scratchpad is gone. Expects $DATE.
 
 # slugify <text> — lowercase, every run of non-[a-z0-9] becomes one "-",
 # no leading/trailing "-", max 50 chars, and no trailing "-" left by the cut.
-# This is the CANONICAL slug definition: migite_paths.slugify (Python) is
+# This is the CANONICAL slug definition: migite.paths.slugify (Python) is
 # kept byte-for-byte compatible and tests/slugify_test.sh checks parity, so
 # vault folders created by `migite` (bash) and looked up by the standalone
 # tools (Python) always agree. There used to be four implementations that

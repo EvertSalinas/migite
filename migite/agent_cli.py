@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""migite_agent - how bash talks to the configured agent.
+"""agent_cli - how bash talks to the configured agent.
 
 Bash never builds an agent CLI's flags or reads its output. It calls one of
 these subcommands, which load the config for the repo, pick the agent from
-`agent.backend`, and go through the gateway (migite_call.py). The CLI-specific
-parts live in agents/<name>.py.
+`agent.backend`, and go through the gateway (migite/gateway.py). The CLI-specific
+parts live in migite/agents/<name>.py.
 
-  migite_agent.py info [--shell | --field NAME]
+  python -m migite.agent_cli info [--shell | --field NAME]
         the agent's description as JSON, as shell assignments (MIGITE_AGENT_*),
         or one field
-  migite_agent.py ask --role R --label L [--tool T] [--permission P] [--scope S]... [--thinking]
+  python -m migite.agent_cli ask --role R --label L [--tool T] [--permission P] [--scope S]... [--thinking]
         one headless call: prompt on stdin, result text on stdout, one usage line
         in $MIGITE_USAGE_LEDGER. Exit 3 when a scope can't be honoured, 1 on failure.
-  migite_agent.py session --prompt-file F [--permission P]
+  python -m migite.agent_cli session --prompt-file F [--permission P]
         one shell command line that opens an interactive session with the file's
         contents as the first message (a pointer to the file when it is too long)
-  migite_agent.py check
+  python -m migite.agent_cli check
         the agent's binary, path, and version; exit 1 when the CLI is missing
 
 --repo-root DIR (before or after the subcommand) selects whose .migite.yml applies.
@@ -30,8 +30,8 @@ import shlex
 import sys
 from pathlib import Path
 
-import migite_call
-import migite_config
+from migite import gateway
+from migite import config
 
 SHELL_FIELDS = {
     "MIGITE_AGENT_NAME": "name",
@@ -49,7 +49,7 @@ def _capabilities(desc: dict) -> str:
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
-    desc = migite_call.AGENT.describe()
+    desc = gateway.AGENT.describe()
     if args.field:
         value = desc.get(args.field)
         if value is None:
@@ -69,13 +69,13 @@ def _cmd_info(args: argparse.Namespace) -> int:
 def _cmd_ask(args: argparse.Namespace) -> int:
     prompt = sys.stdin.read()
     try:
-        res = migite_call.call_agent(prompt, args.role, label=args.label, tool=args.tool,
+        res = gateway.call_agent(prompt, args.role, label=args.label, tool=args.tool,
                                      scopes=tuple(args.scope or ()), permission=args.permission,
                                      thinking=args.thinking, timeout=args.timeout or None)
-    except migite_call.ScopeUnsupported as e:
+    except gateway.ScopeUnsupported as e:
         print(f"✘ {e}", file=sys.stderr)
         return 3
-    except migite_call.AgentError as e:
+    except gateway.AgentError as e:
         print(f"✘ {e}", file=sys.stderr)
         return 1
     sys.stdout.write(res.text)
@@ -84,13 +84,13 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 
 def _cmd_session(args: argparse.Namespace) -> int:
     prompt = Path(args.prompt_file).read_text()
-    launch = migite_call.session_launch(prompt, permission=args.permission, prompt_file=args.prompt_file)
+    launch = gateway.session_launch(prompt, permission=args.permission, prompt_file=args.prompt_file)
     print(launch.shell())
     return 0
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    status = migite_call.check_agent()
+    status = gateway.check_agent()
     if args.json:
         print(json.dumps(status, indent=2))
     elif status["path"]:
@@ -103,7 +103,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="migite_agent: bash's interface to the configured agent")
+    ap = argparse.ArgumentParser(description="agent_cli: bash's interface to the configured agent")
     ap.add_argument("--repo-root", default=None)
     sub = ap.add_subparsers(dest="command", required=True)
     parsers = {
@@ -133,9 +133,9 @@ def main() -> None:
     args = ap.parse_args()
 
     try:
-        cfg = migite_config.load(args.repo_root or os.getcwd())
-        migite_call.configure_from(cfg)
-    except (migite_config.ConfigError, ValueError) as e:
+        cfg = config.load(args.repo_root or os.getcwd())
+        gateway.configure_from(cfg)
+    except (config.ConfigError, ValueError) as e:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 

@@ -40,7 +40,7 @@ class JiraAgentTracker(Tracker):
     name = "jira-agent"
 
     def __init__(self, gateway=None):
-        # The gateway is migite_call, already configured for the repo; passed in so
+        # The gateway is gateway, already configured for the repo; passed in so
         # this package imports nothing from migite at module load.
         self.gateway = gateway
 

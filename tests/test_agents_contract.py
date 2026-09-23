@@ -14,8 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import agents          # noqa: E402
-import migite_call     # noqa: E402
+from migite import agents          # noqa: E402
+from migite import gateway     # noqa: E402
 
 # agent name -> the fake CLI that stands in for it in tests
 FAKES = {
@@ -112,7 +112,7 @@ class ContractEndToEndTest(unittest.TestCase):
 
     def tearDown(self):
         os.environ.clear(); os.environ.update(self._env)
-        migite_call.reset(); self.tmp.cleanup()
+        gateway.reset(); self.tmp.cleanup()
 
     def test_round_trip(self):
         for name in agents.names():
@@ -121,11 +121,11 @@ class ContractEndToEndTest(unittest.TestCase):
                 shim = self.bin / agent.binary
                 shim.write_text(f'#!/usr/bin/env bash\nexec "{ROOT / "tests" / FAKES[name]}" "$@"\n'); shim.chmod(0o755)
                 os.chmod(ROOT / "tests" / FAKES[name], 0o755)
-                migite_call.AGENT = agent
-                migite_call.require_cli()
-                r = migite_call.call_agent(PROMPT, "knowledge", label=f"contract:{name}", ledger=self.ledger)
+                gateway.AGENT = agent
+                gateway.require_cli()
+                r = gateway.call_agent(PROMPT, "knowledge", label=f"contract:{name}", ledger=self.ledger)
                 self.assertTrue(r.text)
-                rec = migite_call.read_ledger(self.ledger)[-1]
+                rec = gateway.read_ledger(self.ledger)[-1]
                 self.assertEqual((rec["label"], rec["ok"]), (f"contract:{name}", True))
 
 

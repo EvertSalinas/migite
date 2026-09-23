@@ -30,17 +30,11 @@ MIGITE_SRC="$HOME/Code/migite"
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
 for f in "$MIGITE_SRC"/bin/*; do ln -sf "$f" "$BIN/$(basename "$f")"; done
-for f in migite-plan migite-review migite-blueprint.py migite-explore.py migite-audit.py \
-         migite-pr-review.py migite_paths.py migite_call.py migite_config.py migite_agent.py; do
-  ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
-done
 ```
 
-The module symlinks let you run `migite_config.py` and friends by name. The tools themselves
-don't need them: Python resolves a symlinked script to its real directory, so `migite-plan` and
-the others import `migite_call`, `migite_config`, and the `agents/` package from the checkout.
-`lib/`, `prompts/`, and `agents/` are not symlinked; every command in `bin/` resolves its real
-location through the symlink and finds them in the checkout.
+Only `bin/` goes on your `PATH`. Every command there resolves its real location through the
+symlink, sources `lib/`, and puts the checkout on `PYTHONPATH`, so the Python package (`migite/`)
+and the LangGraph tools (`python -m migite.tools.<name>`) need no symlink and no install.
 
 <a id="macos"></a>
 ### macOS

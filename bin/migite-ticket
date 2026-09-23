@@ -39,7 +39,7 @@ case "${1:-}" in
     sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   parse|fetch|sources)
-    exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" ${repo_args[@]+"${repo_args[@]}"} "$@" ;;
+    exec "$MIGITE_PYTHON" -m migite.tickets ${repo_args[@]+"${repo_args[@]}"} "$@" ;;
   *)
-    exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" ${repo_args[@]+"${repo_args[@]}"} fetch "$@" ;;
+    exec "$MIGITE_PYTHON" -m migite.tickets ${repo_args[@]+"${repo_args[@]}"} fetch "$@" ;;
 esac

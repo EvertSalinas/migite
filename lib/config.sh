@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# lib/config.sh — load the layered configuration (migite_config.py) into
+# lib/config.sh — load the layered configuration (migite/config.py) into
 # the shell and map it onto the variables the rest of migite already reads.
 #
 # Sourced by migite. Expects MIGITE_HOME and MIGITE_PYTHON to be set.
 #
 # load_migite_config <repo_root>
-#   eval's `migite_config.py env` → MIGITE_CFG_<KEY> for every leaf and
+#   eval's `python -m migite.config env` → MIGITE_CFG_<KEY> for every leaf and
 #   MIGITE_CFG_MODEL_<ROLE> for every resolved model role, then assigns the
 #   legacy variables (DEV_LOG_BASE, LOG_DIR, MAX_HEAL_ATTEMPTS, EDITOR, ...)
 #   from them, then caches the configured agent's description (load_agent_info). Env vars already beat file values inside the resolver, so a
@@ -18,7 +18,7 @@ load_migite_config() {
   local dump
   local -a rr=()
   [[ -n "$repo_root" ]] && rr=(--repo-root "$repo_root")
-  if ! dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env ${rr[@]+"${rr[@]}"})"; then
+  if ! dump="$("$MIGITE_PYTHON" -m migite.config env ${rr[@]+"${rr[@]}"})"; then
     # The resolver prints an `echo ... >&2; false` line on error — eval it so the message shows, then stop.
     eval "$dump" || true
     error "Fix the configuration above (or unset MIGITE_CONFIG) and re-run"
@@ -46,13 +46,13 @@ load_migite_config() {
 
 # load_agent_info [repo_root] - MIGITE_AGENT_NAME, _DISPLAY, _BINARY, _EXIT_HINT,
 # _INSTRUCTIONS, and _CAPS (space-separated: structured_output effort usage
-# scope:<name>) for the configured agent, from `migite_agent.py info --shell`.
+# scope:<name>) for the configured agent, from `python -m migite.agent_cli info --shell`.
 # Bash reads these instead of knowing anything about a particular CLI.
 load_agent_info() {
   local repo_root="${1:-${REPO_ROOT:-}}" dump
   local -a rr=()
   [[ -n "$repo_root" ]] && rr=(--repo-root "$repo_root")
-  dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" ${rr[@]+"${rr[@]}"} info --shell)" \
+  dump="$("$MIGITE_PYTHON" -m migite.agent_cli ${rr[@]+"${rr[@]}"} info --shell)" \
     || error "Could not describe the configured agent (agent.backend)"
   eval "$dump"
 }
@@ -73,7 +73,7 @@ cfg() {
 # the repo root and may contain {org} / {repo}, substituted from $ORG /
 # $REPO_NAME (so one user-level `templates.dir: ~/.config/migite/templates/{org}`
 # gives each organisation its own PR template with no file in any repo).
-# Mirrors Config.override_dir() in migite_config.py.
+# Mirrors Config.override_dir() in migite/config.py.
 _override_path() {
   local kind="$1" name="$2" dir
   dir="$(cfg "$kind.dir")"
@@ -111,16 +111,16 @@ run_config_command() {
   case "${1:-}" in
     --init|init)
       shift
-      "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" init "$@"
+      "$MIGITE_PYTHON" -m migite.config --repo-root "$repo_root" init "$@"
       ;;
     --validate|validate)
-      "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" validate
+      "$MIGITE_PYTHON" -m migite.config --repo-root "$repo_root" validate
       ;;
     "")
       echo ""
       echo "migite config — effective configuration for $repo_root"
       echo ""
-      "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" show
+      "$MIGITE_PYTHON" -m migite.config --repo-root "$repo_root" show
       echo ""
       ;;
     *)

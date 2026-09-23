@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tests/test_migite_paths.py — unittest coverage for migite_paths' fixture-backed
+"""tests/test_paths.py — unittest coverage for paths' fixture-backed
 detection logic (detect_base_branch, detect_org), runnable via `python3 -m unittest`
 independently of the --self-test CLI flag (which also covers resolve_run_dir,
 slugify, and extract_ticket_key)."""
@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from migite_paths import detect_base_branch, detect_org  # noqa: E402
+from migite.paths import detect_base_branch, detect_org  # noqa: E402
 
 
 def _git(repo, *args):

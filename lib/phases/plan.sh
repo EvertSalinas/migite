@@ -276,7 +276,7 @@ run_plan() {
 
   # LangGraph plan script args — built once, reused in the gate loop on rejection
   local PLAN_SENTINEL="$SCRATCHPAD_DIR/.plan.done"
-  local PLAN_SCRIPT="$MIGITE_HOME/migite-plan"
+  local PLAN_MODULE="migite.tools.plan"
   local PLAN_LANGGRAPH_ARGS=(
     --intake        "$INTAKE_FILE"
     --plan-output   "$PLAN_FILE"
@@ -327,7 +327,7 @@ run_plan() {
       r|R)
         _backup_plan_file
         rm -f "$PLAN_SENTINEL"
-        spawn_langgraph "Planning" "plan" "$PLAN_SCRIPT" "${PLAN_LANGGRAPH_ARGS[@]}"
+        spawn_langgraph "Planning" "plan" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
         sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
@@ -342,7 +342,7 @@ run_plan() {
     esac
   else
     rm -f "$PLAN_SENTINEL"
-    spawn_langgraph "Planning" "plan" "$PLAN_SCRIPT" "${PLAN_LANGGRAPH_ARGS[@]}"
+    spawn_langgraph "Planning" "plan" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
     [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
     sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
     sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
@@ -459,7 +459,7 @@ run_plan() {
         _rerun_prev=$(mktemp)
         cp "$PLAN_FILE" "$_rerun_prev"
         rm -f "$PLAN_SENTINEL"
-        spawn_langgraph "Revising plan" "plan-r${PLAN_GATE_ATTEMPTS}" "$PLAN_SCRIPT" "${PLAN_LANGGRAPH_ARGS[@]}"
+        spawn_langgraph "Revising plan" "plan-r${PLAN_GATE_ATTEMPTS}" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || warn "migite-plan revision may not have completed — check agent log in $LOG_DIR"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
         sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"

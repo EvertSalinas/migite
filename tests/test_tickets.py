@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""tests/test_migite_ticket.py - ticket references, the acli and agent ticket
-sources, source selection, the tracker config, and the migite_ticket CLI. acli is
+"""tests/test_tickets.py - ticket references, the acli and agent ticket
+sources, source selection, the tracker config, and the tickets CLI. acli is
 replaced by a fake runner or tests/fake-acli and the agent by a fake, so no test
 reaches Jira or a model, even on a machine where a real acli is logged in.
-Run: python3 -m unittest tests/test_migite_ticket.py"""
+Run: python3 -m unittest tests/test_tickets.py"""
 
 import json
 import os
@@ -17,13 +17,13 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import migite_config  # noqa: E402
-import migite_paths   # noqa: E402
-import migite_ticket  # noqa: E402
-from trackers import InvalidTicketRef, Ticket, TicketError, TicketRef, parse_ref, render  # noqa: E402
-from trackers.jira_acli import LOGIN_HINT, JiraAcliTracker  # noqa: E402
-from trackers.jira_agent import FAILED_MARKER, JiraAgentTracker  # noqa: E402
-from trackers.jira_format import FIELDS, acceptance_from, adf_to_text, field_text  # noqa: E402
+from migite import config  # noqa: E402
+from migite import paths   # noqa: E402
+from migite import tickets  # noqa: E402
+from migite.trackers import InvalidTicketRef, Ticket, TicketError, TicketRef, parse_ref, render  # noqa: E402
+from migite.trackers.jira_acli import LOGIN_HINT, JiraAcliTracker  # noqa: E402
+from migite.trackers.jira_agent import FAILED_MARKER, JiraAgentTracker  # noqa: E402
+from migite.trackers.jira_format import FIELDS, acceptance_from, adf_to_text, field_text  # noqa: E402
 
 SITE = "https://acme.atlassian.net"
 FAKE_ACLI = str(ROOT / "tests" / "fake-acli")
@@ -101,9 +101,9 @@ class ParseRefTest(unittest.TestCase):
                 parse_ref(bad)
 
     def test_path_resolver_uses_the_same_parser(self):
-        self.assertEqual(migite_paths.extract_ticket_key("abc2-7"), "ABC2-7")
-        with self.assertRaises(migite_paths.InvalidRunKeyError):
-            migite_paths.extract_ticket_key("BB_1")
+        self.assertEqual(paths.extract_ticket_key("abc2-7"), "ABC2-7")
+        with self.assertRaises(paths.InvalidRunKeyError):
+            paths.extract_ticket_key("BB_1")
 
 
 class ConversionTest(unittest.TestCase):
@@ -217,7 +217,7 @@ class FakeAgent:
 
 
 class FakeGateway:
-    """Stands in for migite_call: records calls, returns text or raises."""
+    """Stands in for gateway: records calls, returns text or raises."""
 
     class AgentError(RuntimeError):
         pass
@@ -269,19 +269,19 @@ class _Isolated(unittest.TestCase):
         self.repo = Path(self.tmp.name) / "repo"; self.repo.mkdir()
         home = Path(self.tmp.name) / "home"; (home / ".config" / "migite").mkdir(parents=True)
         os.environ["HOME"] = str(home); os.environ["XDG_CONFIG_HOME"] = str(home / ".config")
-        for var in list(migite_config.ENV_OVERRIDES) + ["MIGITE_CONFIG"]:
+        for var in list(config.ENV_OVERRIDES) + ["MIGITE_CONFIG"]:
             os.environ.pop(var, None)
         os.environ["MIGITE_ACLI"] = NO_ACLI          # never the real, logged-in acli
-        migite_config._CACHE.clear()
+        config._CACHE.clear()
 
     def tearDown(self):
         os.environ.clear(); os.environ.update(self._env)
-        migite_config._CACHE.clear(); self.tmp.cleanup()
+        config._CACHE.clear(); self.tmp.cleanup()
 
     def cfg(self, data=None, **env):
         if data is not None:
             (self.repo / ".migite.json").write_text(json.dumps(data))
-        return migite_config.load(self.repo, env={**os.environ, **env}, use_cache=False)
+        return config.load(self.repo, env={**os.environ, **env}, use_cache=False)
 
 
 def installed(_):
@@ -291,7 +291,7 @@ def installed(_):
 class SelectionTest(_Isolated):
     def test_auto_prefers_acli_when_logged_in(self):
         gw = FakeGateway()
-        text, used = migite_ticket.fetch(parse_ref("BB-12"), self.cfg(), runner=FakeRunner(), which=installed, gateway=gw)
+        text, used = tickets.fetch(parse_ref("BB-12"), self.cfg(), runner=FakeRunner(), which=installed, gateway=gw)
         self.assertEqual(used, "jira-acli"); self.assertIn("Soft-delete", text)
         self.assertEqual(gw.calls, [])                               # no model call
 
@@ -299,39 +299,39 @@ class SelectionTest(_Isolated):
         gw = FakeGateway()
         runner = FakeRunner(view="", view_rc=1, view_err="✗ Error: boom")
         with unittest.mock.patch("sys.stderr") as err:
-            text, used = migite_ticket.fetch(parse_ref("BB-12"), self.cfg(), runner=runner, which=installed, gateway=gw)
+            text, used = tickets.fetch(parse_ref("BB-12"), self.cfg(), runner=runner, which=installed, gateway=gw)
         self.assertEqual(used, "jira-agent"); self.assertIn("via agent", text)
         self.assertIn("jira-acli", "".join(str(c) for c in err.write.call_args_list))   # announced, not silent
 
     def test_auto_without_acli_uses_the_agent(self):
-        _, used = migite_ticket.fetch(parse_ref("BB-12"), self.cfg(), which=lambda c: None, gateway=FakeGateway())
+        _, used = tickets.fetch(parse_ref("BB-12"), self.cfg(), which=lambda c: None, gateway=FakeGateway())
         self.assertEqual(used, "jira-agent")
 
     def test_no_source_lists_every_reason(self):
-        with self.assertRaises(migite_ticket.NoSource) as cm:
-            migite_ticket.fetch(parse_ref("BB-12"), self.cfg(), which=lambda c: None, gateway=FakeGateway(scoped=False))
+        with self.assertRaises(tickets.NoSource) as cm:
+            tickets.fetch(parse_ref("BB-12"), self.cfg(), which=lambda c: None, gateway=FakeGateway(scoped=False))
         self.assertEqual([name for name, _ in cm.exception.reasons], ["jira-acli", "jira-agent"])
-        with self.assertRaises(migite_ticket.NoSource):
-            migite_ticket.fetch(parse_ref("BB-12"), self.cfg({"tracker": {"provider": "none"}}),
+        with self.assertRaises(tickets.NoSource):
+            tickets.fetch(parse_ref("BB-12"), self.cfg({"tracker": {"provider": "none"}}),
                                 runner=FakeRunner(), which=installed)
 
     def test_explicit_provider_and_source_override(self):
         cfg = self.cfg({"tracker": {"provider": "jira-agent"}})
-        _, used = migite_ticket.fetch(parse_ref("BB-12"), cfg, runner=FakeRunner(), which=installed, gateway=FakeGateway())
+        _, used = tickets.fetch(parse_ref("BB-12"), cfg, runner=FakeRunner(), which=installed, gateway=FakeGateway())
         self.assertEqual(used, "jira-agent")
-        _, used = migite_ticket.fetch(parse_ref("BB-12"), cfg, source="jira-acli", runner=FakeRunner(), which=installed)
+        _, used = tickets.fetch(parse_ref("BB-12"), cfg, source="jira-acli", runner=FakeRunner(), which=installed)
         self.assertEqual(used, "jira-acli")
 
     def test_the_configured_acli_command_is_used(self):
         os.environ.pop("MIGITE_ACLI", None)          # env beats files; let the file value apply
         runner = FakeRunner()
-        migite_ticket.fetch(parse_ref("BB-12"), self.cfg({"tracker": {"jira": {"acli": "/opt/acli/bin/acli"}}}),
+        tickets.fetch(parse_ref("BB-12"), self.cfg({"tracker": {"jira": {"acli": "/opt/acli/bin/acli"}}}),
                             runner=runner, which=installed)
         self.assertTrue(all(c[0] == "/opt/acli/bin/acli" for c in runner.calls))
 
     def test_every_available_source_failing_raises_the_last_error(self):
         with unittest.mock.patch("sys.stderr"), self.assertRaises(TicketError):
-            migite_ticket.fetch(parse_ref("BB-12"), self.cfg({"tracker": {"provider": "jira-agent"}}),
+            tickets.fetch(parse_ref("BB-12"), self.cfg({"tracker": {"provider": "jira-agent"}}),
                                 gateway=FakeGateway(error="boom"))
 
 
@@ -345,18 +345,18 @@ class TrackerConfigTest(_Isolated):
 
     def test_invalid_provider_is_an_error(self):
         for bad in ("linear", "jira-rest"):
-            with self.subTest(bad=bad), self.assertRaises(migite_config.ConfigError):
+            with self.subTest(bad=bad), self.assertRaises(config.ConfigError):
                 self.cfg({"tracker": {"provider": bad}})
 
     def test_a_token_in_a_config_file_is_refused(self):
         for key in ("api_token", "token"):
-            with self.subTest(key=key), self.assertRaises(migite_config.ConfigError) as cm:
+            with self.subTest(key=key), self.assertRaises(config.ConfigError) as cm:
                 self.cfg({"tracker": {"jira": {key: "s3cret"}}})
             self.assertIn("acli jira auth login --web", str(cm.exception))
             self.assertNotIn("s3cret", str(cm.exception))
 
     def test_provider_enum_matches_the_ticket_module(self):
-        self.assertEqual(migite_config.TRACKER_PROVIDERS, migite_ticket.PROVIDERS)
+        self.assertEqual(config.TRACKER_PROVIDERS, tickets.PROVIDERS)
 
 
 class CliTest(_Isolated):
@@ -364,8 +364,8 @@ class CliTest(_Isolated):
 
     def run_cli(self, *args, env=None):
         full_env = {**os.environ, **(env or {})}
-        return subprocess.run([sys.executable, str(ROOT / "migite_ticket.py"), "--repo-root", str(self.repo), *args],
-                              capture_output=True, text=True, env=full_env, timeout=60)
+        return subprocess.run([sys.executable, "-m", "migite.tickets", "--repo-root", str(self.repo), *args],
+                              capture_output=True, text=True, env=full_env, timeout=60, cwd=ROOT)
 
     def fake_claude_on_path(self):
         bin_dir = Path(self.tmp.name) / "bin"; bin_dir.mkdir(exist_ok=True)

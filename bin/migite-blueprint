@@ -13,7 +13,7 @@
 #   migite-blueprint --brief brief.md --name "billing-api" --stack "Next.js + TypeScript + Postgres"
 #   migite-blueprint --from-blueprint blueprint.md  # re-extract intakes from edited blueprint
 #
-# Stack-agnostic: without --stack, migite-blueprint.py infers the tech stack from the
+# Stack-agnostic: without --stack, migite/tools/blueprint.py infers the tech stack from the
 # brief. Pass --stack to state it explicitly when the brief doesn't say.
 
 set -euo pipefail
@@ -91,7 +91,7 @@ if [[ -n "$FROM_BLUEPRINT" ]]; then
   echo -e "  ${CYAN}Blueprint: $FROM_BLUEPRINT${RESET}"
   echo -e "  ${CYAN}Output:    $OUTPUT_DIR${RESET}"
   echo ""
-  exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite-blueprint.py" \
+  exec "$MIGITE_PYTHON" -m migite.tools.blueprint \
     --from-blueprint "$FROM_BLUEPRINT" \
     --output        "$OUTPUT_DIR"
 fi
@@ -122,11 +122,11 @@ fi
 # Derive output dir from vault + project name if not overridden
 if [[ -z "$OUTPUT_DIR" ]]; then
   # Layered config: vault.base / vault.org (env DEV_LOG_BASE / MIGITE_ORG still win).
-  eval "$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env --repo-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")" || exit 1
+  eval "$("$MIGITE_PYTHON" -m migite.config env --repo-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")" || exit 1
   VAULT_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
-  # Canonical slug (same as migite's bash slugify and migite_paths.slugify) — the
+  # Canonical slug (same as migite's bash slugify and migite.paths.slugify) — the
   # old `tr -cs` version left leading/trailing hyphens and differed from both.
-  SAFE_NAME=$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" slugify "$PROJECT_NAME")
+  SAFE_NAME=$("$MIGITE_PYTHON" -m migite.paths slugify "$PROJECT_NAME")
   OUTPUT_DIR="$VAULT_BASE/${MIGITE_CFG_VAULT_ORG:-Personal}/$SAFE_NAME/blueprint"
 fi
 
@@ -150,4 +150,4 @@ else
   PYTHON_ARGS+=(--brief-file "$BRIEF_TMP")
 fi
 
-exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite-blueprint.py" "${PYTHON_ARGS[@]}"
+exec "$MIGITE_PYTHON" -m migite.tools.blueprint "${PYTHON_ARGS[@]}"

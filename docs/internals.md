@@ -16,47 +16,58 @@ envelopes. For the phase-by-phase behaviour see [migite.md](./migite.md).
 
 ```
 migite/                       ← wherever you clone this repo
-├── migite                    ← entrypoint (bash): config load, arg parsing, phase sequencing, EXIT trap
-├── migite.d/                 ← phase fragments sourced by migite, sharing its variables
-│   ├── helpers.sh            ← output, agent_ask/agent_think/run_phase, changed-file helpers, stack profiles, sync, gate banner
+├── bin/                      ← the only directory that goes on PATH
+│   ├── migite                ← entrypoint (bash): config load, arg parsing, phase sequencing, EXIT trap
+│   ├── migite-ticket         ← tickets from the command line (parse / fetch / sources)
+│   ├── migite-explore        ← standalone: initiative feasibility
+│   ├── migite-blueprint      ← standalone: new-project definition
+│   ├── migite-audit          ← standalone: codebase audit
+│   └── migite-pr-review      ← standalone: review a branch
+├── lib/                      ← bash, sourced by bin/*; one file per concern, sharing the entrypoint's variables
+│   ├── common.sh             ← colours, log/warn/error, notify, Python resolution + preflights, PYTHONPATH
 │   ├── config.sh             ← load_migite_config, load_agent_info, cfg / prompt_path, use_tmux, `migite config`
+│   ├── stack.sh              ← stack profiles, bundle_exec, rubocop/rspec, changed-file lists, base branch
+│   ├── agent.sh              ← agent_ask / agent_think / run_phase / spawn_langgraph, usage ledger
+│   ├── vault.sh              ← slugify, stamp_file / sync_artifact / sync_json, resume_from_vault
+│   ├── intake.sh             ← attachments block, knowledge injection, fill_intake_field
+│   ├── gate.sh               ← gate banner, review_verdict, show_commit_context
 │   ├── doctor.sh             ← `migite doctor`
-│   ├── amend.sh              ← --amend mode
-│   ├── plan.sh               ← Phase 1 (+ ticket context via migite-ticket, plan gate) and Phase 1.5
-│   ├── implement.sh          ← Phase 2 (single or --staged) and the Phase 2.5 heal loop
-│   ├── review.sh             ← Phase 3, the commit gate, strict-policy blockers
-│   └── deliver.sh            ← Phases 3.5, 4, 4.5
-├── migite-plan               ← LangGraph planner (Python), called by Phase 1
-├── migite-review             ← LangGraph reviewer (Python), called by Phase 3
-├── migite-explore(.py)       ← standalone: initiative feasibility (bash wrapper + agent)
-├── migite-blueprint(.py)     ← standalone: new-project definition
-├── migite-audit(.py)         ← standalone: codebase audit
-├── migite-pr-review(.py)     ← standalone: review a branch
-├── agents/                   ← one adapter per agent CLI: the ONLY place a CLI's flags, output format, or model ids appear
-│   ├── base.py               ← the interface: AgentInfo, AskRequest, SessionRequest, Launch, AskResult, permission words, scopes
-│   ├── claude.py             ← Claude Code
-│   ├── cursor.py             ← Cursor CLI
-│   └── opencode.py           ← OpenCode
-├── migite_call.py            ← the gateway: role → model and effort, capability fallbacks, prompt pointer, process, AgentError, usage ledger
-├── migite_agent.py           ← bash's door to the gateway: ask, session, info, check
-├── migite_claude.py          ← compatibility shim: the old name of migite_call.py
-├── migite_config.py          ← layered config resolver; role → tier → the agent's model
-├── trackers/                 ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
-├── migite_ticket.py          ← ticket parse / fetch / sources; picks the source from tracker.provider
-├── migite-ticket             ← the same, as a command (bash wrapper)
-├── migite_paths.py           ← vault path resolver: org detection, base branch, slugify, run-dir lookup
+│   └── phases/
+│       ├── amend.sh          ← --amend mode
+│       ├── plan.sh           ← Phase 1 (+ ticket context, plan gate) and Phase 1.5
+│       ├── implement.sh      ← Phase 2 (single or --staged) and the Phase 2.5 heal loop
+│       ├── review.sh         ← Phase 3, the commit gate, strict-policy blockers
+│       └── deliver.sh        ← Phases 3.5, 4, 4.5
+├── migite/                   ← the Python package; bash runs it as `python -m migite.<module>`
+│   ├── config.py             ← layered config resolver; role → tier → the agent's model
+│   ├── gateway.py            ← the gateway: role → model and effort, capability fallbacks, prompt pointer, process, AgentError, usage ledger
+│   ├── agent_cli.py          ← bash's door to the gateway: ask, session, info, check
+│   ├── tickets.py            ← ticket parse / fetch / sources; picks the source from tracker.provider
+│   ├── paths.py              ← vault path resolver: org detection, base branch, slugify, run-dir lookup
+│   ├── agents/               ← one adapter per agent CLI: the ONLY place a CLI's flags, output format, or model ids appear
+│   │   ├── base.py           ← the interface: AgentInfo, AskRequest, SessionRequest, Launch, AskResult, permission words, scopes
+│   │   ├── claude.py         ← Claude Code
+│   │   ├── cursor.py         ← Cursor CLI
+│   │   └── opencode.py       ← OpenCode
+│   ├── trackers/             ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
+│   └── tools/                ← the LangGraph tools
+│       ├── plan.py           ← the planner ("migite-plan"), called by Phase 1
+│       ├── review.py         ← the reviewer ("migite-review"), called by Phase 3
+│       ├── explore.py        ← behind bin/migite-explore
+│       ├── blueprint.py      ← behind bin/migite-blueprint
+│       ├── audit.py          ← behind bin/migite-audit
+│       └── pr_review.py      ← behind bin/migite-pr-review
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
 ├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
 ├── tests/                    ← run.sh (bash suite), test_*.py (unittest, incl. the adapter contract), fake CLIs per agent, fixtures/
-├── docs/                     ← this directory
-├── .github/workflows/ci.yml  ← Python tests, bash suite, shellcheck
-└── migite-improvements.md    ← the self-improvement log, appended by Phase 4.5
+├── docs/                     ← this directory, plus improvements.md (the self-improvement log, appended by Phase 4.5)
+└── .github/workflows/ci.yml  ← Python tests, bash suite, shellcheck
 ```
 
-`~/.local/bin/` holds symlinks to every executable and to the three `migite_*.py` modules (the
-agents import them from the directory they are launched from). `migite.d/`, `prompts/`, and
-`templates/` are not symlinked: `migite` resolves its real path through the symlink and finds
-them beside itself.
+`~/.local/bin/` holds symlinks to `bin/*` and nothing else. Each command resolves its real path
+through the symlink, sources `lib/common.sh`, and exports the checkout on `PYTHONPATH`; from
+there every Python call is `python -m migite.<module>`, so the package, `prompts/`, and
+`templates/` are found beside the code without further symlinks.
 
 <a id="spine"></a>
 ## How the bash spine and the agents talk
@@ -65,11 +76,11 @@ them beside itself.
   scalars (base branch, stack, task type) to each agent on the command line. The agent writes its
   documents and its JSON envelope, then touches the sentinel. Bash treats a missing sentinel as
   failure rather than trusting exit codes through a tmux pane.
-- **Config is loaded on both sides.** Bash evals `migite_config.py env`; each agent calls
-  `migite_config.load(repo_root)` itself. Both see the same layered result, so the agents behave
+- **Config is loaded on both sides.** Bash evals `python -m migite.config env`; each agent calls
+  `migite.config.load(repo_root)` itself. Both see the same layered result, so the agents behave
   identically when run by hand.
 - **One model-call path.** Bash's `agent_ask` and the agents' `call_agent` wrappers both end
-  in `migite_call.py`, which asks the configured agent's adapter for machine-readable output and appends to the usage ledger
+  in `migite/gateway.py`, which asks the configured agent's adapter for machine-readable output and appends to the usage ledger
   named by `$MIGITE_USAGE_LEDGER`. tmux panes inherit the tmux server's environment, so the
   wrapper scripts re-export that variable.
 - **Gemfile one level down.** `migite` always `cd`s to the repo root, but Bundler only searches
@@ -109,7 +120,7 @@ migite-plan \
 
 Reads `prompts/plan.md` (plan format + type routing, injected into `synthesize_plan`) and
 `prompts/architecture_critic.md` (the critic checklist) from the directory the script really
-lives in (`Path(__file__).resolve().parent`, so the `~/.local/bin` symlink is followed), unless
+lives in (`Path(__file__).resolve().parents[2]`, the checkout above `migite/tools/`), unless
 `prompts.dir` in the config overrides one. Either file missing is a hard exit-1 — never a silent
 empty prompt. Models come from the config roles `explore` / `think` / `critic`
 ([docs/configuration.md](./configuration.md#models)).
@@ -150,10 +161,10 @@ derives the verdict from the document with the same anchored rule `lib/gate.sh`'
 <a id="machine-readable"></a>
 ## Machine-readable envelopes and the usage ledger
 
-Every headless model call goes through **`call_agent` in `migite_call.py`** (imported by
+Every headless model call goes through **`call_agent` in `migite/gateway.py`** (imported by
 `migite-plan`, `migite-review`, and the standalone tools; reached from bash via `agent_ask` in
-`lib/agent.sh`, which pipes the prompt through `migite_agent.py ask`). It asks the configured
-agent's adapter in `agents/` for a command line and parses that CLI's output into one shape. On Claude Code that is
+`lib/agent.sh`, which pipes the prompt through `python -m migite.agent_cli ask`). It asks the configured
+agent's adapter in `migite/agents/` for a command line and parses that CLI's output into one shape. On Claude Code that is
 the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `duration_ms`, and with
 `--json-schema` a validated `structured_output`. Cursor and OpenCode report what they can; see
 [agents.md](./agents.md). Each call appends one line to the run's ledger

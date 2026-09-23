@@ -42,7 +42,7 @@ run_doctor() {
   local REPO_ROOT REPO_NAME ORG
   REPO_ROOT="$(cd "$doc_repo_arg" && git rev-parse --show-toplevel)"
   REPO_NAME="$(basename "$REPO_ROOT")"
-  ORG="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT" 2>/dev/null || echo "unknown")"
+  ORG="$("$MIGITE_PYTHON" -m migite.paths detect-org --repo-root "$REPO_ROOT" 2>/dev/null || echo "unknown")"
   local doc_dev_log_base="${DEV_LOG_BASE:-$HOME/dev-log}"
 
   # ── Stack detection — read-only, never errors (generic is the catch-all
@@ -52,15 +52,15 @@ run_doctor() {
 
   # ── Tool resolution ────────────────────────────────────────────────────────
   local doc_tool doc_agent_name
-  doc_agent_name="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" info --field name 2>/dev/null || echo claude)"
+  doc_agent_name="$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" info --field name 2>/dev/null || echo claude)"
   echo "ℹ Agent backend: $doc_agent_name"
   # The adapter's own health check: binary on PATH, and its version when it answers.
-  if ! "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" check; then
+  if ! "$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" check; then
     issues=$((issues + 1))
   fi
   # Where --jira gets the ticket's content from (tracker.provider), and why.
   echo "ℹ Ticket source for --jira:"
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" --repo-root "$REPO_ROOT" sources 2>&1 | sed 's/^/    /'
+  "$MIGITE_PYTHON" -m migite.tickets --repo-root "$REPO_ROOT" sources 2>&1 | sed 's/^/    /'
   for doc_tool in git "$MIGITE_PYTHON"; do
     if command -v "$doc_tool" &>/dev/null; then
       echo "✔ Tool resolves: $doc_tool"
@@ -82,7 +82,7 @@ run_doctor() {
   # Validates the layered config for this repo (bad YAML / invalid enum → issue;
   # unknown keys → warning) and shows which files were loaded.
   local cfg_out cfg_rc=0
-  cfg_out=$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$REPO_ROOT" validate 2>&1) || cfg_rc=$?
+  cfg_out=$("$MIGITE_PYTHON" -m migite.config --repo-root "$REPO_ROOT" validate 2>&1) || cfg_rc=$?
   if [[ $cfg_rc -eq 0 ]]; then
     printf '%s\n' "$cfg_out" | sed 's/^/  /' | sed '1s/^  ✔/✔/'
   else

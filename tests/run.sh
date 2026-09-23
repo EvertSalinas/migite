@@ -11,7 +11,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_call.py resolve it from here
+export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite/gateway.py resolve it from here
 # shellcheck source=../lib/common.sh
 source "$REPO_ROOT/lib/common.sh"
 # Same Python resolution as the migite entrypoint (lib/common.sh). Tests that

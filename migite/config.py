@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""migite_config — layered configuration for migite and its standalone tools.
+"""config — layered configuration for migite and its standalone tools.
 
 Precedence (highest first):
   1. command-line flags                (handled by each tool, not here)
@@ -13,18 +13,18 @@ YAML needs PyYAML (`pip install pyyaml`). It is only required when a YAML config
 file actually exists — with no config files, or JSON ones, migite runs without it.
 
 Python API:
-    cfg = migite_config.load(repo_root)
+    cfg = config.load(repo_root)
     cfg.get("gates.commit.policy")     -> "lenient"
     cfg.model("critic")                -> the agent's strong-tier model id   (role -> tier -> model id)
     cfg.prompt_path("plan", migite_home) -> Path
     cfg.source("models.strong")        -> "defaults" | "<file>" | "env:VAR"
 
 CLI (used by bash):
-    migite_config.py env  --repo-root DIR       shell assignments: MIGITE_CFG_<KEY>=..., MIGITE_CFG_MODEL_<ROLE>=...
-    migite_config.py get  --repo-root DIR KEY   one value
-    migite_config.py show --repo-root DIR       effective config with the source of every key
-    migite_config.py validate --repo-root DIR   exit 1 on errors; prints warnings for unknown keys
-    migite_config.py init --repo-root DIR [--force]   write a commented starter .migite.yml
+    python -m migite.config env  --repo-root DIR       shell assignments: MIGITE_CFG_<KEY>=..., MIGITE_CFG_MODEL_<ROLE>=...
+    python -m migite.config get  --repo-root DIR KEY   one value
+    python -m migite.config show --repo-root DIR       effective config with the source of every key
+    python -m migite.config validate --repo-root DIR   exit 1 on errors; prints warnings for unknown keys
+    python -m migite.config init --repo-root DIR [--force]   write a commented starter .migite.yml
 """
 
 from __future__ import annotations
@@ -38,19 +38,19 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-import agents
+from migite import agents
 
 REPO_FILE_NAMES = (".migite.yml", ".migite.yaml", ".migite.json")
 USER_FILE_NAMES = ("config.yml", "config.yaml", "config.json")
 
 # Agent names and each agent's model id per tier come from the agents package
-# (agents/<name>.py is the only place an agent's model id is written down).
+# (migite/agents/<name>.py is the only place an agent's model id is written down).
 # Cursor and OpenCode leave tiers unset = no --model is passed, so each CLI uses
 # its own default until the user pins tiers (`cursor-agent --list-models`, `opencode models`).
 AGENT_BACKENDS = agents.names()
 PERMISSION_WORDS = agents.PERMISSIONS + tuple(agents.PERMISSION_ALIASES)
 PERMISSION_KEYS = ("permissions.interactive", "permissions.heal", "permissions.headless")
-# Mirrors migite_ticket.PROVIDERS (a test keeps them equal; importing it here would be a cycle).
+# Mirrors tickets.PROVIDERS (a test keeps them equal; importing it here would be a cycle).
 TRACKER_PROVIDERS = ("auto", "jira-acli", "jira-agent", "none")
 
 DEFAULTS: dict[str, Any] = {
@@ -59,7 +59,7 @@ DEFAULTS: dict[str, Any] = {
         "command": None,                 # override the backend's executable (path or name)
     },
     "tracker": {
-        # Where a ticket's content comes from (migite_ticket.py). auto = jira-acli when
+        # Where a ticket's content comes from (migite/tickets.py). auto = jira-acli when
         # acli is installed and logged in, else jira-agent when the agent can run a
         # jira.read-scoped call, else none. (MIGITE_TRACKER)
         "provider": "auto",              # auto | jira-acli | jira-agent | none
@@ -76,7 +76,7 @@ DEFAULTS: dict[str, Any] = {
         "dir": "~/.dev-workflow/logs",   # LOG_DIR
     },
     "models": {
-        # None = the agent's default for that tier (agents/<name>.py); set a
+        # None = the agent's default for that tier (migite/agents/<name>.py); set a
         # string to pin a tier for the active backend.
         "fast": None,
         "standard": None,
@@ -473,8 +473,8 @@ class Config:
             return None
         raw = str(raw)
         if repo_root and ("{org}" in raw or "{repo}" in raw):
-            import migite_paths  # lazy: migite_paths imports this module for vault.org
-            raw = raw.replace("{org}", migite_paths.detect_org(str(repo_root))).replace("{repo}", Path(repo_root).name)
+            from migite import paths  # lazy: paths imports this module for vault.org
+            raw = raw.replace("{org}", paths.detect_org(str(repo_root))).replace("{repo}", Path(repo_root).name)
         base = Path(os.path.expanduser(raw))
         if not base.is_absolute() and repo_root:
             base = Path(repo_root) / base
@@ -637,7 +637,7 @@ def show(cfg: Config) -> str:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="migite_config: layered configuration")
+    ap = argparse.ArgumentParser(description="config: layered configuration")
     ap.add_argument("--repo-root", default=None, help="repo root to look for .migite.yml in (default: none)")
     sub = ap.add_subparsers(dest="command", required=True)
     # --repo-root is accepted before OR after the subcommand (SUPPRESS keeps a

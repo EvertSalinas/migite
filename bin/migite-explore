@@ -159,7 +159,7 @@ if [[ -n "$FROM_EXPLORATION" ]]; then
     fi
     REEXTRACT_ARGS+=(--jira "$JIRA" --repo-root "$(git rev-parse --show-toplevel)")
   fi
-  exec "$MIGITE_PYTHON" "$MIGITE_HOME/migite-explore.py" "${REEXTRACT_ARGS[@]}"
+  exec "$MIGITE_PYTHON" -m migite.tools.explore "${REEXTRACT_ARGS[@]}"
 fi
 
 # ── Git preflight (full runs only) ────────────────────────────────────────────
@@ -171,8 +171,8 @@ fi
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
 # Layered config (flags > env > .migite.yml > ~/.config/migite > defaults) — the
-# bash side only needs vault.base here; migite-explore.py loads the rest itself.
-eval "$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env --repo-root "$REPO_ROOT")" || exit 1
+# bash side only needs vault.base here; migite/tools/explore.py loads the rest itself.
+eval "$("$MIGITE_PYTHON" -m migite.config env --repo-root "$REPO_ROOT")" || exit 1
 VAULT_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
 
 # ── Collect the brief ─────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ fi
 
 # ── Knowledge file (if one exists for this repo) ──────────────────────────────
 REPO_NAME=$(basename "$REPO_ROOT")
-ORG=$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_paths.py" detect-org --repo-root "$REPO_ROOT")
+ORG=$("$MIGITE_PYTHON" -m migite.paths detect-org --repo-root "$REPO_ROOT")
 KNOWLEDGE_FILE="$VAULT_BASE/$ORG/$REPO_NAME/knowledge.md"
 
 # ── Run ───────────────────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ echo ""
 PYTHON_ARGS=(--repo-root "$REPO_ROOT")
 
 # --attach files are folded straight into the brief text (not passed through to
-# migite-explore.py, which stays unaware attachments exist) — state["brief"] is
+# migite/tools/explore.py, which stays unaware attachments exist) — state["brief"] is
 # interpolated verbatim into every lens/synthesis/challenge/refine prompt, so
 # this is the one place that reliably reaches all of them. Every agent call
 # here is headless with no tool access by default, so a path merely mentioned in
@@ -246,4 +246,4 @@ fi
 [[ -f "$KNOWLEDGE_FILE" ]] && PYTHON_ARGS+=(--knowledge "$KNOWLEDGE_FILE")
 [[ "$WANT_INTAKES" == "true" ]] && PYTHON_ARGS+=(--intakes)
 
-"$MIGITE_PYTHON" "$MIGITE_HOME/migite-explore.py" "${PYTHON_ARGS[@]}"
+"$MIGITE_PYTHON" -m migite.tools.explore "${PYTHON_ARGS[@]}"

@@ -11,7 +11,7 @@ in its own vocabulary and hands that to the Agent for the configured backend:
   AgentInfo       everything else migite needs to know about a CLI
 
 Adapters are pure translation. They never start a process and never read the
-config; the gateway (migite_call.py) does both, the same way for every agent.
+config; the gateway (migite/gateway.py) does both, the same way for every agent.
 """
 
 from __future__ import annotations

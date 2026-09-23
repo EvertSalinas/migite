@@ -17,9 +17,9 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_call
-import migite_config
-import migite_paths
+from migite import gateway
+from migite import config
+from migite import paths
 
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
@@ -96,8 +96,8 @@ AUDIT_AREAS = [
 # ── Agent call ──────────────────────────────────────────────────────────────────
 
 def call_agent(prompt: str, role: str, label: str = "") -> str:
-    """Shared wrapper (migite_call): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
-    return migite_call.call_agent(prompt, role, tool="migite-audit", label=label).text
+    """Shared wrapper (gateway): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return gateway.call_agent(prompt, role, tool="migite-audit", label=label).text
 
 
 # ── File reading ─────────────────────────────────────────────────────────────────
@@ -290,33 +290,33 @@ def main() -> None:
 
     global VAULT_BASE
     try:
-        cfg = migite_config.load(args.repo_root)
-    except migite_config.ConfigError as e:
+        cfg = config.load(args.repo_root)
+    except config.ConfigError as e:
         print(f"✘ config error: {e}", file=sys.stderr)
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
     VAULT_BASE    = str(cfg.expanded_path("vault.base"))
-    migite_call.configure_from(cfg)
+    gateway.configure_from(cfg)
     try:
-        migite_call.require_cli()
-    except migite_call.AgentError as e:
+        gateway.require_cli()
+    except gateway.AgentError as e:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 
     repo_name = Path(args.repo_root).name
-    org       = migite_paths.detect_org(args.repo_root)
+    org       = paths.detect_org(args.repo_root)
     today     = date.today().isoformat()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     run_dir = None
     if not args.output and args.jira:
         try:
-            run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.jira)
-        except migite_paths.InvalidRunKeyError as e:
+            run_dir = paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=args.jira)
+        except paths.InvalidRunKeyError as e:
             print(f"✘ Not a Jira ticket key: {e}", file=sys.stderr)
             sys.exit(1)
-        except migite_paths.AmbiguousRunDirError as e:
+        except paths.AmbiguousRunDirError as e:
             print(f"✘ Ambiguous run folder for '{e.slug}': {', '.join(e.candidates)}", file=sys.stderr)
             print("  Pass --output explicitly to disambiguate.", file=sys.stderr)
             sys.exit(1)
@@ -326,7 +326,7 @@ def main() -> None:
         else str(Path(VAULT_BASE) / org / repo_name / f"audit-{today}.md")
     )
 
-    print(f"\n  migite-audit | model: explore={migite_call.model_for('audit_area') or 'default'}  think={migite_call.model_for('audit_synth') or 'default'}", flush=True)
+    print(f"\n  migite-audit | model: explore={gateway.model_for('audit_area') or 'default'}  think={gateway.model_for('audit_synth') or 'default'}", flush=True)
     print(f"  Repo: {org}/{repo_name}", flush=True)
     if args.focus:
         print(f"  Focus: {args.focus}", flush=True)

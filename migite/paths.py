@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# migite_paths — shared run-directory resolver
+# paths — shared run-directory resolver
 #
 # Answers "given an optional Jira id and/or a free-text name, which vault
 # folder does this run belong in" for migite-audit, migite-pr-review, and
@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from trackers import InvalidTicketRef, parse_ref  # the one ticket-key parser
+from migite.trackers import InvalidTicketRef, parse_ref  # the one ticket-key parser
 
 
 class InvalidRunKeyError(Exception):
@@ -59,8 +59,8 @@ def detect_org(repo_root: str) -> str:
         return env_org
     # vault.org from .migite.yml / ~/.config/migite/config.yml (env above still wins)
     try:
-        import migite_config
-        cfg_org = migite_config.load(repo_root).get("vault.org")
+        from migite import config
+        cfg_org = config.load(repo_root).get("vault.org")
         if cfg_org:
             return str(cfg_org)
     except Exception:
@@ -278,7 +278,7 @@ def run_self_test() -> None:
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="migite_paths: shared run-directory resolver")
+    parser = argparse.ArgumentParser(description="paths: shared run-directory resolver")
     parser.add_argument("--self-test", action="store_true", help="Run the built-in self-check")
     sub = parser.add_subparsers(dest="command")
 

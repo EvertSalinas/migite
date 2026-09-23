@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""migite_ticket - ticket references and ticket content, for every migite tool.
+"""tickets - ticket references and ticket content, for every migite tool.
 
 One parser for ticket keys and browse URLs, and one fetch that picks a ticket
 source from the config (tracker.provider) so no phase knows how a ticket is
-retrieved. The sources live in trackers/.
+retrieved. The sources live in migite/trackers/.
 
   tracker.provider  auto        jira-acli when acli is installed and logged in, else
                                 jira-agent when the agent can run a jira.read-scoped
@@ -14,12 +14,12 @@ retrieved. The sources live in trackers/.
                     none        never fetch; the key still names the task
 
 CLI (used by migite, and by hand as `migite-ticket`):
-  migite_ticket.py parse <key-or-url> [--shell]
+  python -m migite.tickets parse <key-or-url> [--shell]
         {"key", "url", "base_url"} as JSON, or TICKET_KEY=/TICKET_URL= for bash; exit 1 if invalid
-  migite_ticket.py fetch <key-or-url> [--out FILE] [--source NAME]
+  python -m migite.tickets fetch <key-or-url> [--out FILE] [--source NAME]
         the ticket as markdown on stdout or in FILE (written only on success).
         Exit 0 fetched, 1 every available source failed, 2 no source available
-  migite_ticket.py sources [<key-or-url>]
+  python -m migite.tickets sources [<key-or-url>]
         each source, whether it can run here, and why; which one auto would use
 --repo-root DIR (before or after the subcommand) selects whose .migite.yml applies.
 """
@@ -35,10 +35,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-import migite_config
-from trackers import InvalidTicketRef, TicketError, TicketRef, Tracker, parse_ref
-from trackers.jira_acli import JiraAcliTracker
-from trackers.jira_agent import JiraAgentTracker
+from migite import config
+from migite.trackers import InvalidTicketRef, TicketError, TicketRef, Tracker, parse_ref
+from migite.trackers.jira_acli import JiraAcliTracker
+from migite.trackers.jira_agent import JiraAgentTracker
 
 SOURCES = ("jira-acli", "jira-agent")
 PROVIDERS = ("auto",) + SOURCES + ("none",)
@@ -52,7 +52,7 @@ class NoSource(Exception):
         super().__init__("; ".join(f"{name}: {why}" for name, why in reasons) or "tracker.provider is none")
 
 
-def build(name: str, cfg: migite_config.Config, *, runner: Callable[..., Any] | None = None,
+def build(name: str, cfg: config.Config, *, runner: Callable[..., Any] | None = None,
           which: Callable[[str], str | None] | None = None, gateway: Any = None) -> Tracker:
     if name == "jira-acli":
         return JiraAcliTracker(command=cfg.get("tracker.jira.acli") or "acli",
@@ -63,7 +63,7 @@ def build(name: str, cfg: migite_config.Config, *, runner: Callable[..., Any] | 
     raise ValueError(f"unknown ticket source {name!r}; known: {', '.join(SOURCES)}")
 
 
-def candidates(cfg: migite_config.Config, *, source: str | None = None, **kw) -> list[Tracker]:
+def candidates(cfg: config.Config, *, source: str | None = None, **kw) -> list[Tracker]:
     provider = source or cfg.get("tracker.provider") or "auto"
     if provider == "none":
         return []
@@ -71,7 +71,7 @@ def candidates(cfg: migite_config.Config, *, source: str | None = None, **kw) ->
     return [build(n, cfg, **kw) for n in names]
 
 
-def fetch(ref: TicketRef, cfg: migite_config.Config, *, source: str | None = None, **kw) -> tuple[str, str]:
+def fetch(ref: TicketRef, cfg: config.Config, *, source: str | None = None, **kw) -> tuple[str, str]:
     """(markdown, source name) from the first source that can run and succeeds."""
     reasons: list[tuple[str, str]] = []
     last_error: TicketError | None = None
@@ -93,14 +93,14 @@ def fetch(ref: TicketRef, cfg: migite_config.Config, *, source: str | None = Non
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def _load(args: argparse.Namespace) -> migite_config.Config:
-    return migite_config.load(args.repo_root or os.getcwd())
+def _load(args: argparse.Namespace) -> config.Config:
+    return config.load(args.repo_root or os.getcwd())
 
 
-def _gateway(cfg: migite_config.Config):
-    import migite_call   # lazy: `parse` must work without an agent
-    migite_call.configure_from(cfg)
-    return migite_call
+def _gateway(cfg: config.Config):
+    from migite import gateway   # lazy: `parse` must work without an agent
+    gateway.configure_from(cfg)
+    return gateway
 
 
 def _cmd_parse(args: argparse.Namespace) -> int:
@@ -192,7 +192,7 @@ def main() -> None:
     handler = {"parse": _cmd_parse, "fetch": _cmd_fetch, "sources": _cmd_sources}[args.command]
     try:
         sys.exit(handler(args))
-    except migite_config.ConfigError as e:
+    except config.ConfigError as e:
         print(f"✘ config error: {e}", file=sys.stderr)
         sys.exit(1)
 

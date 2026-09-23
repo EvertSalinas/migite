@@ -100,7 +100,7 @@ run_review() {
   fi
 
   local REVIEW_SENTINEL="$SCRATCHPAD_DIR/.review.done"
-  local REVIEW_SCRIPT="$MIGITE_HOME/migite-review"
+  local REVIEW_MODULE="migite.tools.review"
   local REVIEW_LANGGRAPH_ARGS=(
     --plan             "$PLAN_FILE"
     --implementation   "$IMPLEMENTATION_FILE"
@@ -117,7 +117,7 @@ run_review() {
   # outlive the review.md it described (review_verdict prefers it when present).
   local REVIEW_JSON="${REVIEW_FILE%.md}.json"
   rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
-  spawn_langgraph "Reviewing" "review" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
+  spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}"
   [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
   sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
   sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
@@ -167,7 +167,7 @@ run_review() {
     fi
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
-    spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_SCRIPT" "${REVIEW_LANGGRAPH_ARGS[@]}"
+    spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
     sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
     sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"

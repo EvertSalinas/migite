@@ -48,14 +48,14 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
         └── ...
 ```
 
-`migite` and the standalone tools both resolve `<org>` the same way, via `migite_paths.detect_org()`: `$MIGITE_ORG` if set, otherwise the name of the directory that directly contains the repo (`~/Code/Acme/foo` → `Acme`), falling back to `Personal` only if the repo has no meaningful parent directory. No org names are hardcoded, so this works for any team, client, or personal-project layout without configuration — set `MIGITE_ORG` only if you want to force everything from a given shell into one bucket regardless of folder name.
+`migite` and the standalone tools both resolve `<org>` the same way, via `migite.paths.detect_org()`: `$MIGITE_ORG` if set, otherwise the name of the directory that directly contains the repo (`~/Code/Acme/foo` → `Acme`), falling back to `Personal` only if the repo has no meaningful parent directory. No org names are hardcoded, so this works for any team, client, or personal-project layout without configuration — set `MIGITE_ORG` only if you want to force everything from a given shell into one bucket regardless of folder name.
 
 `migite-audit`, `migite-pr-review`, and `migite-explore` each accept `--jira` (a Jira ticket key or
 Atlassian URL) to group their output under an existing ticket's folder instead of writing a flat,
-disconnected file. `migite_paths.py` is the shared resolver behind this — see its module docstring
+disconnected file. `migite/paths.py` is the shared resolver behind this — see its module docstring
 for exact match/prefix-match/ambiguous-folder rules. Folder names come from one slug rule shared
-by bash (`slugify` in `lib/vault.sh`, used by `migite`) and Python (`migite_paths.slugify`, used
-by the standalone tools, and exposed as `migite_paths.py slugify <text>`): lowercase, every run
+by bash (`slugify` in `lib/vault.sh`, used by `migite`) and Python (`migite.paths.slugify`, used
+by the standalone tools, and exposed as `python -m migite.paths slugify <text>`): lowercase, every run
 of non-alphanumerics becomes one `-`, no leading/trailing `-`, max 50 chars.
 `tests/slugify_test.sh` checks the two stay identical. `--output`, when given, always wins and skips
 the resolver entirely. `migite` itself does not yet use this resolver.

@@ -19,18 +19,18 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-import migite_call
-import migite_config
-import migite_paths
+from migite import gateway
+from migite import config
+from migite import paths
 
-# Defaults from migite_config's single table; main() replaces them from the loaded
+# Defaults from config's single table; main() replaces them from the loaded
 # config (one role per dimension, plus `pr_verdict`).
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
 # Same ticket-in-branch-name heuristic as lib/phases/amend.sh's BRANCH_TICKET —
 # a branch like "feature/bb-3136-add-pdf-export" embeds the ticket key amid
-# other text, so this can't reuse migite_paths.extract_ticket_key (anchored,
+# other text, so this can't reuse paths.extract_ticket_key (anchored,
 # whole-string match only).
 BRANCH_TICKET_RE = re.compile(r"[A-Za-z]+-\d+")
 
@@ -81,8 +81,8 @@ PR_REVIEW_DIMENSIONS = [
 # ── Agent call ───────────────────────────────────────────────────────────────────
 
 def call_agent(prompt: str, role: str, label: str = "") -> str:
-    """Shared wrapper (migite_call): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
-    return migite_call.call_agent(prompt, role, tool="migite-pr-review", label=label).text
+    """Shared wrapper (gateway): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return gateway.call_agent(prompt, role, tool="migite-pr-review", label=label).text
 
 
 # Each reviewer is its own config role (pr_review_<dimension>).
@@ -221,7 +221,7 @@ def route_to_reviewers(state: PRReviewState) -> list[Send]:
 
 def review_dimension(state: DimensionInput) -> dict:
     dim = state["dimension"]
-    print(f"    ◦ {dim}  ({migite_call.model_for(f'pr_review_{dim}') or 'default'})", flush=True)
+    print(f"    ◦ {dim}  ({gateway.model_for(f'pr_review_{dim}') or 'default'})", flush=True)
 
     prompt = f"""You are a senior Rails engineer reviewing a pull request on branch **{state['branch']}**.
 Your focus: **{dim}** only. Do not repeat issues covered by other dimensions.
@@ -361,33 +361,33 @@ def main() -> None:
 
     global VAULT_BASE
     try:
-        cfg = migite_config.load(args.repo_root)
-    except migite_config.ConfigError as e:
+        cfg = config.load(args.repo_root)
+    except config.ConfigError as e:
         print(f"✘ config error: {e}", file=sys.stderr)
         sys.exit(1)
     for w in cfg.warnings:
         print(f"  ⚠ config: {w}", flush=True)
     VAULT_BASE   = str(cfg.expanded_path("vault.base"))
-    migite_call.configure_from(cfg)
+    gateway.configure_from(cfg)
     try:
-        migite_call.require_cli()
-    except migite_call.AgentError as e:
+        gateway.require_cli()
+    except gateway.AgentError as e:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 
     if not args.base:
-        args.base = migite_paths.detect_base_branch(args.repo_root)
+        args.base = paths.detect_base_branch(args.repo_root)
 
     jira = args.jira
     jira_key = None
     if args.jira:
         try:
-            jira_key = migite_paths.extract_ticket_key(args.jira)
-        except migite_paths.InvalidRunKeyError:
+            jira_key = paths.extract_ticket_key(args.jira)
+        except paths.InvalidRunKeyError:
             jira_key = None  # free-text reference (e.g. "see ENG board") — not used for folder resolution
 
     repo_name = Path(args.repo_root).name
-    org       = migite_paths.detect_org(args.repo_root)
+    org       = paths.detect_org(args.repo_root)
     today     = date.today().isoformat()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_branch = args.branch.replace("/", "-")
@@ -395,8 +395,8 @@ def main() -> None:
     run_dir = None
     if not args.output and jira_key:
         try:
-            run_dir = migite_paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=jira_key)
-        except migite_paths.AmbiguousRunDirError as e:
+            run_dir = paths.resolve_run_dir(VAULT_BASE, org, repo_name, id=jira_key)
+        except paths.AmbiguousRunDirError as e:
             print(f"✘ Ambiguous run folder for '{e.slug}': {', '.join(e.candidates)}", file=sys.stderr)
             print("  Pass --output explicitly to disambiguate.", file=sys.stderr)
             sys.exit(1)
@@ -409,7 +409,7 @@ def main() -> None:
     if not args.output and not run_dir:
         branch_ticket_match = BRANCH_TICKET_RE.search(args.branch)
         if branch_ticket_match:
-            branch_slug = migite_paths.slugify(branch_ticket_match.group(0).upper())
+            branch_slug = paths.slugify(branch_ticket_match.group(0).upper())
             candidate = Path(VAULT_BASE) / org / repo_name / branch_slug
             if candidate.is_dir():
                 branch_run_dir = candidate
@@ -420,7 +420,7 @@ def main() -> None:
         else str(Path(VAULT_BASE) / org / repo_name / f"pr-review-{safe_branch}-{today}.md")
     )
 
-    print(f"\n  migite-pr-review | " + "  ".join(f"{d}={migite_call.model_for(f'pr_review_{d}') or 'default'}" for d, _ in PR_REVIEW_DIMENSIONS) + f"  verdict={migite_call.model_for('pr_verdict') or 'default'}", flush=True)
+    print(f"\n  migite-pr-review | " + "  ".join(f"{d}={gateway.model_for(f'pr_review_{d}') or 'default'}" for d, _ in PR_REVIEW_DIMENSIONS) + f"  verdict={gateway.model_for('pr_verdict') or 'default'}", flush=True)
     print(f"  Branch: {args.branch}  Base: {args.base}  Repo: {org}/{repo_name}", flush=True)
     if jira:
         print(f"  Jira: {jira}", flush=True)
