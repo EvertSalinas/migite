@@ -16,6 +16,40 @@ set -euo pipefail
 MIGITE_PYTHON="${MIGITE_PYTHON:-$HOME/.asdf/installs/python/3.13.5/bin/python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+usage() {
+  cat <<'EOF'
+migite-pr-review - review a branch's changes against its base, with a verdict. Read-only.
+
+Usage:
+  migite-pr-review --branch <branch> [--base <branch>] [--skip-tests]
+                   [--jira <key-or-url>] [--output <file>]
+
+Options:
+  --branch <branch>     the branch to review (required)
+  --base <branch>       compare against this (default: origin/HEAD, then main, master, develop)
+  --skip-tests          skip rubocop and rspec
+  --jira <key-or-url>   file the review under that ticket's vault folder
+  --output <file>       write the review here instead of the vault
+  -h, --help            show this help
+
+Four reviewers run in parallel (correctness, security, test coverage, conventions and
+migrations), then a synthesis writes the verdict.
+EOF
+}
+
+# --help works anywhere: before the git and Python checks below.
+for _arg in "$@"; do
+  if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then usage; exit 0; fi
+done
+
+# ── Require --branch ─────────────────────────────────────────────────────────────
+if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
+  echo "✘ --branch is required" >&2
+  echo "" >&2
+  usage >&2
+  exit 1
+fi
+
 # ── Preflight ────────────────────────────────────────────────────────────────────
 if ! git rev-parse --is-inside-work-tree &>/dev/null; then
   echo "✘ Not inside a git repository." >&2
@@ -35,11 +69,6 @@ if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
   exit 1
 fi
 
-# ── Require --branch ─────────────────────────────────────────────────────────────
-if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
-  echo "Usage: migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--output <file>]" >&2
-  exit 1
-fi
 
 # ── Run ──────────────────────────────────────────────────────────────────────────
 exec "$MIGITE_PYTHON" "$SCRIPT_DIR/migite-pr-review.py" --repo-root "$REPO_ROOT" "$@"

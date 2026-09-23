@@ -28,32 +28,6 @@ CYAN='\033[0;36m'
 YELLOW='\033[0;33m'
 RESET='\033[0m'
 
-# ── Preflight ─────────────────────────────────────────────────────────────────
-# The git check lives after arg parsing - re-extract mode reads an exploration.md
-# from the vault and needs no repo at all.
-if [[ ! -x "$MIGITE_PYTHON" ]]; then
-  echo "✘ Python not found at $MIGITE_PYTHON" >&2
-  echo "  Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
-  exit 1
-fi
-
-if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
-  echo "✘ Python dependencies missing. Run:" >&2
-  echo "  $MIGITE_PYTHON -m pip install langgraph" >&2
-  exit 1
-fi
-
-# ── Parse args ────────────────────────────────────────────────────────────────
-BRIEF_TEXT=""
-BRIEF_FILE=""
-INIT_NAME=""
-OUTPUT_DIR=""
-FOCUS=""
-WANT_INTAKES=false
-FROM_EXPLORATION=""
-JIRA=""
-ATTACH_FILES=()
-
 usage() {
   cat <<'EOF'
 migite-explore - initiative feasibility exploration (no implementation)
@@ -91,6 +65,38 @@ Outputs (in the output directory):
   intake-NN-<slug>.md   one migite intake per workstream (with --intakes)
 EOF
 }
+
+# --help works anywhere: before the Python and langgraph checks below.
+for _arg in "$@"; do
+  if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then usage; exit 0; fi
+done
+
+# ── Preflight ─────────────────────────────────────────────────────────────────
+# The git check lives after arg parsing - re-extract mode reads an exploration.md
+# from the vault and needs no repo at all.
+if [[ ! -x "$MIGITE_PYTHON" ]]; then
+  echo "✘ Python not found at $MIGITE_PYTHON" >&2
+  echo "  Set MIGITE_PYTHON to your Python 3.11+ binary." >&2
+  exit 1
+fi
+
+if ! "$MIGITE_PYTHON" -c "import langgraph" 2>/dev/null; then
+  echo "✘ Python dependencies missing. Run:" >&2
+  echo "  $MIGITE_PYTHON -m pip install langgraph" >&2
+  exit 1
+fi
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+BRIEF_TEXT=""
+BRIEF_FILE=""
+INIT_NAME=""
+OUTPUT_DIR=""
+FOCUS=""
+WANT_INTAKES=false
+FROM_EXPLORATION=""
+JIRA=""
+ATTACH_FILES=()
+
 
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
@@ -138,7 +144,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -*)
-      echo "✘ Unknown option: $1" >&2
+      echo "✘ Unknown option: $1 (see: migite-explore --help)" >&2
       exit 1
       ;;
     *)

@@ -59,20 +59,28 @@ visible but not fatal.
 ## `migite config`
 
 ```bash
-migite config --init --user   # once: write ~/.config/migite/config.yml — your defaults for every repo
-migite config --init          # per repo: write .migite.yml into the current repo (commit it)
+migite config --edit --user   # open ~/.config/migite/config.yml, your defaults for every repo
+migite config --edit          # open this repo's .migite.yml (commit it)
 migite config                 # effective configuration, with the source of every value
+migite config --init [--user] # write a starter file without opening it (--force overwrites)
 migite config --validate      # exit 1 on errors, print warnings
+migite config --path [--user] # print the file --edit would open
+migite config --help          # all of the above
 migite doctor                 # also validates the config and lists the files it loaded
 ```
 
-**Getting started.** Run `migite config --init --user`, open the file, and delete every line you
+`--edit` writes the starter first when the file doesn't exist yet, opens it in `$EDITOR` (else
+`ui.editor`, else `vim`), and validates the result as soon as you close the editor, so a typo
+shows up then rather than at the next run. It also opens a file that currently fails to load,
+which is usually why you want to edit it.
+
+**Getting started.** Run `migite config --edit --user` and delete every line you
 are not changing — each value in the starter is the built-in default, so an empty file and no
 file behave identically. Typical first edits: `vault.base` if your vault is not `~/dev-log`,
 `ui.editor`, and `models.effort.strong: xhigh`. Then, in a repo that needs something different
 (a strict commit gate, a prompt override, `stack: generic` on a monorepo), run `migite config
---init` there and keep only those keys. `migite config` at any time prints what won and from
-which file. Both commands refuse to overwrite an existing file unless you pass `--force`.
+--edit` there and keep only those keys. `migite config` at any time prints what won and from
+which file. `--init` refuses to overwrite an existing file unless you pass `--force`.
 
 `migite config` output ends with the resolved model for every call-site role and which layer
 pinned it — the quickest way to see what a change to `models:` actually did.

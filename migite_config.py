@@ -25,6 +25,7 @@ CLI (used by bash):
     migite_config.py show --repo-root DIR       effective config with the source of every key
     migite_config.py validate --repo-root DIR   exit 1 on errors; prints warnings for unknown keys
     migite_config.py init --repo-root DIR [--force]   write a commented starter .migite.yml
+    migite_config.py path --repo-root DIR [--user]    the file `migite config --edit` opens (existing, else where init writes)
 """
 
 from __future__ import annotations
@@ -496,8 +497,12 @@ class Config:
         return self._override_file("templates", name, migite_home, repo_root)
 
 
+def _user_config_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "migite"
+
+
 def _user_config_path() -> Path | None:
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "migite"
+    base = _user_config_dir()
     for name in USER_FILE_NAMES:
         p = base / name
         if p.is_file():
@@ -513,6 +518,16 @@ def _repo_config_path(repo_root: str | Path | None) -> Path | None:
         if p.is_file():
             return p
     return None
+
+
+def config_file_path(repo_root: str | Path | None, *, user: bool = False) -> Path:
+    """The file `migite config --edit` opens: the repo's (or, with user=True, your
+    personal) config file when one exists in any accepted format, else the path
+    `init` would write. Never loads or validates the config, so it still answers
+    when the file is broken, which is when you most need to edit it."""
+    if user:
+        return _user_config_path() or _user_config_dir() / "config.yml"
+    return _repo_config_path(repo_root) or Path(repo_root or ".") / ".migite.yml"
 
 
 def config_files(repo_root: str | Path | None) -> list[Path]:
@@ -648,6 +663,7 @@ def main() -> None:
         "show": sub.add_parser("show", help="effective config with sources"),
         "validate": sub.add_parser("validate", help="exit 1 on errors, print warnings"),
         "init": sub.add_parser("init", help="write a starter .migite.yml into the repo root"),
+        "path": sub.add_parser("path", help="the config file `migite config --edit` opens"),
     }
     for p in subparsers.values():
         p.add_argument("--repo-root", dest="repo_root", default=argparse.SUPPRESS)
@@ -655,7 +671,13 @@ def main() -> None:
     subparsers["init"].add_argument("--force", action="store_true")
     subparsers["init"].add_argument("--user", action="store_true",
                                     help="write ~/.config/migite/config.yml (your personal defaults) instead of <repo>/.migite.yml")
+    subparsers["path"].add_argument("--user", action="store_true",
+                                    help="your personal ~/.config/migite/config.yml instead of the repo's file")
     args = ap.parse_args()
+
+    if args.command == "path":
+        print(config_file_path(args.repo_root, user=args.user))
+        return
 
     if args.command == "init":
         if args.user:

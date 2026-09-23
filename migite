@@ -83,6 +83,53 @@ source "$MIGITE_HOME/migite.d/implement.sh"
 source "$MIGITE_HOME/migite.d/review.sh"
 source "$MIGITE_HOME/migite.d/deliver.sh"
 
+# migite_usage - `migite --help`. Dispatched before Setup so it works anywhere,
+# even outside a git repo or without the agent CLI installed.
+migite_usage() {
+  cat <<'EOF'
+migite - plan, implement, review, and deliver one task, with a human gate between each step
+
+Usage:
+  migite "<task description>"       a plain-text task; you pick its type
+  migite --jira <key-or-url>        a Jira ticket: it names the task, and its content is
+                                    fetched for planning (see: migite-ticket --help)
+  migite <intake.md>                a pre-written intake (same as --intake)
+  migite --amend ["feedback"]       scope a follow-up change against a task already built
+  migite doctor [--repo <path>]     read-only health check (see: migite doctor --help)
+  migite config [options]           show, create, edit, or check the configuration
+                                    (see: migite config --help)
+
+Task options:
+  --jira <key-or-url>     the Jira ticket this task is for
+  --type <type>           feature | bug | refactor | spike | config (default: asked)
+  --intake <file>         start from a pre-written intake instead of a template
+  --blueprint <file>      settled architecture from migite-blueprint, given to the planner
+  --audit <report.md>     generate a remediation task from a migite-audit report
+  --attach <file>         fold a file into the planner's context (repeatable)
+  --staged                one implement session per Scope sub-section, with a checkpoint between
+  --stack <stack>         rails | generic (default: detected from the repo)
+
+Amend options:
+  --amend ["feedback"]    the feedback inline, or typed when prompted
+  --amend-file <file>     the feedback from a file
+  --jira <key>            which task to amend (default: the ticket key in the branch name)
+
+  -h, --help              show this help
+
+The run stops at two gates: after the plan, and before the commit. Nothing is committed for you.
+
+Related commands, each with --help:
+  migite-ticket  migite-explore  migite-blueprint  migite-audit  migite-pr-review
+
+Docs: docs/migite.md (commands), docs/phases.md (what each phase does),
+      docs/configuration.md (every setting), docs/getting-started.md (a full first run)
+EOF
+}
+
+case "${1:-}" in
+  -h|--help|help) migite_usage; exit 0 ;;
+esac
+
 # `migite doctor [--repo <path>]` — dispatched before Setup (require_cmd, arg
 # parsing) since it must run even when those would fail (no Gemfile, missing
 # agent CLI or `bundle`, etc.) - that's the whole point of a health check.
@@ -209,6 +256,14 @@ while [[ $# -gt 0 ]]; do
       ATTACH_FILES+=("$ATTACH_ARG")
       log "Attachment: $ATTACH_ARG"
       shift 2
+      ;;
+    -h|--help)
+      migite_usage
+      exit 0
+      ;;
+    --*)
+      # A mistyped option (--jria) used to become the task description silently.
+      error "Unknown option: $1 (see: migite --help)"
       ;;
     *)
       # An existing .md file is auto-detected as an intake, same as --intake.

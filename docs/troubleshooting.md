@@ -26,7 +26,8 @@ a config would be worse than stopping. The message names the key, the value, and
 ✘ Fix the configuration above (or unset MIGITE_CONFIG) and re-run
 ```
 
-`migite config --validate` reproduces it without starting a run. Unknown keys are a warning, not
+`migite config --validate` reproduces it without starting a run, and `migite config --edit`
+opens the file (even while it fails to load) and re-checks it when you close the editor. Unknown keys are a warning, not
 an error, so a typo in a key name shows up as `⚠ config: ...: unknown key 'gatse.commit' (ignored)`
 and the run continues on the default for that key.
 

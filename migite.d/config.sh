@@ -104,11 +104,87 @@ use_tmux() {
   esac
 }
 
-# run_config_command [--init [--force]] — `migite config`
+# config_usage - `migite config --help`
+config_usage() {
+  cat <<'EOF'
+migite config - show, create, edit, or check the layered configuration
+
+Precedence, highest first: command-line flags, environment variables, $MIGITE_CONFIG,
+<repo>/.migite.yml, ~/.config/migite/config.yml, built-in defaults.
+
+Usage:
+  migite config                    the effective configuration for this repo, with the
+                                   source of every value and the model each role runs on
+  migite config --edit             open <repo>/.migite.yml in your editor (written from the
+                                   starter first if it doesn't exist), then validate it
+  migite config --edit --user      the same for ~/.config/migite/config.yml, your defaults
+                                   for every repo
+  migite config --init [--user]    write a starter file with every default and a comment each
+  migite config --init --force     overwrite an existing file with the starter
+  migite config --validate         exit 1 on errors, print warnings for unknown keys
+  migite config --path [--user]    print the file --edit would open
+  -h, --help                       show this help
+
+The editor is $EDITOR, else ui.editor from the config, else vim.
+Every key: docs/configuration.md
+EOF
+}
+
+# _config_editor <repo_root> - $EDITOR, else ui.editor, else vim: the same order the
+# resolver uses everywhere (env beats files). A config that doesn't parse (often the
+# reason you're editing it) falls through to $EDITOR, then vim.
+_config_editor() {
+  local repo_root="$1" editor=""
+  editor="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" get ui.editor 2>/dev/null)" || editor=""
+  echo "${editor:-${EDITOR:-vim}}"
+}
+
+# _config_edit <repo_root> [--user] - `migite config --edit`
+_config_edit() {
+  local repo_root="$1"; shift
+  local -a scope=()
+  local hint="migite config --edit"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --user) scope=(--user); hint="migite config --edit --user"; shift ;;
+      -h|--help) config_usage; return 0 ;;
+      *) echo "✘ Unknown option for --edit: $1 (see: migite config --help)" >&2; return 1 ;;
+    esac
+  done
+  local file
+  file="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" path ${scope[@]+"${scope[@]}"})" || return 1
+  if [[ ! -f "$file" ]]; then
+    echo "No config file at $file yet; writing the starter first."
+    "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" init ${scope[@]+"${scope[@]}"} || return 1
+  fi
+  local -a editor_cmd
+  read -r -a editor_cmd <<< "$(_config_editor "$repo_root")"
+  echo "Opening $file with ${editor_cmd[0]}..."
+  "${editor_cmd[@]}" "$file" || { echo "✘ ${editor_cmd[0]} exited with an error; the file was not checked" >&2; return 1; }
+  # Validate what was saved, so a typo shows up now rather than at the next run.
+  if "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" validate; then
+    return 0
+  fi
+  echo "✘ $file has an error (above). Fix it with: $hint" >&2
+  return 1
+}
+
+# run_config_command [...] - `migite config`; see config_usage
 run_config_command() {
   local repo_root
   repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   case "${1:-}" in
+    -h|--help|help)
+      config_usage
+      ;;
+    --edit|edit)
+      shift
+      _config_edit "$repo_root" "$@"
+      ;;
+    --path|path)
+      shift
+      "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" path "$@"
+      ;;
     --init|init)
       shift
       "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" init "$@"
@@ -118,17 +194,15 @@ run_config_command() {
       ;;
     "")
       echo ""
-      echo "migite config — effective configuration for $repo_root"
+      echo "migite config - effective configuration for $repo_root"
       echo ""
       "$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$repo_root" show
       echo ""
       ;;
     *)
-      echo "Usage: migite config [--init [--user] [--force] | --validate]" >&2
-      echo "  (no args)         effective configuration for this repo, with the source of every value" >&2
-      echo "  --init            write a starter <repo>/.migite.yml with every default" >&2
-      echo "  --init --user     write a starter ~/.config/migite/config.yml (personal defaults for all repos)" >&2
-      echo "  --validate        exit 1 on errors, print warnings" >&2
+      echo "✘ Unknown option: $1" >&2
+      echo "" >&2
+      config_usage >&2
       return 1
       ;;
   esac
