@@ -256,28 +256,31 @@ claude_cmd() {
   env -u CLAUDECODE claude "$@"
 }
 
-# claude_print <label> [claude flags...] — headless call, prompt on stdin,
-# result TEXT on stdout. Always runs `--output-format json` under the hood and
-# pipes the envelope through migite_claude.py `extract`, which prints the
-# `result` and appends one usage line (tokens, cost, duration, model) to
-# $MIGITE_USAGE_LEDGER. Callers must NOT pass --output-format themselves.
-# Falls back to passing stdout through untouched if the CLI didn't return the
-# JSON envelope (older CLI, plain-text error), so nothing downstream changes.
+# claude_print <label> [--model M] [--effort E] [--permission-mode P] [--allowedTools "..."]
+# One headless call on the CONFIGURED agent backend (agent.backend: claude |
+# cursor | opencode): prompt on stdin, result TEXT on stdout, one usage line
+# appended to $MIGITE_USAGE_LEDGER. The whole call — argv for that backend,
+# output parsing, ledger — lives in migite_claude.py `run`, so bash never builds
+# agent-specific flags. The name is historical; it is not Claude-specific.
+# permissions.headless from the config applies unless the caller passes its own
+# --permission-mode (the Jira fetch does, with a scoped tool allowlist).
 claude_print() {
   local label="$1"; shift
-  local raw rc=0 xrc=0
-  raw=$(mktemp)
-  # permissions.headless from the config applies unless the caller passed its own
-  # --permission-mode (the Jira fetch does, with a scoped tool allowlist).
-  local -a perm=()
-  local headless="${MIGITE_CFG_PERMISSIONS_HEADLESS:-none}"
-  if [[ "$headless" != "none" && " $* " != *" --permission-mode "* ]]; then
-    perm=(--permission-mode "$headless")
-  fi
-  claude_cmd --print --output-format json "${perm[@]}" "$@" > "$raw" || rc=$?
-  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" extract --tool migite --label "$label" --exit-code "$rc" < "$raw" || xrc=$?
-  rm -f "$raw"
-  return "$xrc"
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_claude.py" run --tool migite --label "$label" \
+    --repo-root "${REPO_ROOT:-$PWD}" "$@"
+}
+
+# agent_binary — the configured backend's executable (claude / cursor-agent / opencode,
+# or agent.command). Used by require_cmd in migite and by doctor.
+agent_binary() {
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" binary 2>/dev/null || echo claude
+}
+
+# agent_supports <capability> — structured_output | effort | tool_allowlist | usage
+agent_supports() {
+  local cap="$1"
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" capabilities 2>/dev/null \
+    | grep -qE "\"$cap\": true"
 }
 
 # json_field <file.json> <dotted.key> — prints one value; exit 1 if the file,
@@ -369,8 +372,13 @@ run_phase() {
   echo -e "  ${YELLOW}Type /exit when done to return here${RESET}"
   echo ""
 
-  local -a perm_flag=()
-  [[ "$permission_mode" != "none" ]] && perm_flag=(--permission-mode "$permission_mode")
+  # One shell-quoted command line for the configured backend (claude / cursor /
+  # opencode) that opens an interactive session with the prompt file's contents
+  # as the initial prompt. The adapter maps permission_mode onto that CLI's flags.
+  local session_cmd
+  session_cmd="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "${REPO_ROOT:-$PWD}" interactive \
+    --permission-mode "$permission_mode" --prompt-file "$prompt_arg_file")" \
+    || error "Could not build the interactive session command for the configured agent backend"
 
   if use_tmux; then
     # Strip everything except alphanumeric and dash — parens/spaces break tmux sh -c parsing
@@ -382,7 +390,7 @@ run_phase() {
     orig_pane=$(tmux display-message -p '#{pane_id}')
     {
       echo "#!/usr/bin/env bash"
-      printf 'env -u CLAUDECODE claude %s -- "$(cat '"'"'%s'"'"')"\n' "${perm_flag[*]}" "$prompt_arg_file"
+      printf '%s\n' "$session_cmd"
       printf 'exit_code=$?\n'
       printf 'if [[ $exit_code -ne 0 ]]; then\n'
       printf '  echo ""\n'
@@ -409,7 +417,7 @@ run_phase() {
     tmux select-pane -t "$orig_pane" 2>/dev/null || true
     notify "$label" "Session done — continuing workflow"
   else
-    claude_cmd "${perm_flag[@]}" -- "$(cat "$prompt_arg_file")"
+    eval "$session_cmd"
   fi
 }
 

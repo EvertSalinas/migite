@@ -69,11 +69,14 @@ cfg_model_flags() {
   model="$(cfg_model "$role")"
   var="MIGITE_CFG_EFFORT_$(echo "$role" | tr '[:lower:]' '[:upper:]')"
   level="${!var:-}"
-  if [[ -n "$level" && "$level" != "none" && "$model" != *haiku* ]]; then
-    printf -- '--model %s --effort %s' "$model" "$level"
-  else
-    printf -- '--model %s' "$model"
+  # An empty model means "the backend's own default" (cursor / opencode until you pin
+  # a tier): emit no --model at all. --effort only exists on Claude Code.
+  local -a out=()
+  [[ -n "$model" ]] && out+=(--model "$model")
+  if [[ -n "$level" && "$level" != "none" && "$model" != *haiku* && "${MIGITE_CFG_AGENT_BACKEND:-claude}" == "claude" ]]; then
+    out+=(--effort "$level")
   fi
+  printf -- '%s' "${out[*]}"
 }
 
 # cfg <dotted.key> [default] — one config value as exported by load_migite_config.

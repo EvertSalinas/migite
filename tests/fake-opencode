@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# tests/fake-opencode — stand-in for the OpenCode CLI. Mirrors the documented
+# `run --format json` JSONL events: step_start, text, tool_use, step_finish (with
+# part.cost and part.tokens), error. The message is the last argument.
+# $FAKE_AGENT_MODE: ok (default) | error | text | exit1. Records argv to $FAKE_AGENT_ARGV.
+set -u
+[[ -n "${FAKE_AGENT_ARGV:-}" ]] && printf '%s\n' "$*" >> "$FAKE_AGENT_ARGV"
+prompt="${@: -1}"; snippet="${prompt:0:40}"; snippet="${snippet//\"/\\\"}"; snippet="${snippet//$'\n'/ }"
+case "${FAKE_AGENT_MODE:-ok}" in
+  ok) cat <<JSON
+{"type":"step_start","timestamp":1778479990756,"sessionID":"ses_fake","part":{"id":"p1","type":"step-start"}}
+{"type":"text","timestamp":1778479990912,"sessionID":"ses_fake","part":{"id":"p2","type":"text","text":"opencode:${snippet}"}}
+{"type":"step_finish","timestamp":1778479991000,"sessionID":"ses_fake","part":{"id":"p3","type":"step-finish","reason":"tool-calls","cost":0.0123,"tokens":{"input":1200,"output":80,"reasoning":20,"cache":{"read":5000,"write":300}}}}
+{"type":"text","timestamp":1778479991500,"sessionID":"ses_fake","part":{"id":"p4","type":"text","text":"second part"}}
+{"type":"step_finish","timestamp":1778479992000,"sessionID":"ses_fake","part":{"id":"p5","type":"step-finish","reason":"stop","cost":0.0077,"tokens":{"input":300,"output":40,"reasoning":0,"cache":{"read":1000,"write":0}}}}
+JSON
+  ;;
+  error) cat <<JSON
+{"type":"step_start","timestamp":1,"sessionID":"ses_fake","part":{"type":"step-start"}}
+{"type":"error","timestamp":2,"sessionID":"ses_fake","error":{"name":"ProviderAuthError","data":{"message":"No API key configured for anthropic"}}}
+JSON
+  ;;
+  text)  printf 'plain opencode text for: %s\n' "$snippet" ;;
+  exit1) echo "boom" >&2; exit 1 ;;
+esac

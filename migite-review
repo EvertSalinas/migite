@@ -278,7 +278,11 @@ Return a JSON object matching the provided schema:
 - `reason`: the single factor that decided it (1-3 sentences)
 - `findings`: every de-duplicated finding as an object (severity, dimension, file, line, problem, fix)
 - `document`: the COMPLETE review document in the format above, as markdown, with the same verdict"""
+    if not migite_claude.supports("structured_output"):
+        print(f"  ▶ {migite_claude.BACKEND.name} backend has no structured output — text synthesis + markdown verdict", flush=True)
     try:
+        if not migite_claude.supports("structured_output"):
+            raise RuntimeError("structured output unsupported on this backend")
         res = call_claude(structured_prompt, model=CRITIC_MODEL, label="synthesize_verdict", schema=REVIEW_SCHEMA, role="verdict")
         s = res.structured if isinstance(res.structured, dict) else None
         if s and s.get("verdict") in VERDICT_KEY and s.get("document"):
@@ -292,7 +296,8 @@ Return a JSON object matching the provided schema:
             return {"verdict": s["document"], "review_meta": meta}
         print("  ⚠ Structured verdict missing or malformed — falling back to text synthesis", flush=True)
     except Exception as e:
-        print(f"  ⚠ Structured synthesis failed ({str(e)[:160]}) — falling back to text synthesis", flush=True)
+        if migite_claude.supports("structured_output"):
+            print(f"  ⚠ Structured synthesis failed ({str(e)[:160]}) — falling back to text synthesis", flush=True)
 
     # Fallback: plain document, verdict and counts derived deterministically from it.
     try:

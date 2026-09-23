@@ -41,7 +41,21 @@ from typing import Any, Mapping
 REPO_FILE_NAMES = (".migite.yml", ".migite.yaml", ".migite.json")
 USER_FILE_NAMES = ("config.yml", "config.yaml", "config.json")
 
+# Model ids per agent backend and tier. THE only place a model id is written down.
+# Cursor and OpenCode default to None = don't pass --model, so each CLI uses its own
+# default model until the user pins tiers (`cursor-agent --list-models`, `opencode models`).
+BACKEND_MODEL_DEFAULTS: dict[str, dict[str, str | None]] = {
+    "claude":   {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-5", "strong": "claude-opus-5-5"},
+    "cursor":   {"fast": None, "standard": None, "strong": None},
+    "opencode": {"fast": None, "standard": None, "strong": None},
+}
+AGENT_BACKENDS = tuple(BACKEND_MODEL_DEFAULTS)
+
 DEFAULTS: dict[str, Any] = {
+    "agent": {
+        "backend": "claude",             # claude | cursor | opencode  (MIGITE_AGENT)
+        "command": None,                 # override the backend's executable (path or name)
+    },
     "vault": {
         "base": "~/dev-log",       # DEV_LOG_BASE
         "org": None,               # MIGITE_ORG; None = auto-detect from the repo's parent dir
@@ -50,9 +64,11 @@ DEFAULTS: dict[str, Any] = {
         "dir": "~/.dev-workflow/logs",   # LOG_DIR
     },
     "models": {
-        "fast": "claude-haiku-4-5-20251001",
-        "standard": "claude-sonnet-5",
-        "strong": "claude-opus-5-5",
+        # None = the backend's default for that tier (BACKEND_MODEL_DEFAULTS); set a
+        # string to pin a tier for the active backend.
+        "fast": None,
+        "standard": None,
+        "strong": None,
         "roles": {},                     # optional per-role override: {"critic": "claude-opus-5-5", ...}
         # --effort per tier (low | medium | high | xhigh | max | none). none = don't pass the flag,
         # so the CLI's own default applies. Haiku 4.5 does not accept --effort; it is never sent for
@@ -137,18 +153,20 @@ ROLE_TIERS: dict[str, str] = {
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "none")
 
 
-def default_model(role: str) -> str:
-    """The built-in default model for a role (DEFAULTS tier via ROLE_TIERS), with no
-    config files or env consulted. The ONLY sanctioned way for a script to name a
-    model outside a loaded Config — module-level constants in the tools use this so
-    there is exactly one place a model id is written down."""
+def default_model(role: str, backend: str = "claude") -> str:
+    """The built-in default model for a role on a backend (BACKEND_MODEL_DEFAULTS tier
+    via ROLE_TIERS), with no config files or env consulted. The ONLY sanctioned way for
+    a script to name a model outside a loaded Config — module-level constants in the
+    tools use this so there is exactly one place a model id is written down. Returns
+    "" when the backend has no default for the tier (= don't pass --model)."""
     if role not in ROLE_TIERS:
         raise KeyError(f"unknown model role {role!r}; known: {', '.join(sorted(ROLE_TIERS))}")
-    return str(DEFAULTS["models"][ROLE_TIERS[role]])
+    return BACKEND_MODEL_DEFAULTS[backend][ROLE_TIERS[role]] or ""
 
 # Environment variables that override file values (env > files). Keeps every
 # variable migite documented before the config file existed working unchanged.
 ENV_OVERRIDES: dict[str, str] = {
+    "MIGITE_AGENT": "agent.backend",
     "DEV_LOG_BASE": "vault.base",
     "MIGITE_ORG": "vault.org",
     "LOG_DIR": "logs.dir",
@@ -160,6 +178,7 @@ ENV_OVERRIDES: dict[str, str] = {
 }
 
 ENUMS: dict[str, tuple[str, ...]] = {
+    "agent.backend": AGENT_BACKENDS,
     "models.effort.fast": EFFORT_LEVELS,
     "models.effort.standard": EFFORT_LEVELS,
     "models.effort.strong": EFFORT_LEVELS,
@@ -183,6 +202,10 @@ STARTER_TEMPLATE = """\
 # Every value below is the default; delete what you don't change. `migite config` shows the
 # effective result and where each value came from. Needs PyYAML: pip install pyyaml
 
+agent:
+  backend: claude            # claude | cursor | opencode  (MIGITE_AGENT). See docs/agents.md
+  # command: /path/to/cli    # override the executable (default: claude / cursor-agent / opencode)
+
 vault:
   base: ~/dev-log            # DEV_LOG_BASE
   # org: Acme                # MIGITE_ORG — default: name of the directory containing the repo
@@ -191,9 +214,12 @@ logs:
   dir: ~/.dev-workflow/logs  # LOG_DIR
 
 models:
-  fast: claude-haiku-4-5-20251001   # explorers
-  standard: claude-sonnet-5         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments
-  strong: claude-opus-5-5           # plan synthesis/refine, critic, correctness + security review, verdicts
+  # Tiers are model ids for the ACTIVE backend. Unset = that backend's default:
+  #   claude:   fast=claude-haiku-4-5-20251001  standard=claude-sonnet-5  strong=claude-opus-5-5
+  #   cursor / opencode: no --model is passed until you pin one (`cursor-agent --list-models`, `opencode models`)
+  # fast: claude-haiku-4-5-20251001   # explorers
+  # standard: claude-sonnet-5         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments
+  # strong: claude-opus-5-5           # plan synthesis/refine, critic, correctness + security review, verdicts
   # roles:                          # pin one call site without changing its tier (see docs/configuration.md for the list)
   #   think: claude-sonnet-5
   #   review_security: claude-opus-5-5
@@ -381,7 +407,14 @@ class Config:
         roles = self.get("models.roles") or {}
         if role in roles:
             return str(roles[role])
-        return str(self.get(f"models.{ROLE_TIERS[role]}"))
+        tier = ROLE_TIERS[role]
+        explicit = self.get(f"models.{tier}")
+        if explicit:
+            return str(explicit)
+        return BACKEND_MODEL_DEFAULTS[self.backend()][tier] or ""
+
+    def backend(self) -> str:
+        return str(self.get("agent.backend") or "claude")
 
     def models_by_role(self) -> dict[str, str]:
         return {role: self.model(role) for role in ROLE_TIERS}
@@ -555,13 +588,14 @@ def show(cfg: Config) -> str:
     for k, v, s in rows:
         out.append(f"  {k:<{width}}  {v[:vwidth]:<{vwidth}}  {s}")
     out.append("")
+    out.append(f"  agent backend: {cfg.backend()}" + (f" (command: {cfg.get('agent.command')})" if cfg.get("agent.command") else ""))
     out.append("  resolved models by role:")
     for role, model in sorted(cfg.models_by_role().items()):
         tier = ROLE_TIERS[role]
         pinned = " (pinned)" if role in (cfg.get("models.roles") or {}) else f" ({tier})"
         eff = cfg.effort(role)
         eff_note = f"  effort={eff}" if eff else ""
-        out.append(f"    {role:<38} {model}{pinned}{eff_note}")
+        out.append(f"    {role:<38} {model or '(backend default)'}{pinned}{eff_note}")
     out.append("")
     out.append("  files: " + (", ".join(str(p) for p in cfg.files) if cfg.files else "(none — defaults + env only)"))
     for w in cfg.warnings:

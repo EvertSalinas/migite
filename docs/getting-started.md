@@ -34,7 +34,7 @@ for f in migite migite-plan migite-review \
          migite-explore migite-explore.py \
          migite-audit migite-audit.py \
          migite-pr-review migite-pr-review.py \
-         migite_paths.py migite_claude.py migite_config.py; do
+         migite_paths.py migite_claude.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 ```

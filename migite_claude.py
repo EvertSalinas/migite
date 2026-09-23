@@ -28,16 +28,25 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import migite_agent
+
 LEDGER_ENV = "MIGITE_USAGE_LEDGER"
 DEFAULT_TIMEOUT = 600
 THINKING_TIMEOUT = 900
 DEFAULT_PERMISSION_MODE: str | None = None   # None/"none" = don't pass --permission-mode
+# The agent backend every call goes through. configure_from(cfg) sets it from
+# agent.backend; until then the default backend (claude) is used.
+BACKEND: migite_agent.Backend = migite_agent.ClaudeBackend()
+# Prompts longer than this are handed to arg-only backends (Cursor, OpenCode) as a
+# pointer to a temp file instead of inline — Linux caps one argv string at 128 KB.
+ARG_PROMPT_MAX = 100_000
 # role -> --effort level, filled by configure_from(cfg). call_claude(role=...) looks it up.
 ROLE_EFFORT: dict[str, str | None] = {}
 SCHEMA_VERSION = 1
@@ -57,9 +66,16 @@ def configure(*, timeout: int | None = None, thinking_timeout: int | None = None
         DEFAULT_PERMISSION_MODE = None if permission_mode == "none" else permission_mode
 
 
+def supports(capability: str) -> bool:
+    """Does the active backend have `structured_output`, `effort`, `tool_allowlist`, or `usage`?"""
+    return bool(getattr(BACKEND, capability, False))
+
+
 def configure_from(cfg) -> None:
-    """configure() straight from a migite_config.Config, plus the per-role effort table."""
-    global ROLE_EFFORT
+    """configure() straight from a migite_config.Config, plus the per-role effort table
+    and the agent backend (agent.backend / agent.command)."""
+    global ROLE_EFFORT, BACKEND
+    BACKEND = migite_agent.get_backend(cfg)
     configure(
         timeout=cfg.get("models.timeout_seconds"),
         thinking_timeout=cfg.get("models.thinking_timeout_seconds"),
@@ -166,50 +182,71 @@ def call_claude(prompt: str, model: str, *, thinking: bool = False, timeout: int
     Raises ClaudeError on non-zero exit, timeout, or an envelope with is_error.
     Falls back to treating stdout as plain text if the CLI didn't return the
     JSON envelope, so an older CLI still works (with empty usage)."""
-    cmd = ["claude", "--print", "--output-format", "json", "--model", model]
-    cmd += effort_flag(model, effort if effort is not None else ROLE_EFFORT.get(role))
-    if schema is not None:
-        cmd += ["--json-schema", json.dumps(schema)]
+    backend = BACKEND
+    effective_effort = effort if effort is not None else ROLE_EFFORT.get(role)
     effective_permission = permission_mode if permission_mode is not None else DEFAULT_PERMISSION_MODE
-    if effective_permission and effective_permission != "none":
-        cmd += ["--permission-mode", effective_permission]
-    if allowed_tools:
-        cmd += ["--allowedTools", " ".join(allowed_tools)]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    if schema is not None and not backend.structured_output:
+        schema = None            # caller falls back to text parsing (see supports())
+    if allowed_tools and not backend.tool_allowlist:
+        allowed_tools = None
     timeout = timeout or (THINKING_TIMEOUT if thinking else DEFAULT_TIMEOUT)
 
-    print(f"      claude cmd: {' '.join(c if len(c) < 60 else c[:57] + '...' for c in cmd)}", flush=True)
+    # Arg-only backends (Cursor, OpenCode) can't take a huge prompt on the command
+    # line; hand them a pointer to a temp file instead.
+    pointer_file = None
+    argv_prompt = prompt
+    if backend.prompt_via == "arg" and len(prompt) > ARG_PROMPT_MAX:
+        fd, pointer_file = tempfile.mkstemp(prefix="migite-prompt-", suffix=".md")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(prompt)
+        argv_prompt = (f"Your task brief is in the file {pointer_file} ({len(prompt)} bytes). Read it IN FULL "
+                       f"before doing anything else, then follow its instructions exactly.")
+
+    cmd, stdin_payload = backend.headless_argv(model=model or None, effort=effective_effort, schema=schema,
+                                               permission_mode=effective_permission, allowed_tools=allowed_tools,
+                                               prompt=argv_prompt)
+    env = backend.env()
+    shown = [c if len(c) < 60 else c[:57] + "..." for c in cmd]
+    print(f"      {backend.name} cmd: {' '.join(shown)}", file=sys.stderr, flush=True)
     t0 = time.monotonic()
     try:
-        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=timeout)
+        proc = subprocess.run(cmd, input=stdin_payload, capture_output=True, text=True, env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
         elapsed = int((time.monotonic() - t0) * 1000)
         record(_usage_from(None, tool=tool, label=label, model=model, elapsed_ms=elapsed, ok=False), ledger)
-        raise ClaudeError(f"claude --print timed out after {elapsed // 1000}s (limit={timeout}s, model={model})")
+        raise ClaudeError(f"{backend.name} timed out after {elapsed // 1000}s (limit={timeout}s, model={model})")
+    finally:
+        if pointer_file:
+            try:
+                os.unlink(pointer_file)
+            except OSError:
+                pass
     elapsed = int((time.monotonic() - t0) * 1000)
 
-    envelope = parse_envelope(proc.stdout)
-    ok = proc.returncode == 0 and not (envelope or {}).get("is_error", False)
-    usage = _usage_from(envelope, tool=tool, label=label, model=model, elapsed_ms=elapsed, ok=ok)
+    parsed = backend.parse(proc.stdout, proc.returncode, requested_model=model)
+    usage = UsageRecord(
+        ts=datetime.now(timezone.utc).isoformat(timespec="seconds"), tool=tool, label=label,
+        model=parsed.model or model, input_tokens=parsed.input_tokens, output_tokens=parsed.output_tokens,
+        cache_read_input_tokens=parsed.cache_read_input_tokens,
+        cache_creation_input_tokens=parsed.cache_creation_input_tokens,
+        cost_usd=parsed.cost_usd, duration_ms=parsed.duration_ms or elapsed, ok=parsed.ok,
+    )
     record(usage, ledger)
-    print(f"      ✔ claude returned in {elapsed / 1000:.1f}s (exit {proc.returncode}"
-          + (f", ${usage.cost_usd:.3f}" if usage.cost_usd else "") + ")", flush=True)
+    print(f"      ✔ {backend.name} returned in {elapsed / 1000:.1f}s (exit {proc.returncode}"
+          + (f", ${usage.cost_usd:.3f}" if usage.cost_usd else "") + ")", file=sys.stderr, flush=True)
 
-    if not ok:
-        detail = (envelope or {}).get("result") if envelope else proc.stderr
-        raise ClaudeError(f"claude --print failed (exit {proc.returncode}, {elapsed / 1000:.1f}s): {str(detail)[:400]}")
+    if not parsed.ok:
+        detail = parsed.error or proc.stderr
+        raise ClaudeError(f"{backend.name} failed (exit {proc.returncode}, {elapsed / 1000:.1f}s): {str(detail)[:400]}")
 
-    if envelope:
-        text = str(envelope.get("result") or "").strip()
-        structured = envelope.get("structured_output") if schema is not None else None
-        if schema is not None and structured is None:
-            # Some CLI versions only echo the JSON in `result`; parse it ourselves.
-            try:
-                structured = json.loads(text)
-            except ValueError:
-                structured = None
-        return CallResult(text=text, structured=structured, usage=usage, raw=envelope)
-    return CallResult(text=proc.stdout.strip(), structured=None, usage=usage, raw={})
+    structured = parsed.structured if schema is not None else None
+    if schema is not None and structured is None and parsed.text:
+        # Some CLI versions only echo the JSON in the text; parse it ourselves.
+        try:
+            structured = json.loads(parsed.text)
+        except ValueError:
+            structured = None
+    return CallResult(text=parsed.text, structured=structured, usage=usage, raw=parsed.raw)
 
 
 # ── Envelope helpers shared by the agents ─────────────────────────────────────
@@ -342,6 +379,31 @@ def _cmd_extract(args: argparse.Namespace) -> int:
     return 0 if ok else (args.exit_code or 1)
 
 
+def _cmd_run(args: argparse.Namespace) -> int:
+    """One headless call for bash: prompt on stdin, result text on stdout, usage to the
+    ledger. Picks the backend from the config so bash never builds agent argv itself."""
+    import migite_config
+    try:
+        cfg = migite_config.load(args.repo_root or os.getcwd())
+        configure_from(cfg)
+    except migite_config.ConfigError as e:
+        print(f"✘ config error: {e}", file=sys.stderr)
+        return 1
+    prompt = sys.stdin.read()
+    allowed = args.allowed_tools.split() if args.allowed_tools else None
+    if allowed and not supports("tool_allowlist"):
+        print(f"✘ the {BACKEND.name} backend has no tool allowlist; refusing a tool-enabled call", file=sys.stderr)
+        return 3
+    try:
+        res = call_claude(prompt, args.model or "", label=args.label, tool=args.tool, effort=args.effort or None,
+                          permission_mode=args.permission_mode, timeout=args.timeout or None)
+    except ClaudeError as e:
+        print(f"✘ {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(res.text)
+    return 0
+
+
 def _cmd_summary(args: argparse.Namespace) -> int:
     records = read_ledger(args.ledger)
     summary = summarize(records)
@@ -384,6 +446,16 @@ def main() -> None:
     p_ex.add_argument("--ledger", default=None, help=f"override ${LEDGER_ENV}")
     p_ex.add_argument("--structured", action="store_true", help="print structured_output JSON instead of result text")
 
+    p_run = sub.add_parser("run", help="stdin: prompt → stdout: result text; one headless call on the configured backend")
+    p_run.add_argument("--tool", default="migite")
+    p_run.add_argument("--label", default="")
+    p_run.add_argument("--model", default="")
+    p_run.add_argument("--effort", default="")
+    p_run.add_argument("--permission-mode", default=None)
+    p_run.add_argument("--allowedTools", "--allowed-tools", dest="allowed_tools", default="")
+    p_run.add_argument("--timeout", type=int, default=0)
+    p_run.add_argument("--repo-root", default=None)
+
     p_sum = sub.add_parser("summary", help="summarise a usage ledger")
     p_sum.add_argument("--ledger", required=True)
     p_sum.add_argument("--json", default=None, help="also write the summary as JSON here")
@@ -395,6 +467,8 @@ def main() -> None:
     args = ap.parse_args()
     if args.command == "extract":
         sys.exit(_cmd_extract(args))
+    if args.command == "run":
+        sys.exit(_cmd_run(args))
     if args.command == "summary":
         sys.exit(_cmd_summary(args))
     if args.command == "field":

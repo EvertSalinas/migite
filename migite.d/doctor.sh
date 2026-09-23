@@ -51,8 +51,10 @@ run_doctor() {
   echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
 
   # ── Tool resolution ────────────────────────────────────────────────────────
-  local doc_tool
-  for doc_tool in claude git "$MIGITE_PYTHON"; do
+  local doc_tool doc_agent
+  doc_agent="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" binary 2>/dev/null || echo claude)"
+  echo "ℹ Agent backend: $doc_agent"
+  for doc_tool in "$doc_agent" git "$MIGITE_PYTHON"; do
     if command -v "$doc_tool" &>/dev/null; then
       echo "✔ Tool resolves: $doc_tool"
     else

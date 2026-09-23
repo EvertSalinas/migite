@@ -27,6 +27,6 @@ if "$MIGITE_PYTHON" -c 'import sys' &>/dev/null; then
     "$MIGITE_PYTHON" -c '
 import sys; sys.path.insert(0, "'"$REPO_ROOT"'")
 import migite_config as c
-tiers = {c.DEFAULTS["models"][t] for t in ("fast", "standard", "strong")}
+tiers = {c.BACKEND_MODEL_DEFAULTS["claude"][t] for t in ("fast", "standard", "strong")}
 assert all(c.default_model(r) in tiers for r in c.ROLE_TIERS), "role default outside tier table"'
 fi

@@ -15,6 +15,7 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 - **Memory**: every artifact mirrored to a markdown vault (Obsidian-friendly), and a per-repo `knowledge.md` injected into every future plan.
 - **Machine-readable**: `plan.json`, `review.json`, and a per-run usage ledger with cost per model.
 - **Configurable**: one layered `.migite.yml` for models, effort, gates, permissions, prompts, budget.
+- **Agent-agnostic**: drives Claude Code by default, Cursor CLI or OpenCode with one config line (`agent.backend`). Capabilities a CLI lacks degrade explicitly, never silently.
 
 ---
 
@@ -43,7 +44,7 @@ MIGITE_SRC="$HOME/Code/migite"; BIN="$HOME/.local/bin"; mkdir -p "$BIN"
 for f in migite migite-plan migite-review migite-blueprint migite-blueprint.py \
          migite-explore migite-explore.py migite-audit migite-audit.py \
          migite-pr-review migite-pr-review.py \
-         migite_paths.py migite_claude.py migite_config.py; do
+         migite_paths.py migite_claude.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
@@ -61,8 +62,9 @@ migite doctor
 migite "add a health-check endpoint" --type feature
 ```
 
-Prerequisites: the `claude` CLI (Claude Code) logged in, `git`, Python 3.11+, and `bundle` for
-Rails repos. No separate API key: every model call shells out to `claude` and shares its auth.
+Prerequisites: an agent CLI logged in (Claude Code by default; Cursor CLI or OpenCode via
+`agent.backend`), `git`, Python 3.11+, and `bundle` for Rails repos. No separate API key: every
+model call shells out to the CLI and shares its auth.
 
 ---
 
@@ -195,7 +197,7 @@ five ready-made recipes: [docs/configuration.md](./docs/configuration.md).
 
 | Needs | Why |
 |-------|-----|
-| `claude` (Claude Code CLI), logged in | Every model call. Auth is shared; no API key |
+| An agent CLI, logged in: `claude` (default), `cursor-agent`, or `opencode` | Every model call. Auth is the CLI's own; no API key. See [docs/agents.md](./docs/agents.md) |
 | `git` | Branch detection, diff scoping, base-branch resolution |
 | Python 3.11+ with `langgraph` | The planning, review, explore, audit, blueprint, and PR-review agents |
 | `bundle` | Only for the `rails` stack (rubocop + rspec). Not needed for `generic` |
@@ -224,6 +226,7 @@ Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down;
 | [docs/phases.md](./docs/phases.md) | Phase by phase: what each step calls, every gate key, which files get linted and tested, memory injection, tmux |
 | [docs/outputs.md](./docs/outputs.md) | Every file a run writes, the commit-gate banner, the testing-plan requirement |
 | [docs/configuration.md](./docs/configuration.md) | You are writing a `.migite.yml`: every key, model roles and effort, strict gate, recipes |
+| [docs/agents.md](./docs/agents.md) | Running migite on Cursor CLI or OpenCode instead of Claude Code: capability matrix, per-backend models, what degrades |
 | [docs/standalone-tools.md](./docs/standalone-tools.md) | `migite-blueprint`, `migite-explore`, `migite-audit`, `migite-pr-review` |
 | [docs/internals.md](./docs/internals.md) | Repository layout, the agent scripts' CLIs, `plan.json` / `review.json` / usage ledger with examples |
 | [docs/vault-structure.md](./docs/vault-structure.md) | Where every file lands in the vault and how the org folder is chosen |
@@ -241,6 +244,6 @@ Roughly in the order they are likely to land:
 - **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
 - **Run manifest and `--yes`.** A `run.json` at every phase boundary so a run can resume from a recorded state, and a non-interactive mode so migite can run from CI or from another agent.
 - **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
-- **Support agents other than Claude.** Every call goes through one module now; a backend adapter would decouple the orchestration from the CLI.
+- **Verify Cursor and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
 - **One-line installer** to replace the clone-and-symlink block above.

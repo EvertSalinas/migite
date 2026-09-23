@@ -100,8 +100,9 @@ if [[ "${1:-}" == "config" ]]; then
 fi
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
-require_cmd claude
 require_cmd git
+# The agent CLI (claude / cursor-agent / opencode) is required after the config is
+# loaded below, since agent.backend decides which one.
 # `bundle` is only required for the `rails` stack — checked after detect_stack,
 # once we know which stack this repo actually is.
 
@@ -270,6 +271,8 @@ mkdir -p "$LOG_DIR"
 # (and the tmux wrapper scripts, which re-export it) inherit it.
 MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
 export MIGITE_USAGE_LEDGER
+require_cmd "$(agent_binary)"
+log "Agent backend: $(cfg agent.backend claude) ($(agent_binary))"
 # --stack on the command line beats `stack:` in the config, which beats auto-detection.
 [[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
 IMPLEMENT_CMD_PATH="$(prompt_path implement)"

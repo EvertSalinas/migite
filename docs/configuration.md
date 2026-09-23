@@ -10,6 +10,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
 - [`migite config`](#command)
 - [Recipes](#recipes)
 - [Reference](#reference)
+  - [agent](#agent)
   - [vault, logs](#vault)
   - [models](#models)
   - [stack](#stack)
@@ -154,6 +155,18 @@ migite config | grep prompts           # confirm it is picked up
 The starter file written by `migite config --init` is the same as this reference with defaults
 filled in.
 
+<a id="agent"></a>
+### `agent`
+
+```yaml
+agent:
+  backend: claude        # claude | cursor | opencode   (MIGITE_AGENT)
+  command: null          # override the executable: a name on PATH or a full path
+```
+
+Which agent CLI every call goes through. Model tiers, effort, structured output, and the Jira
+fetch behave differently per backend; see [agents.md](./agents.md) for the capability matrix.
+
 <a id="vault"></a>
 ### `vault`, `logs`
 
@@ -173,6 +186,8 @@ every tool has a role; each role has a default tier.
 
 ```yaml
 models:
+  # Tiers are model ids for the ACTIVE backend. Unset = that backend's default
+  # (claude: haiku-4-5 / sonnet-5 / opus-5-5; cursor and opencode: no --model passed until you pin one).
   fast: claude-haiku-4-5-20251001   # tier: file exploration
   standard: claude-sonnet-5         # tier: lenses, analysts, audit areas, checklist review, knowledge, amendments
   strong: claude-opus-5-5           # tier: plan synthesis/refine, critic, correctness + security review, verdicts
@@ -352,6 +367,7 @@ files**:
 | Variable | Config key |
 |---|---|
 | `DEV_LOG_BASE` | `vault.base` |
+| `MIGITE_AGENT` | `agent.backend` |
 | `MIGITE_ORG` | `vault.org` |
 | `LOG_DIR` | `logs.dir` |
 | `MIGITE_STACK` | `stack` |

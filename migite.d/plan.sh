@@ -51,6 +51,11 @@ run_plan() {
     resume_from_vault "$JIRA_CONTEXT_FILE" "$JIRA_CONTEXT_VAULT"
     if [[ -s "$JIRA_CONTEXT_FILE" ]]; then
       log "Reusing cached Jira context for $JIRA_TICKET"
+    elif ! agent_supports tool_allowlist; then
+      # Only Claude Code can run a headless call with a scoped MCP tool allowlist.
+      # Other backends plan without the ticket body; the key still names the task.
+      warn "Jira fetch needs a tool-allowlist capable agent (Claude Code) — the $(cfg agent.backend) backend can't; planning without ticket context"
+      JIRA_CONTEXT_FILE=""
     else
       log "Fetching Jira ticket $JIRA_TICKET..."
       local JIRA_FETCH_PROMPT="Fetch the Jira ticket ${JIRA_TICKET}${JIRA_URL:+ ($JIRA_URL)} using the Atlassian MCP tools. If a URL is given, try its hostname as the cloudId first; otherwise use getAccessibleAtlassianResources to find it.

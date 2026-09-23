@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# tests/fake-cursor-agent — stand-in for the Cursor CLI (`cursor-agent` / `agent`).
+# Mirrors the documented `-p --output-format json` result object (no usage/cost):
+#   {"type":"result","subtype":"success","is_error":false,"duration_ms":N,"result":"...","session_id":"..."}
+# The prompt is the last non-flag argument. $FAKE_AGENT_MODE: ok (default) | error | text | exit1.
+# Records argv to $FAKE_AGENT_ARGV when set.
+set -u
+[[ -n "${FAKE_AGENT_ARGV:-}" ]] && printf '%s\n' "$*" >> "$FAKE_AGENT_ARGV"
+prompt="${@: -1}"; snippet="${prompt:0:40}"; snippet="${snippet//\"/\\\"}"; snippet="${snippet//$'\n'/ }"
+case "${FAKE_AGENT_MODE:-ok}" in
+  ok)    printf '{"type":"result","subtype":"success","is_error":false,"duration_ms":842,"duration_api_ms":800,"result":"cursor:%s","session_id":"fake-session","request_id":"req_1"}\n' "$snippet" ;;
+  error) printf '{"type":"result","subtype":"error","is_error":true,"duration_ms":12,"result":"Not logged in. Run: cursor-agent login","session_id":"fake-session"}\n' ;;
+  text)  printf 'plain cursor text for: %s\n' "$snippet" ;;
+  exit1) echo "boom" >&2; exit 1 ;;
+esac

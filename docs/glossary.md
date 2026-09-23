@@ -27,6 +27,7 @@ Terms used across the docs, in the order you meet them in a run.
 | **Tier** | `fast`, `standard`, `strong`: the three model slots in `models:` (Haiku 4.5, Sonnet 5, Opus 5.5 by default). |
 | **Role** | A named call site (`think`, `critic`, `review_security`, `knowledge`, ...) mapped to a tier by default and pinnable to a model in `models.roles`. `migite config` lists all of them. |
 | **Effort** | The `--effort` level (`low` to `max`) sent with a headless call, from `models.effort.<tier>` or `models.roles_effort.<role>`. `none` sends no flag. Never sent to Haiku. |
+| **Backend** | The agent CLI migite drives: Claude Code (default), Cursor CLI, or OpenCode, chosen by `agent.backend`. One adapter class per backend in `migite_agent.py` maps flags and parses output; capabilities a backend lacks degrade explicitly. |
 | **Headless call** | `claude --print`: no tools, no interaction, JSON envelope back. The planner, reviewers, knowledge, amendments, and the standalone tools. |
 | **Interactive session** | A full Claude Code session opened by `run_phase`: implement, gate fixes, PR description. You type `/exit` to hand control back. Not metered. |
 | **Strict gate** | `gates.commit.policy: strict`: `y` is refused while a `NEEDS FIXES` verdict, failing specs, a tooling error, or rubocop offenses remain; capital `Y` overrides and is recorded in `gate-overrides.md`. |

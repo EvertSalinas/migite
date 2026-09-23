@@ -32,7 +32,8 @@ migite/                       ← wherever you clone this repo
 ├── migite-blueprint(.py)     ← standalone: new-project definition
 ├── migite-audit(.py)         ← standalone: codebase audit
 ├── migite-pr-review(.py)     ← standalone: review a branch
-├── migite_claude.py          ← the one `claude --print` wrapper: JSON envelope, --json-schema, --effort, usage ledger
+├── migite_claude.py          ← the one headless-call path: backend argv, output parsing, --json-schema, --effort, usage ledger
+├── migite_agent.py           ← agent backends (Claude Code, Cursor CLI, OpenCode): flags, permission mapping, output parsing
 ├── migite_config.py          ← layered config resolver; the ONLY file that names a model id
 ├── migite_paths.py           ← vault path resolver: org detection, base branch, slugify, run-dir lookup
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)

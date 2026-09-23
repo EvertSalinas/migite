@@ -12,6 +12,7 @@ Symptoms first; each entry names the check that proves the cause.
 | a headless phase exits immediately when launched from inside Claude Code | [Nested sessions](#nested) |
 | the commit gate keeps saying NEEDS FIXES | [Review loops](#troubleshooting-needs-fixes) |
 | `migite doctor` reports scratchpad/vault drift | [Drift](#drift) |
+| `Not logged in` from Cursor, `No API key configured` from OpenCode, or `refusing a tool-enabled call` | [Other backends](#backends) |
 
 <a id="config-errors"></a>
 ### Config errors
@@ -135,6 +136,22 @@ decision, a missing factory, or a genuinely wrong review finding. Use `e` at the
 `review.md` directly and strike the bad finding, or `n` to fix it yourself and re-run checks when
 ready. With `gates.commit.policy: strict`, a capital `Y` approves over the remaining blockers and
 records them in `gate-overrides.md`.
+
+<a id="backends"></a>
+### Other backends (Cursor, OpenCode)
+
+`agent.backend` picks the CLI. Each has its own login: `cursor-agent login` (or `CURSOR_API_KEY`),
+`opencode auth login`. An `is_error` result from Cursor or an `error` event from OpenCode fails the
+call with that CLI's message. Two things are by design, not bugs:
+
+- `refusing a tool-enabled call` — only Claude Code can run a headless call with a scoped MCP tool
+  allowlist; on other backends the Jira fetch is skipped and planning proceeds without the ticket
+  body (the key still names the task).
+- The reviewer prints `backend has no structured output — text synthesis + markdown verdict` and
+  `review.json` says `"source": "markdown"`; the gate still reads a verdict, from the anchored
+  markdown parser.
+
+Model tiers are unset for these backends until you pin them; see [agents.md](./agents.md#models-per-backend).
 
 <a id="drift"></a>
 ### `migite doctor` reports scratchpad/vault drift
