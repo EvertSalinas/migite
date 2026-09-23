@@ -129,9 +129,9 @@ use_agent opencode; check "instruction files: opencode → AGENTS.md" test "$(ag
 # doctor names the backend and runs the adapter's health check
 export MIGITE_AGENT=opencode
 check "doctor: reports the configured backend and finds its CLI" \
-  bash -c 'cd "$1" && git init -q . && MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/migite" doctor 2>&1 | grep -q "Agent backend: opencode" && MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/migite" doctor 2>&1 | grep -q "✔ Agent CLI: OpenCode"' _ "$ag_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'cd "$1" && git init -q . && MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/bin/migite" doctor 2>&1 | grep -q "Agent backend: opencode" && MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/bin/migite" doctor 2>&1 | grep -q "✔ Agent CLI: OpenCode"' _ "$ag_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
 check "doctor: a missing agent CLI is reported as an issue" \
-  bash -c 'cd "$1" && PATH="/usr/bin:/bin" MIGITE_AGENT=cursor MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/migite" doctor 2>&1 | grep -q "✘ Agent CLI not found: cursor-agent"' _ "$ag_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'cd "$1" && PATH="/usr/bin:/bin" MIGITE_AGENT=cursor MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/bin/migite" doctor 2>&1 | grep -q "✘ Agent CLI not found: cursor-agent"' _ "$ag_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
 
 unset MIGITE_AGENT FAKE_AGENT_ARGV MIGITE_USAGE_LEDGER FAKE_AGENT_MODE XDG_CONFIG_HOME
 unset MIGITE_AGENT_NAME MIGITE_AGENT_DISPLAY MIGITE_AGENT_BINARY MIGITE_AGENT_EXIT_HINT MIGITE_AGENT_INSTRUCTIONS MIGITE_AGENT_CAPS

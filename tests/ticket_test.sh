@@ -39,17 +39,17 @@ rc=0; FAKE_ACLI_MODE=logged_out MIGITE_TRACKER=jira-acli ticket_cmd fetch BB-77 
 check "ticket_cmd fetch: acli logged out and no fallback allowed → exit 2" test "$rc" = "2"
 
 check "migite-ticket: a bare key means fetch (no source → exit 2)" \
-  bash -c 'cd "$1" && MIGITE_ACLI=/nonexistent/acli MIGITE_AGENT=cursor MIGITE_PYTHON="$2" "$3/migite-ticket" BB-77 >/dev/null 2>&1; [[ $? == 2 ]]' _ "$tk_dir" "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'cd "$1" && MIGITE_ACLI=/nonexistent/acli MIGITE_AGENT=cursor MIGITE_PYTHON="$2" "$3/bin/migite-ticket" BB-77 >/dev/null 2>&1; [[ $? == 2 ]]' _ "$tk_dir" "$MIGITE_PYTHON" "$MIGITE_HOME"
 check "migite-ticket: sources explains the choice" \
-  bash -c 'cd "$1" && MIGITE_PYTHON="$2" "$3/migite-ticket" sources 2>&1 | grep -q "acli logged in to acme.atlassian.net"' _ "$tk_dir" "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'cd "$1" && MIGITE_PYTHON="$2" "$3/bin/migite-ticket" sources 2>&1 | grep -q "acli logged in to acme.atlassian.net"' _ "$tk_dir" "$MIGITE_PYTHON" "$MIGITE_HOME"
 check "migite-ticket: --help prints usage" \
-  bash -c 'MIGITE_PYTHON="$1" "$2/migite-ticket" --help | grep -q "migite-ticket BB-1234"' _ "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'MIGITE_PYTHON="$1" "$2/bin/migite-ticket" --help | grep -q "migite-ticket BB-1234"' _ "$MIGITE_PYTHON" "$MIGITE_HOME"
 
 check "migite --jira: input that isn't a ticket stops the run with a clear error" \
-  bash -c 'cd "$1" && git init -q . 2>/dev/null; out=$(MIGITE_PYTHON="$2" bash "$3/migite" --jira "not a ticket" 2>&1); [[ $? != 0 && "$out" == *"Not a Jira ticket key or ticket URL"* ]]' _ "$tk_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'cd "$1" && git init -q . 2>/dev/null; out=$(MIGITE_PYTHON="$2" bash "$3/bin/migite" --jira "not a ticket" 2>&1); [[ $? != 0 && "$out" == *"Not a Jira ticket key or ticket URL"* ]]' _ "$tk_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
 
 check "doctor: reports the ticket source for --jira" \
-  bash -c 'cd "$1" && git init -q . 2>/dev/null; MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/migite" doctor 2>&1 | grep -q "Ticket source for --jira"' _ "$tk_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'cd "$1" && git init -q . 2>/dev/null; MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/bin/migite" doctor 2>&1 | grep -q "Ticket source for --jira"' _ "$tk_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
 
 unset XDG_CONFIG_HOME
 export MIGITE_ACLI="$_tk_acli"

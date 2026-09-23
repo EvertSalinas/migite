@@ -29,12 +29,9 @@ git clone <this-repo> ~/Code/migite
 MIGITE_SRC="$HOME/Code/migite"
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
-for f in migite migite-plan migite-review \
-         migite-blueprint migite-blueprint.py \
-         migite-explore migite-explore.py \
-         migite-audit migite-audit.py \
-         migite-pr-review migite-pr-review.py migite-ticket \
-         migite_paths.py migite_call.py migite_config.py migite_agent.py; do
+for f in "$MIGITE_SRC"/bin/*; do ln -sf "$f" "$BIN/$(basename "$f")"; done
+for f in migite-plan migite-review migite-blueprint.py migite-explore.py migite-audit.py \
+         migite-pr-review.py migite_paths.py migite_call.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 ```
@@ -42,8 +39,8 @@ done
 The module symlinks let you run `migite_config.py` and friends by name. The tools themselves
 don't need them: Python resolves a symlinked script to its real directory, so `migite-plan` and
 the others import `migite_call`, `migite_config`, and the `agents/` package from the checkout.
-`lib/`, `prompts/`, and `agents/` are not symlinked; `migite` likewise resolves its real
-location through the symlink and finds them beside itself.
+`lib/`, `prompts/`, and `agents/` are not symlinked; every command in `bin/` resolves its real
+location through the symlink and finds them in the checkout.
 
 <a id="macos"></a>
 ### macOS
@@ -53,8 +50,8 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 pip3 install langgraph pyyaml
 ```
 
-Notifications use `osascript` and need no setup. `readlink -f` requires macOS 12.3+; older
-versions fall back to a manual symlink walk automatically.
+Notifications use `osascript` and need no setup. Symlinks are resolved with a plain
+`readlink` walk, so no GNU coreutils are needed.
 
 <a id="linux"></a>
 ### Linux
@@ -378,7 +375,7 @@ The scratchpad is the working copy; the vault is for reading later, in Obsidian 
 | `.plan-history/` | A snapshot of `plan.md` before every refine, edit, or redo |
 
 Two files are per repo, not per task: `knowledge.md` in the vault, injected into every future
-plan, and `migite-improvements.md` in the migite checkout.
+plan, and `docs/improvements.md` in the migite checkout.
 
 `review.json`, the file the commit gate reads:
 

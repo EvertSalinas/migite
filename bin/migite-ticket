@@ -13,16 +13,17 @@
 
 set -euo pipefail
 
-# Real directory of this script, through the ~/.local/bin symlink, so lib/ and
-# the Python modules are found in the checkout regardless of where it was invoked.
+# The checkout this script lives in (one level up from bin/), through the
+# ~/.local/bin symlink, so lib/ and the Python modules are found regardless of
+# where it was invoked from.
 _self="${BASH_SOURCE[0]}"
 while [[ -L "$_self" ]]; do
   _link="$(readlink "$_self")"
   if [[ "$_link" == /* ]]; then _self="$_link"; else _self="$(dirname "$_self")/$_link"; fi
 done
-MIGITE_HOME="$(cd "$(dirname "$_self")" && pwd)"
+MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
-# shellcheck source=lib/common.sh
+# shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
 migite_resolve_python
 require_python

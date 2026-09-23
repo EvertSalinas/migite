@@ -113,7 +113,7 @@ bundle_exec() {
 # _spec.rb files, tracked (git diff --diff-filter=ACMR) union untracked (git
 # ls-files --others). A file that hasn't been `git add`-ed yet is invisible to
 # `git diff`, and thus to rubocop/rspec — this exact blind spot has recurred
-# at least five times in production (migite-improvements.md: 2026-07-23,
+# at least five times in production (docs/improvements.md: 2026-07-23,
 # 2026-08-05, 2026-08-11, 2026-08-12, 2026-08-17), each time fixed at one call
 # site and not the others. One shared function, used everywhere the two are
 # needed, so it can't drift out of sync again.
@@ -171,7 +171,7 @@ detect_base_branch() {
 
 # tooling_failed <log> — checks a rubocop/rspec output log for the failure
 # patterns migite has had to add detection for one at a time in production
-# (migite-improvements.md): a Ruby version not selected for `bundle exec`, a
+# (docs/improvements.md): a Ruby version not selected for `bundle exec`, a
 # git-sourced gem not checked out, or an rspec run that produced 0 examples
 # because of a DB connection failure or a load error. Echoes a short
 # description and returns 0 (failed) on a match, 1 (clean) otherwise — every

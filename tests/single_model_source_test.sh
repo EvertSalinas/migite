@@ -8,7 +8,7 @@
 # very first model change.
 
 offenders=$(grep -lE 'claude-(haiku|sonnet|opus|fable)-[0-9]' \
-  "$REPO_ROOT"/migite "$REPO_ROOT"/lib/*.sh "$REPO_ROOT"/lib/phases/*.sh "$REPO_ROOT"/migite-plan "$REPO_ROOT"/migite-review \
+  "$REPO_ROOT"/bin/* "$REPO_ROOT"/lib/*.sh "$REPO_ROOT"/lib/phases/*.sh "$REPO_ROOT"/migite-plan "$REPO_ROOT"/migite-review \
   "$REPO_ROOT"/migite-*.py "$REPO_ROOT"/migite_call.py "$REPO_ROOT"/migite_config.py \
   "$REPO_ROOT"/migite_agent.py "$REPO_ROOT"/migite_paths.py "$REPO_ROOT"/agents/base.py \
   "$REPO_ROOT"/agents/__init__.py "$REPO_ROOT"/agents/cursor.py "$REPO_ROOT"/agents/opencode.py 2>/dev/null \

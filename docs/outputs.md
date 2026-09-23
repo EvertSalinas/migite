@@ -58,7 +58,7 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
 A synced copy of every file above (same names, same paths under `$TASK_DIR`), meant for
 reading/browsing later — e.g. in Obsidian — not for resuming or working from directly. Safe to
 delete the scratchpad copy after merging; the vault mirror keeps the durable record.
-`knowledge.md` (one file per repo, not per-ticket) and `migite-improvements.md` (in the migite
+`knowledge.md` (one file per repo, not per-ticket) and `docs/improvements.md` (in the migite
 tool's own repo) are the exceptions — they live in the vault only, with no scratchpad copy.
 
 See [Vault structure](./vault-structure.md) for the full directory tree.
