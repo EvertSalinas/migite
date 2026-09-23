@@ -75,6 +75,10 @@ make_fixture_repo() {
   dir=$(mktemp -d)
   CLEANUP_DIRS+=("$dir")
   git init -q "$dir"
+  # Tests diff against `main`. Without a global init.defaultBranch (a fresh CI
+  # runner) git still creates `master`, so pin the branch name explicitly.
+  # symbolic-ref works on every git version; `git init -b` needs 2.28+.
+  git -C "$dir" symbolic-ref HEAD refs/heads/main
   git -C "$dir" config commit.gpgsign false
   git -C "$dir" config user.email test@example.com
   git -C "$dir" config user.name "migite tests"
