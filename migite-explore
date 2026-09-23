@@ -173,6 +173,11 @@ if ! git rev-parse --is-inside-work-tree &>/dev/null; then
 fi
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
+# Layered config (flags > env > .migite.yml > ~/.config/migite > defaults) — the
+# bash side only needs vault.base here; migite-explore.py loads the rest itself.
+eval "$("$MIGITE_PYTHON" "$SCRIPT_DIR/migite_config.py" env --repo-root "$REPO_ROOT")" || exit 1
+VAULT_BASE="${MIGITE_CFG_VAULT_BASE/#\~/$HOME}"
+
 # ── Collect the brief ─────────────────────────────────────────────────────────
 if [[ -z "$BRIEF_TEXT" && -z "$BRIEF_FILE" ]]; then
   echo ""

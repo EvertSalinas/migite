@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (bash + Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # PyYAML is optional at runtime (only needed when a YAML config exists);
+      # installed here so the YAML config tests run instead of skipping.
+      - name: Install optional test deps
+        run: python -m pip install --quiet pyyaml
+
+      - name: Python unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Resolver self-test
+        run: python migite_paths.py --self-test
+
+      # tests/run.sh uses a fake `claude` on PATH (tests/fake-claude) — no real
+      # model call is ever made, and no CLI install is needed.
+      - name: Bash test suite
+        env:
+          MIGITE_PYTHON: python
+        run: bash tests/run.sh
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+      # Error severity only for now — warnings are tracked but must not block
+      # until the existing style findings have been triaged.
+      - name: shellcheck (errors)
+        run: |
+          shellcheck -S error -s bash migite migite.d/*.sh migite-explore migite-audit migite-blueprint migite-pr-review tests/run.sh tests/*_test.sh tests/fake-claude
+      - name: shellcheck (warnings, informational)
+        continue-on-error: true
+        run: |
+          shellcheck -S warning -s bash migite migite.d/*.sh migite-explore migite-audit migite-blueprint migite-pr-review tests/run.sh tests/*_test.sh tests/fake-claude

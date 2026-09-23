@@ -69,6 +69,18 @@ run_doctor() {
     fi
   fi
 
+  # ── Configuration ──────────────────────────────────────────────────────────
+  # Validates the layered config for this repo (bad YAML / invalid enum → issue;
+  # unknown keys → warning) and shows which files were loaded.
+  local cfg_out cfg_rc=0
+  cfg_out=$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" --repo-root "$REPO_ROOT" validate 2>&1) || cfg_rc=$?
+  if [[ $cfg_rc -eq 0 ]]; then
+    printf '%s\n' "$cfg_out" | sed 's/^/  /' | sed '1s/^  ✔/✔/'
+  else
+    echo "✘ Config: $cfg_out"
+    issues=$((issues + 1))
+  fi
+
   # ── Phase prompts ──────────────────────────────────────────────────────────
   # plan.md / implement.md / review.md / architecture_critic.md ship in the
   # repo's prompts/ dir. migite, migite-plan and migite-review all hard-fail

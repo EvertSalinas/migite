@@ -95,6 +95,35 @@ class CallClaudeTest(_FakeClaude):
         self.assertIn('"required": ["verdict"]', argv)
         self.assertIn("--output-format json", argv)
 
+    def test_effort_flag_is_passed_and_skipped_for_haiku(self):
+        self.mode("envelope")
+        argv_file = str(Path(self.tmp.name) / "argv")
+        os.environ["FAKE_CLAUDE_ARGV"] = argv_file
+        migite_claude.call_claude("x", "claude-opus-5-5", effort="xhigh")
+        self.assertIn("--effort xhigh", Path(argv_file).read_text())
+        migite_claude.call_claude("x", "claude-haiku-4-5-20251001", effort="xhigh")
+        self.assertNotIn("--effort", Path(argv_file).read_text())   # Haiku rejects the flag
+        migite_claude.call_claude("x", "claude-sonnet-5", effort="none")
+        self.assertNotIn("--effort", Path(argv_file).read_text())
+        migite_claude.call_claude("x", "claude-sonnet-5")
+        self.assertNotIn("--effort", Path(argv_file).read_text())
+
+    def test_role_effort_table_from_configure(self):
+        self.mode("envelope")
+        argv_file = str(Path(self.tmp.name) / "argv")
+        os.environ["FAKE_CLAUDE_ARGV"] = argv_file
+        old = dict(migite_claude.ROLE_EFFORT)
+        try:
+            migite_claude.ROLE_EFFORT = {"critic": "max", "knowledge": None}
+            migite_claude.call_claude("x", "claude-opus-5-5", role="critic")
+            self.assertIn("--effort max", Path(argv_file).read_text())
+            migite_claude.call_claude("x", "claude-sonnet-5", role="knowledge")
+            self.assertNotIn("--effort", Path(argv_file).read_text())
+            migite_claude.call_claude("x", "claude-opus-5-5", role="critic", effort="low")   # explicit beats table
+            self.assertIn("--effort low", Path(argv_file).read_text())
+        finally:
+            migite_claude.ROLE_EFFORT = old
+
     def test_plain_text_stdout_falls_back_gracefully(self):
         self.mode("text")
         r = migite_claude.call_claude("hi", "m", ledger=self.ledger)

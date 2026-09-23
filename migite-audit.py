@@ -9,7 +9,6 @@ import argparse
 import glob
 import operator
 import os
-import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -18,10 +17,13 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_claude
+import migite_config
 import migite_paths
 
-EXPLORE_MODEL = "claude-haiku-4-5-20251001"
-THINK_MODEL   = "claude-sonnet-5"
+# Defaults from migite_config's single table; main() replaces them from the loaded config.
+EXPLORE_MODEL = migite_config.default_model("audit_area")
+THINK_MODEL   = migite_config.default_model("audit_synth")
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
@@ -96,25 +98,9 @@ AUDIT_AREAS = [
 
 # ── Claude call ─────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = THINK_MODEL) -> str:
-    import time
-    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
-    permission_mode = os.environ.get("MIGITE_PERMISSION_MODE", "")
-    if permission_mode:
-        cmd += ["--permission-mode", permission_mode]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
-    t0 = time.monotonic()
-    try:
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=600)
-    except subprocess.TimeoutExpired:
-        elapsed = time.monotonic() - t0
-        raise RuntimeError(f"claude --print timed out after {elapsed:.0f}s (limit=600s, model={model})")
-    elapsed = time.monotonic() - t0
-    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {r.returncode})", flush=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"claude --print failed (exit {r.returncode}, {elapsed:.1f}s): {r.stderr[:300]}")
-    return r.stdout.strip()
+def call_claude(prompt: str, model: str, label: str = "", role: str = "") -> str:
+    """Shared wrapper (migite_claude): JSON envelope, usage ledger, config-driven timeouts/permissions/effort."""
+    return migite_claude.call_claude(prompt, model, tool="migite-audit", label=label, role=role).text
 
 
 # ── File reading ─────────────────────────────────────────────────────────────────
@@ -210,7 +196,7 @@ If nothing found output exactly: ✅ No issues in {area}.
 No preamble. Findings only."""
 
     try:
-        result = call_claude(prompt, model=EXPLORE_MODEL)
+        result = call_claude(prompt, model=EXPLORE_MODEL, label=f"audit:{area}", role="audit_area")
     except Exception as e:
         result = f"🔴 **Critical** — audit failed for {area}: {e}"
     return {"findings": [f"### {area}\n{result}"]}
@@ -255,7 +241,7 @@ Date: {today}
 Output only the report."""
 
     try:
-        report = call_claude(prompt, model=THINK_MODEL)
+        report = call_claude(prompt, model=THINK_MODEL, label="synthesize_report", role="audit_synth")
     except Exception as e:
         report = f"# Codebase Audit — {state['repo_name']}\n\nSynthesis failed: {e}"
     return {"report": report}
@@ -304,6 +290,19 @@ def main() -> None:
     ap.add_argument("--output", default="", help="Output file path (default: vault)")
     ap.add_argument("--jira",   default="", help="Jira ticket key or URL — groups this audit under the ticket's existing folder")
     args = ap.parse_args()
+
+    global EXPLORE_MODEL, THINK_MODEL, VAULT_BASE
+    try:
+        cfg = migite_config.load(args.repo_root)
+    except migite_config.ConfigError as e:
+        print(f"✘ config error: {e}", file=sys.stderr)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    EXPLORE_MODEL = cfg.model("audit_area")
+    THINK_MODEL   = cfg.model("audit_synth")
+    VAULT_BASE    = str(cfg.expanded_path("vault.base"))
+    migite_claude.configure_from(cfg)
 
     repo_name = Path(args.repo_root).name
     org       = migite_paths.detect_org(args.repo_root)

@@ -24,10 +24,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 import migite_claude
+import migite_config
 import migite_paths
 
-REVIEW_MODEL  = "claude-sonnet-5"
-CRITIC_MODEL  = "claude-opus-5"
+# Defaults from migite_config's single table; main() replaces them from the loaded
+# config (one role per review dimension, plus `verdict`).
+REVIEW_MODEL  = migite_config.default_model("review_test_coverage")
+CRITIC_MODEL  = migite_config.default_model("verdict")
 
 # Structured-output schema for the verdict synthesis. `claude --json-schema`
 # validates the model's reply against this, so the verdict the commit gate
@@ -61,8 +64,10 @@ REVIEW_SCHEMA = {
 VERDICT_KEY = {"NEEDS FIXES": "needs_fixes", "READY TO COMMIT": "ready"}
 
 # Ships in the repo's prompts/ dir next to this script (resolve() follows the
-# ~/.local/bin symlink). Hard error if missing — see read_prompt().
-REVIEW_CMD_PATH = Path(__file__).resolve().parent / "prompts" / "review.md"
+# ~/.local/bin symlink); `prompts.dir` in the config can override it per project.
+# Hard error if missing — see read_prompt().
+MIGITE_HOME = Path(__file__).resolve().parent
+REVIEW_CMD_PATH = MIGITE_HOME / "prompts" / "review.md"
 
 
 def read_prompt(path: Path) -> str:
@@ -103,10 +108,17 @@ REVIEW_DIMENSIONS = [
 # ── Claude subprocess call ──────────────────────────────────────────────────────
 
 def call_claude(prompt: str, model: str = REVIEW_MODEL, label: str = "",
-                schema: dict | None = None) -> migite_claude.CallResult:
+                schema: dict | None = None, role: str = "") -> migite_claude.CallResult:
     """Shared wrapper (see migite_claude): records usage under this tool + label;
-    with `schema`, the result carries schema-validated `.structured` output."""
-    return migite_claude.call_claude(prompt, model, tool="migite-review", label=label, schema=schema)
+    with `schema`, the result carries schema-validated `.structured` output;
+    `role` selects the configured --effort level."""
+    return migite_claude.call_claude(prompt, model, tool="migite-review", label=label, schema=schema, role=role)
+
+
+# Per-dimension models — one config role per reviewer (review_<dimension>), so
+# correctness and security can sit on the strong tier while checklist
+# dimensions stay standard. Filled in main() from the config.
+DIMENSION_MODELS: dict[str, str] = {}
 
 
 def verdict_from_markdown(doc: str) -> str:
@@ -148,6 +160,7 @@ class ReviewState(TypedDict):
 class DimensionInput(TypedDict):
     dimension: str
     description: str
+    model: str
     plan: str
     implementation: str
     rubocop_log: str
@@ -177,6 +190,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
         Send("review_dimension", {
             "dimension": dim,
             "description": desc,
+            "model": DIMENSION_MODELS.get(dim, REVIEW_MODEL),
             "plan": state["plan"],
             "implementation": state["implementation"],
             "rubocop_log": state["rubocop_log"],
@@ -190,7 +204,8 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
 
 def review_dimension(state: DimensionInput) -> dict:
     dim = state["dimension"]
-    print(f"    ◦ {dim}", flush=True)
+    model = state.get("model") or REVIEW_MODEL
+    print(f"    ◦ {dim}  ({model})", flush=True)
     testing_plan_block = ""
     if dim == "testing_plan":
         content = state.get("testing_plan") or "(no testing-plan.md found for this task)"
@@ -224,7 +239,7 @@ If nothing found, output exactly: ✅ No issues in this dimension.
 Do not repeat findings that other dimensions would cover."""
 
     try:
-        result = call_claude(prompt, label=f"review:{dim}").text
+        result = call_claude(prompt, model=model, label=f"review:{dim}", role=f"review_{dim}").text
     except Exception as e:
         result = f"🔴 **Critical** — reviewer failed: {e}"
     return {"findings": [f"### {dim}\n{result}"]}
@@ -264,7 +279,7 @@ Return a JSON object matching the provided schema:
 - `findings`: every de-duplicated finding as an object (severity, dimension, file, line, problem, fix)
 - `document`: the COMPLETE review document in the format above, as markdown, with the same verdict"""
     try:
-        res = call_claude(structured_prompt, model=CRITIC_MODEL, label="synthesize_verdict", schema=REVIEW_SCHEMA)
+        res = call_claude(structured_prompt, model=CRITIC_MODEL, label="synthesize_verdict", schema=REVIEW_SCHEMA, role="verdict")
         s = res.structured if isinstance(res.structured, dict) else None
         if s and s.get("verdict") in VERDICT_KEY and s.get("document"):
             meta = {
@@ -282,7 +297,7 @@ Return a JSON object matching the provided schema:
     # Fallback: plain document, verdict and counts derived deterministically from it.
     try:
         doc = call_claude(base_prompt + "\n\nOutput only the review document.",
-                          model=CRITIC_MODEL, label="synthesize_verdict:text").text
+                          model=CRITIC_MODEL, label="synthesize_verdict:text", role="verdict").text
     except Exception as e:
         doc = f"# Review\n\n## Verdict: NEEDS FIXES\n\nReview synthesis failed: {e}"
     meta = {
@@ -372,6 +387,21 @@ def main() -> None:
     ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
     args = ap.parse_args()
 
+    global REVIEW_MODEL, CRITIC_MODEL, REVIEW_CMD_PATH
+    try:
+        cfg = migite_config.load(args.repo_root)
+    except migite_config.ConfigError as e:
+        print(f"  ✘ migite-review: config error: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    for dim, _ in REVIEW_DIMENSIONS:
+        DIMENSION_MODELS[dim] = cfg.model(f"review_{dim}")
+    REVIEW_MODEL = cfg.model("review_test_coverage")   # fallback only; every dimension has its own role
+    CRITIC_MODEL = cfg.model("verdict")
+    migite_claude.configure_from(cfg)
+    REVIEW_CMD_PATH = cfg.prompt_path("review", MIGITE_HOME, args.repo_root)
+
     base_branch = args.base_branch or migite_paths.detect_base_branch(args.repo_root)
 
     def read_or_empty(path: str) -> str:
@@ -385,7 +415,8 @@ def main() -> None:
     testing_plan   = read_or_empty(args.testing_plan) if args.testing_plan else ""
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
-    print(f"\n  migite-review | model={REVIEW_MODEL}  base branch: {base_branch}", flush=True)
+    dims = "  ".join(f"{d}={m}" for d, m in DIMENSION_MODELS.items())
+    print(f"\n  migite-review | {dims}  verdict={CRITIC_MODEL}  base branch: {base_branch}", flush=True)
 
     graph = build_graph()
     try:

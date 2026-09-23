@@ -154,7 +154,7 @@ Date: $DATE
 
 Output ONLY this document — no preamble, no meta-commentary."
 
-  thinking "Generating amendment $AMEND_NUM" "$AMENDMENT_FILE" "$AMEND_PROMPT" "--model claude-sonnet-5"
+  thinking "Generating amendment $AMEND_NUM" "$AMENDMENT_FILE" "$AMEND_PROMPT" "$(cfg_model_flags amend)"
   [[ -s "$AMENDMENT_FILE" ]] || error "Amendment generation returned empty output"
   sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
   success "Amendment written to $AMENDMENT_FILE"
@@ -196,7 +196,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
     local testing_plan_tmp
     testing_plan_tmp=$(mktemp)
-    thinking "Updating testing plan for amendment $AMEND_NUM" "$testing_plan_tmp" "$testing_plan_prompt" "--model claude-sonnet-5"
+    thinking "Updating testing plan for amendment $AMEND_NUM" "$testing_plan_tmp" "$testing_plan_prompt" "$(cfg_model_flags testing_plan)"
     if [[ -s "$testing_plan_tmp" ]]; then
       mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
       sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
@@ -228,7 +228,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
         _amend_refine_tmp=$(mktemp)
         printf 'Here is the current amendment document:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the amendment to address the feedback. Keep the same structure and format. Output only the revised amendment document — no preamble.' \
           "$(cat "$AMENDMENT_FILE")" "$_amend_gate_feedback" \
-          | claude_print "amend-refine" --model claude-sonnet-5 \
+          | claude_print "amend-refine" $(cfg_model_flags amend) \
           > "$_amend_refine_tmp" 2>/dev/null || true
         if [[ -s "$_amend_refine_tmp" ]]; then
           mv "$_amend_refine_tmp" "$AMENDMENT_FILE"

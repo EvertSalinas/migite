@@ -25,18 +25,39 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_claude
+import migite_config
 import migite_paths
 
 # ── Models ──────────────────────────────────────────────────────────────────────
 # Exploration quality is the entire product here - there is no implementation
-# phase downstream to catch a shallow read, so lenses use Sonnet rather than
-# Haiku. Synthesis and the adversarial challenge use Opus.
-LENS_MODEL      = "claude-sonnet-5"
-SYNTH_MODEL     = "claude-opus-5"
-CHALLENGE_MODEL = "claude-opus-5"
-REFINE_MODEL    = "claude-sonnet-5"
+# phase downstream to catch a shallow read, so lenses use the standard tier
+# rather than fast; synthesis, the adversarial challenge, and the refine that
+# applies it use the strong tier. Defaults from migite_config's single table;
+# main() replaces them from the loaded config.
+LENS_MODEL      = migite_config.default_model("lens")
+SYNTH_MODEL     = migite_config.default_model("explore_synth")
+CHALLENGE_MODEL = migite_config.default_model("challenge")
+REFINE_MODEL    = migite_config.default_model("explore_refine")
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
+
+
+def apply_config(repo_root: str | None) -> None:
+    global LENS_MODEL, SYNTH_MODEL, CHALLENGE_MODEL, REFINE_MODEL, VAULT_BASE
+    try:
+        cfg = migite_config.load(repo_root)
+    except migite_config.ConfigError as e:
+        print(f"✘ config error: {e}", file=sys.stderr)
+        sys.exit(1)
+    for w in cfg.warnings:
+        print(f"  ⚠ config: {w}", flush=True)
+    LENS_MODEL      = cfg.model("lens")
+    SYNTH_MODEL     = cfg.model("explore_synth")
+    CHALLENGE_MODEL = cfg.model("challenge")
+    REFINE_MODEL    = cfg.model("explore_refine")
+    VAULT_BASE      = str(cfg.expanded_path("vault.base"))
+    migite_claude.configure_from(cfg)
 
 NOISE_SUFFIXES = (
     ".lock", ".sum", ".min.js", ".map", ".svg", ".png", ".jpg", ".jpeg",
@@ -120,33 +141,10 @@ EXPLORE_LENSES = [
 
 # ── Claude call ─────────────────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = LENS_MODEL, thinking: bool = False) -> str:
-    import time
-    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
-    permission_mode = os.environ.get("MIGITE_PERMISSION_MODE", "")
-    if permission_mode:
-        cmd += ["--permission-mode", permission_mode]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    timeout = 900 if thinking else 600
-
-    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
-    t0 = time.monotonic()
-    try:
-        r = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, env=env, timeout=timeout
-        )
-    except subprocess.TimeoutExpired:
-        elapsed = time.monotonic() - t0
-        raise RuntimeError(
-            f"claude --print timed out after {elapsed:.0f}s (limit={timeout}s, model={model})"
-        )
-    elapsed = time.monotonic() - t0
-    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {r.returncode})", flush=True)
-    if r.returncode != 0:
-        raise RuntimeError(
-            f"claude --print failed (exit {r.returncode}, {elapsed:.1f}s): {r.stderr[:400]}"
-        )
-    return r.stdout.strip()
+def call_claude(prompt: str, model: str, thinking: bool = False, label: str = "", role: str = "") -> str:
+    """Shared wrapper (migite_claude): JSON envelope, usage ledger, CLAUDECODE
+    stripping, timeouts, headless permission mode and per-role --effort from the config."""
+    return migite_claude.call_claude(prompt, model, thinking=thinking, tool="migite-explore", label=label, role=role).text
 
 
 def run_cmd(cmd: str, cwd: str, timeout: int = 60) -> str:
@@ -377,7 +375,7 @@ Rules:
 Output findings only. No preamble."""
 
     try:
-        findings = call_claude(prompt, model=LENS_MODEL)
+        findings = call_claude(prompt, model=LENS_MODEL, label=f"lens:{lens}", role="lens")
     except Exception as e:
         findings = f"UNKNOWN: lens failed - {e}"
     return {"lens_reports": [f"### {lens}\n{findings}"]}
@@ -519,7 +517,7 @@ Honesty requirements:
 
 Output only the document."""
 
-    draft = call_claude(prompt, model=SYNTH_MODEL, thinking=True)
+    draft = call_claude(prompt, model=SYNTH_MODEL, thinking=True, label="synthesize_exploration", role="explore_synth")
     return {"exploration_draft": draft}
 
 
@@ -570,7 +568,7 @@ If the document is sound on every axis, output exactly:
 Output findings only. No preamble."""
 
     try:
-        findings = call_claude(prompt, model=CHALLENGE_MODEL, thinking=True)
+        findings = call_claude(prompt, model=CHALLENGE_MODEL, thinking=True, label="challenge_assumptions", role="challenge")
     except Exception as e:
         findings = f"🔴 **Critical** - challenge pass failed: {e}"
     return {"challenges": findings}
@@ -605,7 +603,7 @@ Preserve these formatting rules:
 Output only the revised document."""
 
     try:
-        refined = call_claude(prompt, model=REFINE_MODEL, thinking=True)
+        refined = call_claude(prompt, model=REFINE_MODEL, thinking=True, label="refine_exploration", role="explore_refine")
     except Exception as e:
         print(f"    ⚠ Refine failed ({e}) - keeping draft", flush=True)
         return {"exploration_final": state["exploration_draft"]}
@@ -662,7 +660,7 @@ workstream must respect or resolve>
 Produce one block per workstream, in sequence order. Output only the delimited blocks."""
 
     try:
-        raw = call_claude(prompt, model=REFINE_MODEL)
+        raw = call_claude(prompt, model=REFINE_MODEL, label="extract_workstreams", role="explore_refine")
     except Exception as e:
         print(f"    ⚠ Workstream extraction failed: {e}", flush=True)
         raw = ""
@@ -816,6 +814,7 @@ def main() -> None:
                     help="Re-extract workstream intakes from an existing exploration.md")
     args = ap.parse_args()
 
+    apply_config(args.repo_root)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # ── Re-extract mode: no repo, no brief, no model-heavy phases ──────────────

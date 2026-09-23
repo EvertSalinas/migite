@@ -29,6 +29,12 @@ check "prompts: no Jira MCP fetch instruction (headless calls have no tool acces
 check "prompts: no hardcoded 'git diff main' (base branch is auto-detected)" \
   not grep -rq 'git diff main' "$prompts"
 
+# The shipped PR template is generic — a team's own checklist belongs in a templates.dir override
+check "templates/commit.md: no organisation-specific hosts, ticket prefixes, or CI names" \
+  not grep -qiE 'apptegy|atlassian\.net|THRILL|brakeman|jenkins' "$REPO_ROOT/templates/commit.md"
+check "templates/commit.md: keeps the [PR_FILE] placeholder deliver.sh substitutes" \
+  grep -qF '[PR_FILE]' "$REPO_ROOT/templates/commit.md"
+
 # The stub failure mode: a confirmation sentence instead of the document
 check "prompts/plan.md: no 'written to Obsidian' confirmation line (this WAS the observed stub output)" \
   not grep -qi 'written to Obsidian' "$prompts/plan.md"

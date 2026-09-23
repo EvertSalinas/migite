@@ -66,9 +66,12 @@ run_review() {
     if [[ -n "$CHANGED_SPECS" ]]; then
       # shellcheck disable=SC2086
       bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
-    else
-      warn "No spec files changed — running full suite"
+    elif [[ "$(cfg heal.full_suite_fallback true)" == "true" ]]; then
+      warn "No spec files changed — running full suite (heal.full_suite_fallback: true)"
       bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+    else
+      warn "No spec files changed — skipping rspec (heal.full_suite_fallback: false)"
+      echo "No spec files changed." > "$RSPEC_LOG"
     fi
     local rspec_tooling_msg
     if rspec_tooling_msg=$(tooling_failed "$RSPEC_LOG"); then
@@ -148,8 +151,10 @@ run_review() {
       if [[ -n "$CHANGED_SPECS" ]]; then
         # shellcheck disable=SC2086
         bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
-      else
+      elif [[ "$(cfg heal.full_suite_fallback true)" == "true" ]]; then
         bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+      else
+        echo "No spec files changed." > "$RSPEC_LOG"
       fi
       # Re-evaluate so a fixed toolchain clears the banner (and a newly broken
       # one sets it) instead of the first pass's verdict sticking forever.
@@ -174,11 +179,61 @@ run_review() {
     fi
   }
 
+  # gates.commit.policy — what `y` may approve over.
+  #   lenient (default, the pre-config behaviour): y always approves.
+  #   strict: y is refused while any blocker below remains; a capital Y approves
+  #           anyway and records the override in gate-overrides.md (synced to the vault).
+  _commit_gate_blockers() {
+    local -a b=()
+    [[ "$(review_verdict "$REVIEW_FILE")" == "needs_fixes" ]] && b+=("review verdict is NEEDS FIXES")
+    if [[ "$(cfg gates.commit.require_green_specs true)" == "true" ]]; then
+      [[ -n "${TOOLING_ERROR:-}" ]] && b+=("tooling error: $TOOLING_ERROR")
+      local fl
+      fl=$(grep -oE '[1-9][0-9]* failure[s]?' "$RSPEC_LOG" 2>/dev/null | head -1 || true)
+      [[ -n "$fl" ]] && b+=("$fl in rspec")
+    fi
+    if [[ "$(cfg gates.commit.require_clean_lint true)" == "true" && -n "${RUBOCOP_FINAL_OFFENSES:-}" && "$RUBOCOP_FINAL_OFFENSES" != "0" ]]; then
+      b+=("$RUBOCOP_FINAL_OFFENSES rubocop offense(s) remain")
+    fi
+    [[ ${#b[@]} -gt 0 ]] && printf '%s\n' "${b[@]}"
+    return 0
+  }
+  _record_gate_override() {
+    local blockers="$1" f="$SCRATCHPAD_DIR/gate-overrides.md"
+    {
+      echo "## $DATE $(date +%H:%M) — commit gate approved over blockers"
+      printf '%s\n' "$blockers" | sed 's/^/- /'
+      echo ""
+    } >> "$f"
+    sync_artifact "$f" "$TASK_DIR/gate-overrides.md"
+  }
+
   while true; do
     show_commit_context
     read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort): "
     case "${GATE_CHOICE:-}" in
-      y|Y)
+      y)
+        if [[ "$(cfg gates.commit.policy lenient)" == "strict" ]]; then
+          local _blockers
+          _blockers=$(_commit_gate_blockers)
+          if [[ -n "$_blockers" ]]; then
+            warn "gates.commit.policy is strict — approval refused while blockers remain:"
+            printf '%s\n' "$_blockers" | sed 's/^/    - /'
+            echo -e "  ${YELLOW}Fix them (f / n), or type a capital ${BOLD}Y${RESET}${YELLOW} to approve anyway — the override is recorded in gate-overrides.md${RESET}"
+            continue
+          fi
+        fi
+        success "Approved — continuing"
+        break
+        ;;
+      Y)
+        local _blockers
+        _blockers=$(_commit_gate_blockers)
+        if [[ -n "$_blockers" ]]; then
+          warn "Approving over blockers (explicit override, recorded):"
+          printf '%s\n' "$_blockers" | sed 's/^/    - /'
+          _record_gate_override "$_blockers"
+        fi
         success "Approved — continuing"
         break
         ;;
@@ -237,7 +292,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
           local testing_plan_tmp
           testing_plan_tmp=$(mktemp)
-          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "--model claude-sonnet-5"
+          thinking "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT" "$(cfg_model_flags testing_plan)"
           if [[ -s "$testing_plan_tmp" ]]; then
             mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
             sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"

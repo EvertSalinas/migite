@@ -58,6 +58,14 @@ def detect_org(repo_root: str) -> str:
     env_org = os.environ.get("MIGITE_ORG")
     if env_org:
         return env_org
+    # vault.org from .migite.yml / ~/.config/migite/config.yml (env above still wins)
+    try:
+        import migite_config
+        cfg_org = migite_config.load(repo_root).get("vault.org")
+        if cfg_org:
+            return str(cfg_org)
+    except Exception:
+        pass
     return Path(repo_root).resolve().parent.name or "Personal"
 
 
@@ -180,6 +188,10 @@ def run_self_test() -> None:
     with tempfile.TemporaryDirectory() as base_tmp:
         subprocess.run("git init -q", shell=True, cwd=base_tmp)
         subprocess.run("git config commit.gpgsign false", shell=True, cwd=base_tmp)
+        # A fresh CI runner has no global identity; without these the commit below
+        # fails with "Author identity unknown" and the whole self-test aborts.
+        subprocess.run("git config user.email migite-tests@example.com", shell=True, cwd=base_tmp)
+        subprocess.run("git config user.name 'migite tests'", shell=True, cwd=base_tmp)
         subprocess.run("git commit --allow-empty -q -m init", shell=True, cwd=base_tmp)
         subprocess.run("git branch -m master", shell=True, cwd=base_tmp)
         check(
