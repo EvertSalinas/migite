@@ -361,7 +361,32 @@ in that case. `--jira` only affects the output path when it parses as a ticket k
 URL — a free-text value is still passed into the review as reference context, just without
 grouping the output under a ticket folder.
 
-**Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5-5` for the final verdict. This tool is read-only — it never commits anything, there's no gate to approve.
+**Every finding comes with a fix.** Each reviewer reports a finding as a problem, a **Fix** concrete
+enough to apply (which file, which method, what to change, with a short code block when the change
+is small), and one or two **Alternatives** with their trade-off when they genuinely exist. The
+synthesis numbers the findings across severities so they can be quoted in PR comments, keeps every
+fix in full, and merges duplicate reports by keeping the more concrete fix and listing the other as
+an alternative. If the synthesized review leaves any finding without a fix, it is asked once more,
+and the draft with fewer gaps is kept:
+
+~~~markdown
+## Findings
+### Critical
+#### 🔴 1. Any user can delete any item · `app/controllers/items_controller.rb:12`
+**Problem:** `destroy` looks the item up by id alone, so a signed-in user can delete another user's item.
+**Fix:** scope the lookup to the current user, which also turns a foreign id into a 404:
+```ruby
+@item = current_user.items.find(params[:id])
+```
+**Alternative:** an `ItemPolicy#destroy?` check, if the app already authorizes with Pundit elsewhere.
+
+### Notes
+#### 🟢 2. Unexplained retention period · `app/models/item.rb:4`
+**Problem:** `30.days` has no name, and the same value appears in the purge job.
+**Fix:** extract `RETENTION_PERIOD = 30.days` on `Item` and use it in both places.
+~~~
+
+**Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5-5` for the final verdict. This tool is read-only: it never commits anything, and there's no gate to approve.
 
 ---
 

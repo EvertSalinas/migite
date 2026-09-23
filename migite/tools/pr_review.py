@@ -244,8 +244,22 @@ Your focus: **{dim}** only. Do not repeat issues covered by other dimensions.
 Check for:
 {state['checks']}
 
-For each finding output exactly:
-- 🔴 **Critical** / 🟡 **Warning** / 🟢 **Note** — `path/file.rb:N` — problem — suggested fix
+For each finding, output this block. The Fix line is required on every finding, Notes included:
+
+- 🔴 **Critical** (or 🟡 **Warning**, or 🟢 **Note**) · `path/file.rb:N` · <short title>
+  - **Problem:** <what is wrong, and what it causes in practice>
+  - **Fix:** <the change you recommend: which file, which method or line, and what to change,
+    concrete enough to apply without re-reading the diff. When the change is small and local,
+    include it as a short fenced code block.>
+  - **Alternative:** <another viable approach, and the trade-off that would make someone pick it>
+
+Rules for fixes:
+- Give one or two Alternatives only when they genuinely exist; omit the line when there is one sensible fix.
+- Name the code to change. Never "consider refactoring" or "add tests" without saying which test
+  and what it asserts.
+- Stay within this PR's scope. When the right fix is larger, give the minimal safe fix as Fix
+  and the larger change as the Alternative.
+- Only build on code you can see above. Don't invent methods, files, or gems.
 
 If no issues found: ✅ No issues in {dim}.
 No preamble. Findings only."""
@@ -253,8 +267,39 @@ No preamble. Findings only."""
     try:
         result = call_agent(prompt, f"pr_review_{dim}", label=f"review:{dim}")
     except Exception as e:
-        result = f"🔴 **Critical** — reviewer failed: {e}"
+        result = (f"- 🔴 **Critical** · (none) · the {dim} reviewer failed\n"
+                  f"  - **Problem:** {e}\n"
+                  f"  - **Fix:** re-run migite-pr-review; if it fails again, check the agent CLI with `migite doctor`.")
     return {"findings": [f"### {dim}\n{result}"]}
+
+
+FINDING_RE = re.compile(r"^#{3,4}\s*[🔴🟡🟢]")
+
+
+def findings_without_fix(doc: str) -> list[str]:
+    """Titles of findings in the review's Findings section that have no **Fix:** line.
+    A finding is a heading that starts with a severity mark; its block runs to the next
+    heading of the same kind or the next top-level section."""
+    missing: list[str] = []
+    in_findings = False
+    title, has_fix = None, False
+    for line in doc.splitlines() + ["## end"]:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if title is not None and not has_fix:
+                missing.append(title)
+            title, has_fix = None, False
+            in_findings = stripped.lower().startswith("## findings")
+            continue
+        if not in_findings:
+            continue
+        if FINDING_RE.match(stripped):
+            if title is not None and not has_fix:
+                missing.append(title)
+            title, has_fix = stripped.lstrip("#").strip(), False
+        elif title is not None and re.match(r"^[-*\s]*\*\*Fix:\*\*", stripped):
+            has_fix = True
+    return missing
 
 
 def synthesize_verdict(state: PRReviewState) -> dict:
@@ -273,9 +318,13 @@ def synthesize_verdict(state: PRReviewState) -> dict:
 {findings_text}
 
 Produce a single PR review document:
-1. De-duplicate findings reported by multiple reviewers
-2. Group by severity: Critical → Warnings → Notes
-3. Keep file paths for every finding
+1. De-duplicate findings reported by multiple reviewers. When two reviewers suggest different fixes
+   for the same issue, keep the more concrete one as Fix and the other as an Alternative.
+2. Group by severity: Critical, then Warnings, then Notes. Number findings continuously across the
+   groups (1, 2, 3, ...) so they can be referenced in PR comments.
+3. Keep the file path and line for every finding.
+4. Every finding keeps its Fix, and its Alternatives when a reviewer gave them. Copy fixes and
+   their code blocks in full; never shorten a fix to a phrase or drop it.
 
 Output format:
 # PR Review: {state['branch']}
@@ -288,24 +337,43 @@ Base: {state['base']}
 
 ## Findings
 ### Critical
-- 🔴 `path/file.rb:N` — problem — fix
+#### 🔴 1. <short title> · `path/file.rb:N`
+**Problem:** <what is wrong, and what it causes>
+**Fix:** <the recommended change, with a short code block when it helps>
+**Alternative:** <another approach and its trade-off; one line per alternative, omitted when there is none>
 
 ### Warnings
-- 🟡 `path/file.rb:N` — problem — fix
+#### 🟡 2. <short title> · `path/file.rb:N`
+**Problem:** ...
+**Fix:** ...
 
 ### Notes
-- 🟢 `path/file.rb:N` — observation
+#### 🟢 3. <short title> · `path/file.rb:N`
+**Problem:** ...
+**Fix:** ...
 
 ## Verdict
 APPROVED — no issues requiring changes before merge
 APPROVED WITH COMMENTS — minor issues; can merge after addressing
 NEEDS CHANGES — one or more issues must be fixed before merging
 
-(If no issues found in any dimension, omit Findings entirely)
+(Omit a severity group that has no findings. If no issues were found in any dimension, omit Findings entirely.)
 Output only the review document."""
 
     try:
         verdict = call_agent(prompt, label="synthesize_verdict", role="pr_verdict")
+        missing = findings_without_fix(verdict)
+        if missing:
+            # The one thing a reader acts on is the fix; a finding without one is half a review.
+            print(f"    ⚠ {len(missing)} finding(s) came back without a fix; asking once more", flush=True)
+            retry = (prompt + "\n\nYour previous draft left these findings without a **Fix:** line: "
+                     + "; ".join(missing) + ". Every finding needs one. Output the full document again.")
+            second = call_agent(retry, label="synthesize_verdict:retry", role="pr_verdict")
+            if len(findings_without_fix(second)) < len(missing):
+                verdict = second
+            still = findings_without_fix(verdict)
+            if still:
+                print(f"    ⚠ still without a fix: {'; '.join(still)}", flush=True)
     except Exception as e:
         verdict = (
             f"# PR Review: {state['branch']}\nDate: {today}\n\n"
