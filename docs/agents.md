@@ -24,13 +24,13 @@ agent:
 | Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache, cost | none (zeros recorded) | cost and tokens summed from `step_finish` events |
 | Structured output | the `review.json` verdict | `--json-schema` | no → the reviewer parses markdown | no → the reviewer parses markdown |
 | Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped |
-| Tool scope `jira.read` | the Jira fetch | the two Atlassian read tools via `--allowedTools` | no → the fetch is skipped with a warning | no → the fetch is skipped with a warning |
+| Tool scope `jira.read` | the Jira fetch's agent fallback | the two Atlassian read tools via `--allowedTools` | no → only `acli` can fetch | no → only `acli` can fetch |
 | Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | `auto`/`edits` → `--auto` |
 | Exit command shown by `run_phase` | interactive sessions | `/exit` | `/quit` | `/exit` |
 | Project rules it reads | the implement prompt names them | `CLAUDE.md` | `AGENTS.md` and `.cursor/rules` | `AGENTS.md` |
 
 Everything degrades explicitly, never silently: the reviewer announces it is using text
-synthesis, the planner warns that the Jira fetch was skipped, and the ledger records a call
+synthesis, the planner warns when no ticket source can run, and the ledger records a call
 with zero cost when the agent reports none. A call that asks for a scope the agent can't honour
 is refused before the CLI starts; it is never run with every tool. `migite doctor` names the
 agent, checks its executable resolves, and prints its version.
@@ -168,4 +168,6 @@ adapter.
 - Cursor headless mode without `--force` only proposes changes; migite maps `auto` and `edits`
   to `--force`, so the heal loop needs one of those.
 - The `jira.read` scope maps to claude.ai's Atlassian connector tools. A different Atlassian MCP
-  server exposes different tool names, and those are not configurable yet.
+  server exposes different tool names, and those are not configurable yet. With `acli` installed
+  and logged in, the Jira fetch uses it instead and needs no scope at all
+  ([tickets.md](./tickets.md)).

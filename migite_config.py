@@ -50,11 +50,23 @@ USER_FILE_NAMES = ("config.yml", "config.yaml", "config.json")
 AGENT_BACKENDS = agents.names()
 PERMISSION_WORDS = agents.PERMISSIONS + tuple(agents.PERMISSION_ALIASES)
 PERMISSION_KEYS = ("permissions.interactive", "permissions.heal", "permissions.headless")
+# Mirrors migite_ticket.PROVIDERS (a test keeps them equal; importing it here would be a cycle).
+TRACKER_PROVIDERS = ("auto", "jira-acli", "jira-agent", "none")
 
 DEFAULTS: dict[str, Any] = {
     "agent": {
         "backend": "claude",             # claude | cursor | opencode  (MIGITE_AGENT)
         "command": None,                 # override the backend's executable (path or name)
+    },
+    "tracker": {
+        # Where a ticket's content comes from (migite_ticket.py). auto = jira-acli when
+        # acli is installed and logged in, else jira-agent when the agent can run a
+        # jira.read-scoped call, else none. (MIGITE_TRACKER)
+        "provider": "auto",              # auto | jira-acli | jira-agent | none
+        "jira": {
+            "acli": "acli",              # MIGITE_ACLI: Atlassian's CLI (name on PATH or a full path)
+            "acceptance_field": None,    # custom field id holding acceptance criteria, e.g. customfield_10035
+        },
     },
     "vault": {
         "base": "~/dev-log",       # DEV_LOG_BASE
@@ -168,6 +180,8 @@ def default_model(role: str, backend: str = agents.DEFAULT) -> str:
 # variable migite documented before the config file existed working unchanged.
 ENV_OVERRIDES: dict[str, str] = {
     "MIGITE_AGENT": "agent.backend",
+    "MIGITE_TRACKER": "tracker.provider",
+    "MIGITE_ACLI": "tracker.jira.acli",
     "DEV_LOG_BASE": "vault.base",
     "MIGITE_ORG": "vault.org",
     "LOG_DIR": "logs.dir",
@@ -180,6 +194,7 @@ ENV_OVERRIDES: dict[str, str] = {
 
 ENUMS: dict[str, tuple[str, ...]] = {
     "agent.backend": AGENT_BACKENDS,
+    "tracker.provider": TRACKER_PROVIDERS,
     "models.effort.fast": EFFORT_LEVELS,
     "models.effort.standard": EFFORT_LEVELS,
     "models.effort.strong": EFFORT_LEVELS,
@@ -206,6 +221,12 @@ STARTER_TEMPLATE = """\
 agent:
   backend: claude            # claude | cursor | opencode  (MIGITE_AGENT). See docs/agents.md
   # command: /path/to/cli    # override the executable (default: claude / cursor-agent / opencode)
+
+tracker:
+  provider: auto             # auto | jira-acli | jira-agent | none  (MIGITE_TRACKER). See docs/tickets.md
+  # jira:
+  #   acli: acli                          # MIGITE_ACLI: Atlassian's CLI; log in once with `acli jira auth login --web`
+  #   acceptance_field: customfield_10035 # optional: where your Jira keeps acceptance criteria
 
 vault:
   base: ~/dev-log            # DEV_LOG_BASE
@@ -533,6 +554,9 @@ def load(repo_root: str | Path | None = None, *, env: Mapping[str, str] | None =
         loaded = _read_file(path)
         flat = _flatten(loaded)
         for key, value in flat.items():
+            if key.startswith("tracker.") and "token" in key.lower():
+                raise ConfigError(f"{path}: {key}: migite never reads a Jira token from a config file. "
+                                  f"Log in with `acli jira auth login --web` instead, and remove the token from {path}")
             if key not in known and not key.startswith("models.roles"):
                 # (models.roles and models.roles_effort are open mappings validated in _coerce)
                 warnings.append(f"{path}: unknown key '{key}' (ignored)")

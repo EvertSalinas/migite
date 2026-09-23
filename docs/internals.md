@@ -22,7 +22,7 @@ migite/                       ← wherever you clone this repo
 │   ├── config.sh             ← load_migite_config, load_agent_info, cfg / prompt_path, use_tmux, `migite config`
 │   ├── doctor.sh             ← `migite doctor`
 │   ├── amend.sh              ← --amend mode
-│   ├── plan.sh               ← Phase 1 (+ Jira fetch, plan gate) and Phase 1.5
+│   ├── plan.sh               ← Phase 1 (+ ticket context via migite-ticket, plan gate) and Phase 1.5
 │   ├── implement.sh          ← Phase 2 (single or --staged) and the Phase 2.5 heal loop
 │   ├── review.sh             ← Phase 3, the commit gate, strict-policy blockers
 │   └── deliver.sh            ← Phases 3.5, 4, 4.5
@@ -41,6 +41,9 @@ migite/                       ← wherever you clone this repo
 ├── migite_agent.py           ← bash's door to the gateway: ask, session, info, check
 ├── migite_claude.py          ← compatibility shim: the old name of migite_call.py
 ├── migite_config.py          ← layered config resolver; role → tier → the agent's model
+├── trackers/                 ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
+├── migite_ticket.py          ← ticket parse / fetch / sources; picks the source from tracker.provider
+├── migite-ticket             ← the same, as a command (bash wrapper)
 ├── migite_paths.py           ← vault path resolver: org detection, base branch, slugify, run-dir lookup
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
 ├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
@@ -98,7 +101,7 @@ migite-plan \
 
 `--task-file` injects supplementary details from [migite's intake mode](./migite.md#intake-mode)'s "add a separate task.md" prompt into `synthesize_plan` as authoritative context alongside the intake — it's optional and only ever set when that prompt produced a file.
 
-`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria) — fetched in `plan.sh` via the Atlassian MCP whenever `--jira` is used, cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context) and the 7 explorers' keyword extraction. `migite-plan` itself never calls the MCP — it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
+`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria), fetched in `plan.sh` by `migite-ticket` whenever `--jira` is used (Jira REST, or the agent's Atlassian MCP tools as a fallback; see [tickets.md](./tickets.md)), cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context) and the 7 explorers' keyword extraction. `migite-plan` itself never fetches anything - it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
 
 `--base-branch` sets the branch explorers diff against. Omitted, it auto-detects from `origin/HEAD`, then falls back to `main` / `master` / `develop`. `migite` passes its own detected value so both agree.
 

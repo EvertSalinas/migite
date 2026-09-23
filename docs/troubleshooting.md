@@ -13,6 +13,7 @@ Symptoms first; each entry names the check that proves the cause.
 | the commit gate keeps saying NEEDS FIXES | [Review loops](#troubleshooting-needs-fixes) |
 | `migite doctor` reports scratchpad/vault drift | [Drift](#drift) |
 | `Not logged in` from Cursor, `No API key configured` from OpenCode, or `refusing a tool-enabled call` | [Other backends](#backends) |
+| `planning without ticket context`, `acli is not logged in`, or `no ticket source available` | [Jira fetch](#jira) |
 
 <a id="config-errors"></a>
 ### Config errors
@@ -72,8 +73,8 @@ Permission modes are set in one place — the `permissions` block of the config
 
 Values are `auto`, `edits`, `plan`, `ask`, or `none`; Claude Code's names (`bypassPermissions`,
 `acceptEdits`, `default`) are accepted as aliases. `MIGITE_PERMISSION_MODE` still works and maps
-onto `permissions.headless` (env beats files). The Jira fetch always runs with `auto` inside the
-`jira.read` tool scope, regardless of these.
+onto `permissions.headless` (env beats files). The Jira fetch's agent fallback always runs with
+`auto` inside the `jira.read` tool scope, regardless of these.
 
 ```bash
 export MIGITE_PERMISSION_MODE=edits          # or, in .migite.yml:  permissions: { headless: edits }
@@ -146,14 +147,31 @@ records them in `gate-overrides.md`.
 `opencode auth login`. An `is_error` result from Cursor or an `error` event from OpenCode fails the
 call with that CLI's message. Two things are by design, not bugs:
 
-- `refusing a tool-enabled call` — only Claude Code can run a headless call with a scoped MCP tool
-  allowlist; on other backends the Jira fetch is skipped and planning proceeds without the ticket
-  body (the key still names the task).
+- `cannot restrict a call to the jira.read scope`: only Claude Code can run a headless call limited
+  to the Atlassian MCP tools. On other backends, install and log in to `acli` so the Jira fetch uses
+  it instead ([Jira fetch](#jira)); without it, planning proceeds without the ticket body (the key
+  still names the task).
 - The reviewer prints `backend has no structured output - text synthesis + markdown verdict` and
   `review.json` says `"source": "markdown"`; the gate still reads a verdict, from the anchored
   markdown parser.
 
 Model tiers are unset for these backends until you pin them; see [agents.md](./agents.md#models-per-backend).
+
+<a id="jira"></a>
+### Jira fetch
+
+Start with `migite-ticket sources`: it lists each source, whether it can run here, and why not.
+
+| Message | Cause | Fix |
+|---|---|---|
+| `acli is not installed` | `acli` isn't on PATH | install it ([tickets.md](./tickets.md#setup)), or set `tracker.jira.acli` / `MIGITE_ACLI` to its path; the agent source is used meanwhile if it can run |
+| `acli is not logged in to Jira` | no login yet, or it expired | `acli jira auth login --web`, then `acli jira auth status` |
+| `Issue does not exist or you do not have permission to see it` | wrong key, or `acli` is logged in to another site or account | open the link in a browser; `acli jira auth status` shows the site, `acli jira auth switch` changes it |
+| the browser login is refused | your organisation hasn't allowed the Atlassian CLI | ask whoever manages your Atlassian site, or use `tracker.provider: jira-agent` |
+| `acli timed out` | network, or Jira is slow | retry; the plan continues without ticket context meanwhile |
+
+A token in `.migite.yml` is refused on purpose: migite never reads Jira credentials from a file.
+Log in with `acli` instead, and revoke the token if the file was ever committed.
 
 <a id="drift"></a>
 ### `migite doctor` reports scratchpad/vault drift

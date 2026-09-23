@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# tests/fake-acli - stand-in for Atlassian's CLI in tests. Point MIGITE_ACLI at it.
+# Mirrors acli 1.3.x: `jira auth status` and `jira workitem view KEY --fields ... --json`
+# (Jira's issue JSON, description in Atlassian Document Format).
+# $FAKE_ACLI_MODE: ok (default) | logged_out | missing | garbage | exit1
+# Records argv to $FAKE_ACLI_ARGV when set.
+set -u
+[[ -n "${FAKE_ACLI_ARGV:-}" ]] && printf '%s\n' "$*" >> "$FAKE_ACLI_ARGV"
+mode="${FAKE_ACLI_MODE:-ok}"
+
+if [[ "${1:-} ${2:-} ${3:-}" == "jira auth status" ]]; then
+  if [[ "$mode" == "logged_out" ]]; then
+    echo "✗ Error: not authenticated. Run 'acli jira auth login'" >&2; exit 1
+  fi
+  printf '✓ Authenticated\n  Site: acme.atlassian.net\n  Email: dev@acme.test\n  Authentication Type: oauth\n'
+  exit 0
+fi
+
+if [[ "${1:-} ${2:-} ${3:-}" == "jira workitem view" ]]; then
+  key="${4:-}"
+  case "$mode" in
+    missing) echo "✗ Error: Issue does not exist or you do not have permission to see it." >&2; exit 1 ;;
+    garbage) echo "not json"; exit 0 ;;
+    exit1)   echo "boom" >&2; exit 1 ;;
+  esac
+  cat <<JSON
+{"key": "$key", "self": "https://internal.example/rest/api/3/issue/1", "fields": {
+  "summary": "Soft-delete announcements",
+  "issuetype": {"name": "Story"}, "priority": {"name": "High"}, "status": {"name": "In Progress"},
+  "labels": ["backend"],
+  "description": {"type": "doc", "version": 1, "content": [
+    {"type": "paragraph", "content": [{"type": "text", "text": "Admins need to undo deletes."}]},
+    {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Acceptance criteria"}]},
+    {"type": "bulletList", "content": [
+      {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Deleted items hidden"}]}]}]}]}}}
+JSON
+  exit 0
+fi
+
+echo "fake-acli: unsupported command: $*" >&2
+exit 2

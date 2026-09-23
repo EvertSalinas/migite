@@ -58,6 +58,9 @@ run_doctor() {
   if ! "$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" --repo-root "$REPO_ROOT" check; then
     issues=$((issues + 1))
   fi
+  # Where --jira gets the ticket's content from (tracker.provider), and why.
+  echo "ℹ Ticket source for --jira:"
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" --repo-root "$REPO_ROOT" sources 2>&1 | sed 's/^/    /'
   for doc_tool in git "$MIGITE_PYTHON"; do
     if command -v "$doc_tool" &>/dev/null; then
       echo "✔ Tool resolves: $doc_tool"

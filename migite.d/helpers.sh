@@ -262,6 +262,13 @@ agent_ask() {
     --tool migite --label "$label" --role "$role" "$@"
 }
 
+# ticket_cmd <parse|fetch|sources> ... - ticket references and content, from
+# whichever source tracker.provider allows (migite_ticket.py). Bash never talks
+# to Jira itself.
+ticket_cmd() {
+  "$MIGITE_PYTHON" "$MIGITE_HOME/migite_ticket.py" --repo-root "${REPO_ROOT:-$PWD}" "$@"
+}
+
 # agent_field <name> - one field of the agent's description (name, display_name,
 # binary, exit_hint, instruction_files, ...), from the cache when loaded.
 agent_field() {
@@ -445,7 +452,7 @@ agent_think() {
   echo -e "${CYAN}  $(agent_field display_name || echo "The agent") is working: ${BOLD}$label${RESET}"
   echo -e "  ${CYAN}Prompt log: ${prompt_file}${RESET}"
 
-  printf '%s' "$prompt" | agent_ask "$label" "$role" "${extra[@]}" > "$outfile" &
+  printf '%s' "$prompt" | agent_ask "$label" "$role" ${extra[@]+"${extra[@]}"} > "$outfile" &
   local pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do

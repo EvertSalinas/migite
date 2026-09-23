@@ -167,6 +167,23 @@ agent:
 Which agent CLI every call goes through. Model tiers, effort, structured output, and the Jira
 fetch behave differently per backend; see [agents.md](./agents.md) for the capability matrix.
 
+<a id="tracker"></a>
+### `tracker`
+
+```yaml
+tracker:
+  provider: auto          # auto | jira-acli | jira-agent | none   (MIGITE_TRACKER)
+  jira:
+    acli: acli            # MIGITE_ACLI: Atlassian's CLI, a name on PATH or a full path
+    acceptance_field: null   # custom field id holding acceptance criteria, e.g. customfield_10035
+```
+
+Where `--jira` gets the ticket's content. `auto` uses `acli` when it is installed and logged in
+(`acli jira auth login --web`, once, through the browser), else one agent call through the
+Atlassian MCP tools when the agent supports the `jira.read` scope, else nothing. migite never
+handles a Jira credential; a token key in this block is refused as a config error. Setup and the
+`migite-ticket` command: [tickets.md](./tickets.md).
+
 <a id="vault"></a>
 ### `vault`, `logs`
 
@@ -294,7 +311,7 @@ Values are migite's own words, which each agent adapter maps onto its CLI's flag
 The Claude Code names are accepted as aliases and normalized, so configs written before the
 neutral words keep working. `headless` applies uniformly to every headless call in every tool;
 the `MIGITE_PERMISSION_MODE` env var still works and maps onto it. The Jira fetch always runs
-with `auto` inside the `jira.read` tool scope, regardless. See [agents.md](./agents.md) for what
+with `auto` inside the `jira.read` tool scope when it goes through the agent. See [agents.md](./agents.md) for what
 each word becomes on each CLI.
 
 <a id="heal"></a>
@@ -379,6 +396,8 @@ files**:
 |---|---|
 | `DEV_LOG_BASE` | `vault.base` |
 | `MIGITE_AGENT` | `agent.backend` |
+| `MIGITE_TRACKER` | `tracker.provider` |
+| `MIGITE_ACLI` | `tracker.jira.acli` |
 | `MIGITE_ORG` | `vault.org` |
 | `LOG_DIR` | `logs.dir` |
 | `MIGITE_STACK` | `stack` |

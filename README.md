@@ -44,7 +44,7 @@ git clone <this-repo> ~/Code/migite
 MIGITE_SRC="$HOME/Code/migite"; BIN="$HOME/.local/bin"; mkdir -p "$BIN"
 for f in migite migite-plan migite-review migite-blueprint migite-blueprint.py \
          migite-explore migite-explore.py migite-audit migite-audit.py \
-         migite-pr-review migite-pr-review.py \
+         migite-pr-review migite-pr-review.py migite-ticket \
          migite_paths.py migite_call.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
@@ -86,7 +86,7 @@ between the two gates is autonomous. The full transcript with every prompt and o
 
 ▶ Phase 1/4 — Planning
 ▶ Fetching Jira ticket BB-1234...
-✔ Jira ticket fetched — added to planning context
+✔ Jira ticket fetched, added to planning context
 ▶ Created intake from template: feature          ← $EDITOR opens the intake; fill it in
   Starting LangGraph agent: Planning
   ▶ Fanning out 7 explorers in parallel (stack=rails)
@@ -155,9 +155,10 @@ blockers remain and a capital `Y` overrides with a record.
 | What's wrong with this codebase? | `migite-audit --focus jobs` | ranked findings, feedable into `migite --audit` |
 | Reviewing a teammate's branch | `migite-pr-review --branch feat/x` | review with verdict, read-only |
 | Is my install healthy? | `migite doctor` | config, prompts, tools, scratchpad drift, orphaned sentinels |
+| What does this ticket say? | `migite-ticket BB-1234` | the ticket as markdown, via Atlassian's `acli` or the agent |
 
 All commands: [docs/migite.md](./docs/migite.md) for the orchestrator's modes,
-[docs/standalone-tools.md](./docs/standalone-tools.md) for the other four.
+[docs/standalone-tools.md](./docs/standalone-tools.md) for the other four, [docs/tickets.md](./docs/tickets.md) for `migite-ticket`.
 
 ---
 
@@ -229,6 +230,7 @@ Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down;
 | [docs/configuration.md](./docs/configuration.md) | You are writing a `.migite.yml`: every key, model roles and effort, strict gate, recipes |
 | [docs/agents.md](./docs/agents.md) | Running migite on Cursor CLI or OpenCode instead of Claude Code: capability matrix, per-backend models, what degrades |
 | [docs/standalone-tools.md](./docs/standalone-tools.md) | `migite-blueprint`, `migite-explore`, `migite-audit`, `migite-pr-review` |
+| [docs/tickets.md](./docs/tickets.md) | Using `--jira`: setting up `acli` (browser login, no token), the agent fallback, `migite-ticket` |
 | [docs/internals.md](./docs/internals.md) | Repository layout, the agent scripts' CLIs, `plan.json` / `review.json` / usage ledger with examples |
 | [docs/vault-structure.md](./docs/vault-structure.md) | Where every file lands in the vault and how the org folder is chosen |
 | [docs/troubleshooting.md](./docs/troubleshooting.md) | Permission failures, config errors, missing Python or PyYAML, review loops, nested Claude sessions |

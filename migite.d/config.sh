@@ -18,7 +18,7 @@ load_migite_config() {
   local dump
   local -a rr=()
   [[ -n "$repo_root" ]] && rr=(--repo-root "$repo_root")
-  if ! dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env "${rr[@]}")"; then
+  if ! dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_config.py" env ${rr[@]+"${rr[@]}"})"; then
     # The resolver prints an `echo ... >&2; false` line on error — eval it so the message shows, then stop.
     eval "$dump" || true
     error "Fix the configuration above (or unset MIGITE_CONFIG) and re-run"
@@ -52,7 +52,7 @@ load_agent_info() {
   local repo_root="${1:-${REPO_ROOT:-}}" dump
   local -a rr=()
   [[ -n "$repo_root" ]] && rr=(--repo-root "$repo_root")
-  dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" "${rr[@]}" info --shell)" \
+  dump="$("$MIGITE_PYTHON" "$MIGITE_HOME/migite_agent.py" ${rr[@]+"${rr[@]}"} info --shell)" \
     || error "Could not describe the configured agent (agent.backend)"
   eval "$dump"
 }

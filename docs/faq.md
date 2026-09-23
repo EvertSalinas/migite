@@ -23,10 +23,13 @@ on. The usage summary prints the total so you can see it.
 
 **Does `--jira` fetch the ticket's content?**
 Yes, for planning. The ticket's title, type, priority, status, description, and acceptance
-criteria are fetched through the Atlassian MCP before the planner runs, cached to
-`jira-context.md`, and given to synthesis and the explorers. It is the one call in the pipeline
-with tool access, scoped to two read-only lookups. If the fetch fails, planning continues
-without it and the key is still used for naming.
+criteria are fetched before the planner runs, cached to `jira-context.md`, and given to synthesis
+and the explorers. With Atlassian's `acli` installed and logged in (a one-time browser login),
+migite reads it through `acli`: no model call, no token, same on every agent. Without it, migite
+falls back to one agent call through the Atlassian MCP tools, restricted to the `jira.read` scope
+(Claude Code only). If neither can run
+or the fetch fails, planning continues without it and the key is still used for naming. See
+[tickets.md](./tickets.md).
 
 **Does `--jira` always open the intake editor?**
 Only on the first run for that ticket. An existing `intake.md` is reused silently, and

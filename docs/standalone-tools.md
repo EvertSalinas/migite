@@ -1,7 +1,7 @@
 # Standalone tools
 
-Reference for the four tools that run independently of `migite`. See the
-[README](../README.md) for the "which tool for which situation" table.
+Reference for the four tools that run independently of `migite`, plus the small
+`migite-ticket` helper. See the [README](../README.md) for the "which tool for which situation" table.
 
 All four read the same layered configuration as `migite`
 ([docs/configuration.md](./configuration.md)): `vault.base` / `vault.org` for output paths,
@@ -20,6 +20,7 @@ the usage ledger when `MIGITE_USAGE_LEDGER` is set.
   - [Re-extracting intakes (`--from-exploration`)](#re-extracting-intakes)
 - [`migite-audit`](#migite-audit)
 - [`migite-pr-review`](#migite-pr-review)
+- [`migite-ticket`](#migite-ticket)
 
 ---
 
@@ -361,3 +362,22 @@ URL — a free-text value is still passed into the review as reference context, 
 grouping the output under a ticket folder.
 
 **Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5-5` for the final verdict. This tool is read-only — it never commits anything, there's no gate to approve.
+
+---
+
+<a id="migite-ticket"></a>
+### `migite-ticket`
+
+Parses a ticket reference and fetches the ticket's content: the same code `migite --jira` uses.
+No model call when Atlassian's `acli` is installed and logged in; otherwise the agent's Atlassian MCP tools, when the
+agent supports the `jira.read` scope.
+
+```bash
+migite-ticket BB-1234                          # the ticket as markdown on stdout
+migite-ticket <ticket-url> --out ticket.md     # the site comes from the URL
+migite-ticket sources <ticket-url>             # which source would be used here, and why
+migite-ticket parse <key-or-url>               # key, URL, and site as JSON
+```
+
+Exit codes: `0` fetched, `1` failed or not a ticket, `2` no source can run. Setup, sources, and the
+output shape: [tickets.md](./tickets.md).

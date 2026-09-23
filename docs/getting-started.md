@@ -33,7 +33,7 @@ for f in migite migite-plan migite-review \
          migite-blueprint migite-blueprint.py \
          migite-explore migite-explore.py \
          migite-audit migite-audit.py \
-         migite-pr-review migite-pr-review.py \
+         migite-pr-review migite-pr-review.py migite-ticket \
          migite_paths.py migite_call.py migite_config.py migite_agent.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
@@ -138,6 +138,19 @@ Delete everything else. Then `migite config` shows the effective result with the
 value, and `migite doctor` validates the file. A repo can override any key with its own
 `.migite.yml` (`migite config --init` inside the repo). Details: [configuration.md](./configuration.md).
 
+**If you use Jira**, install Atlassian's CLI so `--jira` plans from the real description and
+acceptance criteria. It logs in through your browser, so there is no token to store, and it costs
+no model call on any agent:
+
+```bash
+brew install atlassian/acli/acli     # Linux: see docs/tickets.md
+acli jira auth login --web           # once; pick your site in the browser
+migite-ticket sources                # → jira-acli would be used
+```
+
+Without it, Claude Code can still fetch tickets through its Atlassian MCP tools. Details:
+[tickets.md](./tickets.md#setup).
+
 ---
 
 <a id="first-run"></a>
@@ -161,14 +174,14 @@ migite --jira BB-1234 --type feature
 ▶ Base branch: main
 ```
 
-**Phase 1, plan.** The ticket is fetched through the Atlassian MCP (the only tool-enabled call in
-the pipeline, scoped to two read-only lookups) and cached. A `feature` intake template opens in
+**Phase 1, plan.** The ticket is fetched by `migite-ticket` (Atlassian's `acli`, or the agent's
+Atlassian MCP tools as a fallback) and cached. A `feature` intake template opens in
 your editor with the title and ticket pre-filled; fill in acceptance criteria and save.
 
 ```text
 ▶ Phase 1/4 — Planning
 ▶ Fetching Jira ticket BB-1234...
-✔ Jira ticket fetched — added to planning context
+✔ Jira ticket fetched, added to planning context
 ▶ Created intake from template: feature
 ▶ Scratchpad: /Users/you/Code/invoices-api/scratchpad/bb-1234
 ▶ Vault mirror: /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234

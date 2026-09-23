@@ -170,14 +170,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --jira)
-      JIRA_TICKET="${2:-}"
-      [[ -z "$JIRA_TICKET" ]] && error "Provide a Jira ticket ID after --jira"
-      if echo "$JIRA_TICKET" | grep -qE 'https?://.*atlassian\.net/browse/'; then
-        JIRA_URL="$JIRA_TICKET"
-        JIRA_TICKET=$(echo "$JIRA_TICKET" | grep -oE '[A-Za-z]+-[0-9]+' | tail -1 | tr '[:lower:]' '[:upper:]' || true)
-        [[ -z "$JIRA_TICKET" ]] && error "Could not extract Jira ticket ID from URL"
-        log "Extracted Jira key from URL: $JIRA_TICKET"
-      fi
+      [[ -z "${2:-}" ]] && error "Provide a Jira ticket key or URL after --jira"
+      # One parser for keys and browse URLs (migite_ticket.py), shared with the Python tools.
+      _ticket_vars="$(ticket_cmd parse --shell "$2")" || error "Not a Jira ticket key or ticket URL: $2"
+      eval "$_ticket_vars"; unset _ticket_vars
+      JIRA_TICKET="$TICKET_KEY"; JIRA_URL="$TICKET_URL"
+      [[ -n "$JIRA_URL" ]] && log "Extracted Jira key from URL: $JIRA_TICKET"
       TASK="$JIRA_TICKET"
       log "Jira mode: $JIRA_TICKET"
       shift 2
@@ -231,15 +229,15 @@ if [[ -n "$AUDIT_FILE" && -z "$TASK" && -z "$JIRA_TICKET" ]]; then
   TASK="audit-remediation"
 fi
 
-# Auto-extract Jira key from an Atlassian URL passed as a plain task argument
-if [[ -z "$JIRA_TICKET" && -n "$TASK" ]] && echo "$TASK" | grep -qE 'https?://.*atlassian\.net/browse/'; then
-  EXTRACTED_KEY=$(echo "$TASK" | grep -oE '[A-Z]+-[0-9]+' | head -1 || true)
-  if [[ -n "$EXTRACTED_KEY" ]]; then
-    JIRA_URL="$TASK"
-    JIRA_TICKET="$EXTRACTED_KEY"
+# A ticket browse URL passed as the plain task argument means --jira
+if [[ -z "$JIRA_TICKET" && -n "$TASK" && "$TASK" =~ ^https?://.*/browse/ ]]; then
+  if _ticket_vars="$(ticket_cmd parse --shell "$TASK" 2>/dev/null)"; then
+    eval "$_ticket_vars"
+    JIRA_TICKET="$TICKET_KEY"; JIRA_URL="$TICKET_URL"
     log "Extracted Jira key from URL: $JIRA_TICKET"
     TASK="$JIRA_TICKET"
   fi
+  unset _ticket_vars
 fi
 
 # ── Confirm we're in a git repo ───────────────────────────────────────────────

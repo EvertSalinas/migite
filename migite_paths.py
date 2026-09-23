@@ -13,8 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TICKET_RE = re.compile(r"^[A-Za-z]+-\d+$")
-ATLASSIAN_BROWSE_RE = re.compile(r"/browse/([^/?#]+)", re.IGNORECASE)
+from trackers import InvalidTicketRef, parse_ref  # the one ticket-key parser
 
 
 class InvalidRunKeyError(Exception):
@@ -87,13 +86,11 @@ def detect_base_branch(repo_root: str) -> str:
 
 
 def extract_ticket_key(raw: str) -> str:
-    s = raw.strip()
-    m = ATLASSIAN_BROWSE_RE.search(s)
-    if m:
-        s = m.group(1)
-    if not TICKET_RE.match(s):
-        raise InvalidRunKeyError(raw)
-    return s.upper()
+    """The upper-case key from a ticket key or browse URL (trackers.parse_ref)."""
+    try:
+        return parse_ref(raw).key
+    except InvalidTicketRef:
+        raise InvalidRunKeyError(raw) from None
 
 
 def resolve_run_dir(vault_base: str, org: str, repo: str, id: str = None, name: str = None) -> Path | None:

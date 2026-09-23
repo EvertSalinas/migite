@@ -25,6 +25,8 @@ if [[ -z "${MIGITE_PYTHON:-}" ]]; then
 fi
 export MIGITE_PYTHON
 export MIGITE_HOME="$REPO_ROOT"   # helpers that shell out to migite_call.py resolve it from here
+# Every ticket lookup goes to the fake Atlassian CLI, never a real (logged-in) acli on PATH.
+export MIGITE_ACLI="$SCRIPT_DIR/fake-acli"
 DATE="${DATE:-$(date +%Y-%m-%d)}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d-%H%M%S)}"
 # Helpers like write_prompt/thinking write into $LOG_DIR — give tests a throwaway one

@@ -32,6 +32,7 @@ Terms used across the docs, in the order you meet them in a run.
 | **Headless call** | One call with no human: prompt in, answer out, JSON back where the CLI offers it (`claude --print --output-format json` on Claude Code). The planner, reviewers, knowledge, amendments, heal, and the standalone tools. |
 | **Interactive session** | The agent CLI's own interface opened by `run_phase` with a first prompt: implement, gate fixes, PR description. You exit it (`/exit` on Claude Code) to hand control back. Not metered. |
 | **Permission word** | `auto`, `edits`, `plan`, `ask`, or `none`, in `permissions.*`. Each adapter maps it onto its CLI's flags; Claude Code's names are accepted as aliases. |
+| **Ticket source** | Where `--jira` gets a ticket's content: `jira-acli` (Atlassian's CLI, logged in through the browser) or `jira-agent` (the agent's Atlassian MCP tools). Chosen by `tracker.provider`; see `migite-ticket sources`. |
 | **Scope** | A named set of tools a headless call may use, such as `jira.read`. An agent that can't restrict a call to it refuses the call instead of running it with every tool. |
 | **Strict gate** | `gates.commit.policy: strict`: `y` is refused while a `NEEDS FIXES` verdict, failing specs, a tooling error, or rubocop offenses remain; capital `Y` overrides and is recorded in `gate-overrides.md`. |
 | **Doctor** | `migite doctor`: read-only health check of config, prompts, tools, scratchpad drift, orphaned sentinels, duplicate knowledge. |
