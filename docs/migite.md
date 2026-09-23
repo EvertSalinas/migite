@@ -443,6 +443,9 @@ copy never lags behind.
 | `review.md` | Code review verdict and findings |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass |
 | `pr-description.md` | Ready to paste into GitHub |
+| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
+| `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
+| `usage.json` | End-of-run summary of every headless model call (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
 | `.plan.done` | Sentinel written by migite-plan on success |
 | `.review.done` | Sentinel written by migite-review on success |
 | `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo |
@@ -476,6 +479,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | `<ts>-<ticket>-improvements.txt` | Raw self-improvement notes |
 | `<ts>-prompt-<label>.txt` | Every prompt sent to interactive phases |
 | `<ts>-wrapper-<label>.sh` | tmux wrapper scripts |
+| `<ts>-usage.jsonl` | The run's usage ledger — one JSON line per headless `claude --print` call (tool, label, model, tokens, cost, duration, ok). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
 
 ---
 
@@ -497,6 +501,8 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`helpers.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |
+| Findings / Reason | From `review.json`: critical / warning / note counts and the one-line reason the verdict was decided. Only shown when the envelope exists (i.e. not after a hand-edit of `review.md`) |
+| Cost | Running total of headless model calls from the usage ledger — interactive sessions aren't metered |
 
 | Key | Action |
 |-----|--------|

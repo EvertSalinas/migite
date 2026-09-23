@@ -74,9 +74,9 @@ JIRA_FETCH_FAILED: <short reason>"
       local JIRA_FETCH_TMP
       JIRA_FETCH_TMP=$(mktemp)
       printf '%s' "$JIRA_FETCH_PROMPT" \
-        | claude_cmd --print --permission-mode bypassPermissions \
+        | claude_print "jira-fetch" --permission-mode bypassPermissions \
             --allowedTools "mcp__claude_ai_Atlassian__getJiraIssue mcp__claude_ai_Atlassian__getAccessibleAtlassianResources" \
-            --model claude-sonnet-5 --output-format text \
+            --model claude-sonnet-5 \
         > "$JIRA_FETCH_TMP" 2>/dev/null || true
 
       if [[ -s "$JIRA_FETCH_TMP" ]] && ! grep -q '^JIRA_FETCH_FAILED' "$JIRA_FETCH_TMP"; then
@@ -362,6 +362,7 @@ JIRA_FETCH_FAILED: <short reason>"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
         sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
         sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
+        sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
         success "Plan written to $PLAN_FILE"
         notify "Phase 1 — Plan ready" "Review the plan and approve to continue"
         ;;
@@ -376,6 +377,7 @@ JIRA_FETCH_FAILED: <short reason>"
     sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
     sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
     sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
+    sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
     success "Plan written to $PLAN_FILE"
     notify "Phase 1 — Plan ready" "Review the plan and approve to continue"
   fi
@@ -448,8 +450,8 @@ JIRA_FETCH_FAILED: <short reason>"
         _refine_tmp=$(mktemp)
         printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
           "$(cat "$PLAN_FILE")" "$_plan_feedback" \
-          | claude_cmd --print --model claude-sonnet-5 --output-format text \
-          > "$_refine_tmp" 2>/dev/null
+          | claude_print "plan-refine" --model claude-sonnet-5 \
+          > "$_refine_tmp" 2>/dev/null || true
         if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
           mv "$_refine_tmp" "$PLAN_FILE"
           sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
@@ -485,6 +487,7 @@ JIRA_FETCH_FAILED: <short reason>"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
         sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
         sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
+        sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
         _show_plan_diff "$_rerun_prev"
         show_critic
         ;;

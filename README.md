@@ -96,6 +96,7 @@ migite/                   ← wherever you clone this repo
 ├── migite-pr-review      ← standalone PR reviewer, bash wrapper
 ├── migite-pr-review.py   ← LangGraph PR review agent (Python)
 ├── migite_paths.py       ← shared run-directory resolver (id/name → vault folder)
+├── migite_claude.py      ← shared `claude --print` wrapper: JSON envelopes, structured output, usage ledger
 ├── migite-improvements.md ← self-improvement notes appended after each run
 ├── prompts/              ← phase prompts, resolved via $MIGITE_HOME — hard error if missing
 │   ├── plan.md           ← plan format + type routing, injected into migite-plan's synthesis
@@ -158,7 +159,7 @@ for f in migite migite-plan migite-review \
           migite-explore migite-explore.py \
           migite-audit migite-audit.py \
           migite-pr-review migite-pr-review.py \
-          migite_paths.py; do
+          migite_paths.py migite_claude.py; do
   ln -sf "$MIGITE_SRC/$f" "$BIN/$f"
 done
 chmod +x "$MIGITE_SRC"/migite "$MIGITE_SRC"/migite-blueprint \
@@ -202,6 +203,7 @@ Add that export to `~/.zshrc` to make it permanent.
 | `MIGITE_ORG` | unset | Forces the vault "org" bucket a repo files under (`$DEV_LOG_BASE/<org>/<repo>/...`). Unset, it's auto-detected as the name of the directory directly containing the repo — `~/Code/Acme/foo` → `Acme` — so any org/client folder name works without configuration. Falls back to `Personal` only if the repo has no meaningful parent directory |
 | `LOG_DIR` | `~/.dev-workflow/logs` | Per-run logs |
 | `MAX_HEAL_ATTEMPTS` | `3` | Phase 2.5 auto-heal retry cap |
+| `MIGITE_USAGE_LEDGER` | `$LOG_DIR/<ts>-usage.jsonl` | Per-run usage ledger: one JSON line per headless model call (tokens, cost, duration). Summarised into `usage.json` and printed at exit. See [Machine-readable envelopes](./docs/internals.md#machine-readable) |
 | `MIGITE_PROMPT_INLINE_MAX` | `100000` | Interactive-phase prompts larger than this many bytes are passed to `claude` as a pointer to the prompt file instead of inline on the command line (Linux caps one argv string at 128 KB; the implement prompt includes all of `knowledge.md`) |
 | `MIGITE_PERMISSION_MODE` | unset | Permission mode passed to `claude --print` — but only inside three standalone tools: `migite-explore`, `migite-audit`, `migite-pr-review`. Omitted (fail closed) when unset. `migite` itself, `migite-plan`, `migite-review`, and `migite-blueprint` don't read this variable at all — see [Permission failures](./docs/troubleshooting.md#troubleshooting-permissions) |
 | `EDITOR` | `vim` | Opens intake template and other manual-edit prompts |
@@ -356,7 +358,7 @@ The heal loop's job is to deliver clean input to the reviewer, not to replace th
 
 Not yet built, roughly in the order they're likely to land:
 
-- **Per-run usage summary.** Print a token/cost summary (and wall-clock time) at the end of each `migite` run — today there's no visibility into what a run actually cost across its ~15-20 model calls.
+- **Meter interactive sessions too.** Every headless call is now recorded in the usage ledger and summarised in `usage.json` at exit, but the interactive phases (implement, gate fixes, PR description) still aren't — the CLI only emits usage in `--print` mode. Options: parse the session transcript, or run implementation headlessly with a structured hand-off.
 - **Stack profiles as data, with real toolchains.** `migite` already detects `rails` vs `generic` (see [`--stack` values](#stack-values)), and `generic` runs the whole pipeline minus lint/test. The next step is describing a stack as data — detect rule, lint, autofix, test, test-glob, explorer areas — so `node` (`npm run lint`/`jest`), `python` (`ruff`/`pytest`), `go` (`go vet`/`go test`) become config blocks rather than new bash function pairs, and `migite-audit`/`migite-pr-review` can drop their Rails-only checklists.
 - **Support AI agents other than Claude.** Right now every phase shells out to `claude`. Making the agent backend pluggable (e.g. Codex, opencode) would decouple the orchestration logic (phases, gates, vault, resolvers) from any one CLI.
 - **One-line installer.** Replace the manual clone-and-symlink dance in [Installation](#installation) with a script that does it in one command.

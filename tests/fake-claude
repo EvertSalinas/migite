@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# tests/fake-claude — stand-in for the `claude` CLI in tests. Put its directory
+# first on PATH. Behaviour is chosen by $FAKE_CLAUDE_MODE:
+#   envelope     (default) success envelope; result = "echo:<first 40 chars of stdin>"
+#   structured   success envelope with structured_output (a review verdict)
+#   text         plain text on stdout, no JSON (older CLI / --output-format text)
+#   is_error     envelope with is_error=true, exit 0
+#   exit1        garbage on stdout, exit 1
+#   timeout      sleeps 30s (use with a short timeout)
+# It also records the argv it was called with to $FAKE_CLAUDE_ARGV when set.
+set -u
+prompt="$(cat)"
+[[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
+model="claude-haiku-4-5-20251001"
+for ((i = 1; i <= $#; i++)); do
+  [[ "${!i}" == "--model" ]] && { j=$((i + 1)); model="${!j}"; }
+done
+snippet="${prompt:0:40}"
+snippet="${snippet//\"/\\\"}"
+snippet="${snippet//$'\n'/ }"
+
+envelope() {
+  # $1 = result (JSON-escaped string body), $2 = extra JSON fields (with leading comma) or empty
+  cat <<EOF
+{"type":"result","subtype":"success","is_error":false,"duration_ms":1407,"duration_api_ms":1265,"num_turns":1,
+ "result":"$1","session_id":"fake","total_cost_usd":0.0475,
+ "usage":{"input_tokens":10,"cache_creation_input_tokens":23624,"cache_read_input_tokens":0,"output_tokens":39},
+ "modelUsage":{"$model":{"inputTokens":10,"outputTokens":39,"costUSD":0.0475}}$2}
+EOF
+}
+
+case "${FAKE_CLAUDE_MODE:-envelope}" in
+  envelope)   envelope "echo:$snippet" "" ;;
+  plan)       # a plausible multi-section plan (> 400 chars, 6+ headings) so migite-plan's stub guard passes
+              envelope "# Fake plan\\nDate: 2026-01-01\\nType: feature\\nJira: N/A\\nStatus: planned\\n\\n## Summary\\nAdd the thing to the place, following the existing service-object pattern used elsewhere in this codebase.\\n\\n## Scope\\n### Models\\n- app/models/thing.rb (new)\\n### Controllers\\n- app/controllers/things_controller.rb (modified)\\n\\n## Approach\\n1. Add the model\\n2. Add the controller action\\n3. Wire the route\\n\\n## Test plan\\n- spec/models/thing_spec.rb\\n- spec/requests/things_spec.rb\\n\\n## Performance considerations\\nNone identified\\n\\n## Risks\\n- 🟡 Migration on a large table\\n\\n## Out of scope\\n- Bulk import\\n\\n## Open questions\\n### 1. Should deletes be soft?\\n**Why it matters:** audit trail\\n**Recommendation:** soft delete\\n### 2. Rate limit?\\n**Why it matters:** abuse\\n**Recommendation:** no, follow-up" "" ;;
+  structured) envelope "{\\\"verdict\\\":\\\"NEEDS FIXES\\\"}" ',"structured_output":{"verdict":"NEEDS FIXES","reason":"one critical","findings":[{"severity":"critical","problem":"x"},{"severity":"note","problem":"y"}],"document":"# Review: t\n\n## Verdict: NEEDS FIXES\n\nbody"}' ;;
+  text)       printf 'plain text result for: %s\n' "$snippet" ;;
+  is_error)   cat <<EOF
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":50,"result":"Something went wrong","total_cost_usd":0.001,"usage":{"input_tokens":1,"output_tokens":0}}
+EOF
+              ;;
+  exit1)      echo "boom" >&2; echo "not json"; exit 1 ;;
+  timeout)    sleep 30 ;;
+  *)          echo "unknown FAKE_CLAUDE_MODE" >&2; exit 2 ;;
+esac

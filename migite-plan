@@ -23,6 +23,7 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_claude
 import migite_paths
 
 # ── Models ─────────────────────────────────────────────────────────────────────
@@ -107,31 +108,26 @@ def condense_audit(audit_text: str, limit: int = 4000) -> str:
 
 # ── Claude subprocess call ──────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = THINK_MODEL, thinking: bool = False) -> str:
-    import time
-    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    timeout = 600 if thinking else 300
+def call_claude(prompt: str, model: str = THINK_MODEL, thinking: bool = False, label: str = "") -> str:
+    """Thin wrapper over the shared migite_claude.call_claude: same text-in/text-out
+    contract the nodes below expect, plus per-call usage recorded to the run's
+    ledger ($MIGITE_USAGE_LEDGER) under this tool name and the node label."""
+    return migite_claude.call_claude(
+        prompt, model, thinking=thinking, tool="migite-plan", label=label
+    ).text
 
-    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
-    t0 = time.monotonic()
-    try:
-        result = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, env=env, timeout=timeout
-        )
-    except subprocess.TimeoutExpired:
-        elapsed = time.monotonic() - t0
-        raise RuntimeError(
-            f"claude --print timed out after {elapsed:.0f}s "
-            f"(limit={timeout}s, thinking={thinking}, model={model})"
-        )
-    elapsed = time.monotonic() - t0
-    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {result.returncode})", flush=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"claude --print failed (exit {result.returncode}, {elapsed:.1f}s): {result.stderr[:400]}"
-        )
-    return result.stdout.strip()
+
+def count_open_questions(plan: str) -> int:
+    """`### N. <question>` entries under the plan's `## Open questions` section."""
+    in_section = False
+    n = 0
+    for line in plan.splitlines():
+        if line.startswith("## "):
+            in_section = line.strip().lower().startswith("## open questions")
+            continue
+        if in_section and re.match(r"^###\s+\d+\.", line):
+            n += 1
+    return n
 
 
 def extract_headings(text: str) -> set[str]:
@@ -321,6 +317,10 @@ class PlanState(TypedDict):
     critic_findings: str
     plan_final: str
     testing_plan: str
+    # Provenance for plan.json — how many stub retries synthesis needed, and
+    # what refine_plan did with the critic findings.
+    synth_retries: int
+    refine_status: str
 
 
 class ExploreInput(TypedDict):
@@ -389,7 +389,7 @@ Analyse the **{area}** area above for this task. Report:
 Be specific — name files and methods. Under 350 words."""
 
     try:
-        findings = call_claude(prompt, model=EXPLORE_MODEL)
+        findings = call_claude(prompt, model=EXPLORE_MODEL, label=f"explore:{area}")
     except Exception as e:
         findings = f"Exploration failed: {e}"
     return {"explorations": [f"### {area}\n{findings}"]}
@@ -444,7 +444,8 @@ These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
 
 Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
 
-    draft = call_claude(prompt, model=THINK_MODEL, thinking=True)
+    draft = call_claude(prompt, model=THINK_MODEL, thinking=True, label="synthesize_plan")
+    retries = 0
 
     # Guard against the model returning a one-line stub confirmation ("Plan written
     # to Obsidian...") instead of the actual document — observed in practice, and
@@ -458,7 +459,8 @@ Write the complete development plan. Output only the plan document — no preamb
             "the FULL plan document itself, with real section headings, not a "
             "one-line description of what you would write."
         )
-        draft = call_claude(retry_prompt, model=THINK_MODEL, thinking=True)
+        retries = 1
+        draft = call_claude(retry_prompt, model=THINK_MODEL, thinking=True, label="synthesize_plan:retry")
         if looks_like_stub(draft):
             raise RuntimeError(
                 "migite-plan: synthesis produced a stub instead of an actual plan "
@@ -467,7 +469,7 @@ Write the complete development plan. Output only the plan document — no preamb
                 f"{len(extract_headings(draft))} headings)."
             )
 
-    return {"plan_draft": draft}
+    return {"plan_draft": draft, "synth_retries": retries}
 
 
 def run_architecture_critic(state: PlanState) -> dict:
@@ -484,7 +486,7 @@ def run_architecture_critic(state: PlanState) -> dict:
 
 {blueprint_block}{audit_block}## Plan to review:
 {state['plan_draft']}"""
-    findings = call_claude(prompt, model=CRITIC_MODEL, thinking=True)
+    findings = call_claude(prompt, model=CRITIC_MODEL, thinking=True, label="architecture_critic")
     return {"critic_findings": findings}
 
 
@@ -492,7 +494,7 @@ def refine_plan(state: PlanState) -> dict:
     findings = state.get("critic_findings", "")
     if "No architectural concerns" in findings:
         print("  ▶ Refine: no concerns — plan unchanged", flush=True)
-        return {"plan_final": state["plan_draft"]}
+        return {"plan_final": state["plan_draft"], "refine_status": "no_concerns"}
     print("  ▶ Refining plan with critic findings", flush=True)
     prompt = f"""Original plan:
 {state['plan_draft']}
@@ -511,7 +513,8 @@ Formatting rules to preserve and enforce in the revised output:
 - Tables for comparisons, not inline prose
 
 Output only the revised plan document."""
-    refined = call_claude(prompt, model=THINK_MODEL, thinking=True)
+    refined = call_claude(prompt, model=THINK_MODEL, thinking=True, label="refine_plan")
+    status = "applied"
 
     # Guard against the model returning a narrative recap of its changes, or a bare
     # stub confirmation sentence, instead of the actual plan document (both observed
@@ -531,15 +534,16 @@ Output only the revised plan document."""
             "or description of changes instead. Output the FULL revised plan itself, "
             "with the same headings as the original plan, not a recap of what changed."
         )
-        refined = call_claude(retry_prompt, model=THINK_MODEL, thinking=True)
+        refined = call_claude(retry_prompt, model=THINK_MODEL, thinking=True, label="refine_plan:retry")
+        status = "applied_after_retry"
         kept = len(draft_headings & extract_headings(refined))
         overlap_regressed = bool(draft_headings) and (kept / len(draft_headings) < 0.6)
         if overlap_regressed or looks_like_stub(refined):
             print("  ⚠ Refine still failed structure check — keeping pre-refine plan; "
                   "see architecture-critic.md for the findings that weren't applied", flush=True)
-            return {"plan_final": state["plan_draft"]}
+            return {"plan_final": state["plan_draft"], "refine_status": "kept_draft"}
 
-    return {"plan_final": refined}
+    return {"plan_final": refined, "refine_status": status}
 
 
 def generate_testing_plan(state: PlanState) -> dict:
@@ -577,7 +581,7 @@ If the plan involves no endpoints or user-facing behaviour to verify by hand (e.
 refactor with only spec coverage), say so explicitly under each section and state what to verify
 instead (e.g. "run the full spec suite for X") rather than inventing steps that don't apply."""
 
-    testing_plan = call_claude(prompt, model=THINK_MODEL)
+    testing_plan = call_claude(prompt, model=THINK_MODEL, label="generate_testing_plan")
     return {"testing_plan": testing_plan}
 
 
@@ -598,6 +602,46 @@ def write_outputs(state: PlanState) -> dict:
     testing_plan_path.parent.mkdir(parents=True, exist_ok=True)
     testing_plan_path.write_text(state["testing_plan"])
     print(f"    ✔ testing-plan.md → {testing_plan_path}", flush=True)
+
+    # plan.json — the machine-readable envelope beside plan.md. Everything here
+    # is derived deterministically from the documents already written, so it can
+    # never disagree with them; usage comes from this process's ledger records.
+    critic = state["critic_findings"]
+    critic_counts = migite_claude.severity_counts(critic)
+    failed_explorers = [
+        block.splitlines()[0].lstrip("# ").strip()
+        for block in state["explorations"]
+        if "Exploration failed:" in block
+    ]
+    ledger_path = os.environ.get(migite_claude.LEDGER_ENV)
+    own_records = [r for r in migite_claude.read_ledger(ledger_path) if r.get("tool") == "migite-plan"] if ledger_path else []
+    envelope = {
+        **migite_claude.envelope_base("migite-plan"),
+        "base_branch": state["base_branch"],
+        "stack": state.get("stack", ""),
+        "task_type": state.get("task_type", ""),
+        "critic": {
+            "clean": "No architectural concerns" in critic,
+            **critic_counts,
+        },
+        "open_questions": count_open_questions(state["plan_final"]),
+        "plan_headings": [l.strip() for l in state["plan_final"].splitlines() if l.startswith("## ")],
+        "synth_retries": state.get("synth_retries", 0),
+        "refine_status": state.get("refine_status", ""),
+        "explorers": {
+            "count": len(state["explorations"]),
+            "failed": failed_explorers,
+        },
+        "outputs": {
+            "plan": str(plan_path),
+            "critic": str(critic_path),
+            "testing_plan": str(testing_plan_path),
+        },
+        "usage": migite_claude.summarize(own_records)["total"] if own_records else None,
+    }
+    json_path = plan_path.with_name("plan.json")
+    migite_claude.write_json(json_path, envelope)
+    print(f"    ✔ plan.json → {json_path}", flush=True)
 
     Path(state["sentinel"]).touch()
     print("    ✔ sentinel written", flush=True)
@@ -692,6 +736,8 @@ def main() -> None:
             "critic_findings": "",
             "plan_final":     "",
             "testing_plan":   "",
+            "synth_retries":  0,
+            "refine_status":  "",
         })
         print("\n  ✔ migite-plan complete", flush=True)
     except Exception as e:

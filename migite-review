@@ -13,6 +13,7 @@
 import argparse
 import operator
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -22,10 +23,42 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+import migite_claude
 import migite_paths
 
 REVIEW_MODEL  = "claude-sonnet-5"
 CRITIC_MODEL  = "claude-opus-5"
+
+# Structured-output schema for the verdict synthesis. `claude --json-schema`
+# validates the model's reply against this, so the verdict the commit gate
+# reads is a typed enum, not a regex over prose. `document` carries the full
+# human review; it is written to review.md unchanged.
+REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["READY TO COMMIT", "NEEDS FIXES"]},
+        "reason": {"type": "string", "description": "1-3 sentences: the single factor that decided the verdict"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {"type": "string", "enum": ["critical", "warning", "note"]},
+                    "dimension": {"type": "string"},
+                    "file": {"type": "string"},
+                    "line": {"type": ["integer", "null"]},
+                    "problem": {"type": "string"},
+                    "fix": {"type": "string"},
+                },
+                "required": ["severity", "problem"],
+            },
+        },
+        "document": {"type": "string", "description": "the complete review document in the required markdown format"},
+    },
+    "required": ["verdict", "reason", "findings", "document"],
+}
+
+VERDICT_KEY = {"NEEDS FIXES": "needs_fixes", "READY TO COMMIT": "ready"}
 
 # Ships in the repo's prompts/ dir next to this script (resolve() follows the
 # ~/.local/bin symlink). Hard error if missing — see read_prompt().
@@ -69,26 +102,28 @@ REVIEW_DIMENSIONS = [
 
 # ── Claude subprocess call ──────────────────────────────────────────────────────
 
-def call_claude(prompt: str, model: str = REVIEW_MODEL) -> str:
-    import time
-    cmd = ["claude", "--print", "--output-format", "text", "--model", model]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    print(f"      claude cmd: {' '.join(cmd)}", flush=True)
-    t0 = time.monotonic()
-    try:
-        result = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, env=env, timeout=600
-        )
-    except subprocess.TimeoutExpired:
-        elapsed = time.monotonic() - t0
-        raise RuntimeError(f"claude --print timed out after {elapsed:.0f}s (limit=600s, model={model})")
-    elapsed = time.monotonic() - t0
-    print(f"      ✔ claude returned in {elapsed:.1f}s (exit {result.returncode})", flush=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"claude --print failed (exit {result.returncode}, {elapsed:.1f}s): {result.stderr[:400]}"
-        )
-    return result.stdout.strip()
+def call_claude(prompt: str, model: str = REVIEW_MODEL, label: str = "",
+                schema: dict | None = None) -> migite_claude.CallResult:
+    """Shared wrapper (see migite_claude): records usage under this tool + label;
+    with `schema`, the result carries schema-validated `.structured` output."""
+    return migite_claude.call_claude(prompt, model, tool="migite-review", label=label, schema=schema)
+
+
+def verdict_from_markdown(doc: str) -> str:
+    """Deterministic fallback mirroring helpers.sh review_verdict(): anchored on
+    the Verdict heading, never a whole-file keyword grep."""
+    lines = doc.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^#+\s*[Vv]erdict", line):
+            rest = re.sub(r"^#+\s*[Vv]erdict\s*:?\s*", "", line)
+            if not re.search(r"[^\s*_]", rest):
+                rest = next((l for l in lines[i + 1:] if l.strip()), "")
+            if re.search(r"NEEDS (FIXES|CHANGES)", rest):
+                return "needs_fixes"
+            if re.search(r"READY TO (COMMIT|MERGE)|APPROVED", rest):
+                return "ready"
+            return "unknown"
+    return "unknown"
 
 
 # ── LangGraph state ─────────────────────────────────────────────────────────────
@@ -107,6 +142,7 @@ class ReviewState(TypedDict):
     review_cmd: str
     findings: Annotated[list[str], operator.add]
     verdict: str
+    review_meta: dict   # structured fields for review.json, set by synthesize_verdict
 
 
 class DimensionInput(TypedDict):
@@ -188,7 +224,7 @@ If nothing found, output exactly: ✅ No issues in this dimension.
 Do not repeat findings that other dimensions would cover."""
 
     try:
-        result = call_claude(prompt)
+        result = call_claude(prompt, label=f"review:{dim}").text
     except Exception as e:
         result = f"🔴 **Critical** — reviewer failed: {e}"
     return {"findings": [f"### {dim}\n{result}"]}
@@ -197,7 +233,7 @@ Do not repeat findings that other dimensions would cover."""
 def synthesize_verdict(state: ReviewState) -> dict:
     print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
     findings_text = "\n\n".join(state["findings"])
-    prompt = f"""## Review format
+    base_prompt = f"""## Review format
 {state['review_cmd']}
 
 ## Plan summary (first 1500 chars)
@@ -215,15 +251,48 @@ def synthesize_verdict(state: ReviewState) -> dict:
 Synthesise these findings into a single review document following the format above.
 De-duplicate overlapping findings. Assign the final verdict:
 - READY TO COMMIT — no critical issues
-- NEEDS FIXES — one or more critical issues or significant warnings remain
+- NEEDS FIXES — one or more critical issues or significant warnings remain"""
 
-Output only the review document."""
+    # Preferred path: schema-validated structured output. The verdict the commit
+    # gate reads is then a typed enum and the findings are a real list — no regex
+    # over prose. `document` is the same human review as before.
+    structured_prompt = base_prompt + """
 
+Return a JSON object matching the provided schema:
+- `verdict`: exactly "READY TO COMMIT" or "NEEDS FIXES"
+- `reason`: the single factor that decided it (1-3 sentences)
+- `findings`: every de-duplicated finding as an object (severity, dimension, file, line, problem, fix)
+- `document`: the COMPLETE review document in the format above, as markdown, with the same verdict"""
     try:
-        result = call_claude(prompt, model=CRITIC_MODEL)
+        res = call_claude(structured_prompt, model=CRITIC_MODEL, label="synthesize_verdict", schema=REVIEW_SCHEMA)
+        s = res.structured if isinstance(res.structured, dict) else None
+        if s and s.get("verdict") in VERDICT_KEY and s.get("document"):
+            meta = {
+                "verdict": VERDICT_KEY[s["verdict"]],
+                "verdict_label": s["verdict"],
+                "reason": s.get("reason", ""),
+                "findings": s.get("findings") or [],
+                "source": "structured",
+            }
+            return {"verdict": s["document"], "review_meta": meta}
+        print("  ⚠ Structured verdict missing or malformed — falling back to text synthesis", flush=True)
     except Exception as e:
-        result = f"# Review\n\n## Verdict\nNEEDS FIXES\n\nReview synthesis failed: {e}"
-    return {"verdict": result}
+        print(f"  ⚠ Structured synthesis failed ({str(e)[:160]}) — falling back to text synthesis", flush=True)
+
+    # Fallback: plain document, verdict and counts derived deterministically from it.
+    try:
+        doc = call_claude(base_prompt + "\n\nOutput only the review document.",
+                          model=CRITIC_MODEL, label="synthesize_verdict:text").text
+    except Exception as e:
+        doc = f"# Review\n\n## Verdict: NEEDS FIXES\n\nReview synthesis failed: {e}"
+    meta = {
+        "verdict": verdict_from_markdown(doc),
+        "verdict_label": "",
+        "reason": "",
+        "findings": [],
+        "source": "markdown",
+    }
+    return {"verdict": doc, "review_meta": meta}
 
 
 def write_review(state: ReviewState) -> dict:
@@ -233,6 +302,38 @@ def write_review(state: ReviewState) -> dict:
     review_path.parent.mkdir(parents=True, exist_ok=True)
     review_path.write_text(state["verdict"])
     print(f"    ✔ review.md → {review_path}", flush=True)
+
+    # review.json — the machine-readable envelope the commit gate reads.
+    meta = state.get("review_meta") or {"verdict": verdict_from_markdown(state["verdict"]), "findings": [], "source": "markdown"}
+    findings = meta.get("findings") or []
+    if findings:
+        counts = {sev: sum(1 for f in findings if f.get("severity") == sev) for sev in ("critical", "warning", "note")}
+    else:
+        counts = migite_claude.severity_counts(state["verdict"])
+    dimensions = {}
+    for block in state["findings"]:
+        head, _, body = block.partition("\n")
+        dim = head.lstrip("# ").strip()
+        dimensions[dim] = {**migite_claude.severity_counts(body), "failed": "reviewer failed" in body}
+    ledger_path = os.environ.get(migite_claude.LEDGER_ENV)
+    own_records = [r for r in migite_claude.read_ledger(ledger_path) if r.get("tool") == "migite-review"] if ledger_path else []
+    envelope = {
+        **migite_claude.envelope_base("migite-review"),
+        "base_branch": state["base_branch"],
+        "verdict": meta.get("verdict", "unknown"),
+        "verdict_label": meta.get("verdict_label", ""),
+        "reason": meta.get("reason", ""),
+        "counts": counts,
+        "findings": findings,
+        "dimensions": dimensions,
+        "source": meta.get("source", "markdown"),
+        "outputs": {"review": str(review_path)},
+        "usage": migite_claude.summarize(own_records)["total"] if own_records else None,
+    }
+    json_path = review_path.with_name("review.json")
+    migite_claude.write_json(json_path, envelope)
+    print(f"    ✔ review.json → {json_path}  (verdict={envelope['verdict']}, "
+          f"{counts['critical']}🔴 {counts['warning']}🟡 {counts['note']}🟢, source={envelope['source']})", flush=True)
 
     Path(state["sentinel"]).touch()
     print("    ✔ sentinel written", flush=True)
@@ -302,6 +403,7 @@ def main() -> None:
             "review_cmd": review_cmd,
             "findings": [],
             "verdict": "",
+            "review_meta": {},
         })
         print("\n  ✔ migite-review complete", flush=True)
     except Exception as e:
