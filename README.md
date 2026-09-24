@@ -28,6 +28,7 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 - [Configuration in one minute](#configuration)
 - [Requirements and portability](#requirements)
 - [Documentation](#documentation)
+- [Feedback](#feedback)
 - [Roadmap](#roadmap)
 
 ---
@@ -233,6 +234,43 @@ Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down;
 | [docs/troubleshooting.md](./docs/troubleshooting.md) | Permission failures, config errors, missing Python or PyYAML, review loops, nested Claude sessions |
 | [docs/faq.md](./docs/faq.md) | Does it commit? Does `--jira` fetch the ticket? Why only 14 files per explorer? |
 | [docs/glossary.md](./docs/glossary.md) | Intake, scratchpad, vault, gate, envelope, ledger, role, tier |
+
+---
+
+<a id="feedback"></a>
+## Feedback
+
+Feedback goes in [GitHub Issues](https://github.com/EvertSalinas/migite/issues/new/choose). The best
+time to file is right after something bothers you, while the terminal output is still on screen.
+
+| When | Open |
+|---|---|
+| a run failed, hung, or produced a bad plan, review, or verdict | [Something went wrong](https://github.com/EvertSalinas/migite/issues/new?template=bug.yml) |
+| something could work better, or you keep hitting the same friction | [Idea or improvement](https://github.com/EvertSalinas/migite/issues/new?template=idea.yml) |
+| you want to know how to do something | the [workflow tutorials](./docs/workflows/README.md) or [troubleshooting](./docs/troubleshooting.md) first |
+
+**What makes a report useful.** The forms ask for these; have them ready:
+
+```bash
+migite doctor                     # paste the whole output: agent CLI, stack, config, ticket source
+git -C "$(dirname "$(readlink -f "$(command -v migite)")")/.." log --oneline -1    # your migite version
+```
+
+Also useful: the exact command you ran, the workflow and the phase or gate where it went wrong,
+and the relevant part of the task's `scratchpad/<slug>/` files (`plan.md`, `review.md`,
+`review.json`, `usage.json`). For an idea, describe the problem before the solution; there may be
+a simpler fix than the one you have in mind.
+
+**What not to include.** Secrets, tokens, credentials, and customer data. Trim ticket descriptions
+and logs before pasting; both forms ask you to confirm it.
+
+**What happens next.** Every new issue is labelled `needs-triage`. Triage labels it by workflow and
+then either fixes it, asks for what's missing, or closes it with the reason. Ideas that hold up
+feed the [Roadmap](#roadmap) below.
+
+Separately, migite writes its own observations after eventful runs to
+[docs/improvements.md](./docs/improvements.md). That file is the tool's notes on itself; your
+feedback belongs in Issues, where it can be discussed and tracked.
 
 ---
 
