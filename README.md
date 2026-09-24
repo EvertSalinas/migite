@@ -220,6 +220,7 @@ Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down;
 | Doc | Read it when |
 |-----|--------------|
 | [docs/getting-started.md](./docs/getting-started.md) | Installing on macOS or Linux, verifying with `doctor`, a full first run with every file it produces |
+| [docs/workflows/](./docs/workflows/README.md) | Tutorials, one per workflow, with every variant: build, amend, intake, explore, blueprint, audit, PR review, tickets, configure, other agents |
 | [docs/migite.md](./docs/migite.md) | The command-line reference and the run modes: amend, intake, blueprint, audit, staged; resuming a run |
 | [docs/phases.md](./docs/phases.md) | Phase by phase: what each step calls, every gate key, which files get linted and tested, memory injection, tmux |
 | [docs/outputs.md](./docs/outputs.md) | Every file a run writes, the commit-gate banner, the testing-plan requirement |

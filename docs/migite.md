@@ -8,7 +8,7 @@ The command-line reference for `migite` and its run modes. The reference is spli
 | [phases.md](./phases.md) | what each phase does and calls, every gate key, which files get linted and tested, memory injection, tmux |
 | [outputs.md](./outputs.md) | every file a run writes, the commit-gate banner, the testing-plan requirement |
 
-New here? Read [getting-started.md](./getting-started.md) first — it walks one complete run with
+For task-by-task tutorials with examples, see [workflows/](./workflows/README.md). New here? Read [getting-started.md](./getting-started.md) first: it walks one complete run with
 every prompt and output file. Configuration keys are in [configuration.md](./configuration.md).
 
 ## Contents

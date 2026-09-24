@@ -432,6 +432,7 @@ amendment.
 <a id="next"></a>
 ## Where to go next
 
+- [workflows/](./workflows/README.md): one tutorial per workflow, with the variants you will reach for next.
 - Try `gates.commit.policy: strict` in a team repo's `.migite.yml`, and `models.effort.strong: xhigh` in your user config. Compare `usage.json` and the gate outcomes across a few runs.
 - Feed a whole initiative through `migite-explore "…" --intakes`, then run each intake with `migite --intake`.
 - Read `knowledge.md` after a few runs; it is the memory the planner starts from every time.
