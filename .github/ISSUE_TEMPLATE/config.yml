@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: How do I…? (the workflow tutorials)
+    url: https://github.com/EvertSalinas/migite/tree/main/docs/workflows
+    about: One tutorial per workflow, with every variant and a table of common problems.
+  - name: Something's not working (troubleshooting)
+    url: https://github.com/EvertSalinas/migite/blob/main/docs/troubleshooting.md
+    about: Symptom-first fixes for config errors, permissions, review loops, Jira, and other agents.

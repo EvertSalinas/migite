@@ -1,0 +1,74 @@
+name: Idea or improvement
+description: Something migite could do better, a workflow it's missing, or friction you keep hitting.
+title: "[idea] <workflow>: <the improvement, in a few words>"
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start from the problem, not the solution: what slowed you down or went wrong is more
+        useful than a feature request on its own, and there may be a simpler fix.
+
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow
+      options:
+        - Build a task (migite "…" / --jira)
+        - Amend a task (--amend)
+        - Start from an intake (--intake / a .md file)
+        - Explore an initiative (migite-explore)
+        - Blueprint a project (migite-blueprint)
+        - Audit and remediate (migite-audit / --audit)
+        - Review a pull request (migite-pr-review)
+        - Read a ticket (migite-ticket)
+        - Configure or check (migite config / migite doctor)
+        - A new workflow
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What happens today, and why it's a problem for you.
+      placeholder: |
+        The plan gate shows the critic's findings but not which ones refine_plan addressed, so I
+        re-read the whole plan every time to check.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often you hit it
+      options:
+        - Every run
+        - Most runs
+        - Every week or so
+        - Rarely, but it's costly when I do
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like instead
+      description: A rough idea is enough. Mockups of terminal output are welcome.
+      placeholder: Mark each critic finding at the gate as addressed or not, with the plan section that addresses it.
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today instead (optional)
+      description: A workaround, a manual step, another tool.
+
+  - type: checkboxes
+    id: safe
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, tokens, credentials, and customer data from everything above.
+          required: true
