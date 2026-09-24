@@ -30,6 +30,33 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+migite-blueprint - define a new project from a brief, before any code exists
+
+Usage:
+  migite-blueprint "<brief>"
+  migite-blueprint --brief <file> [--name <slug>] [--stack "<stack>"] [--output <dir>]
+  migite-blueprint --from-blueprint <blueprint.md> [--output <dir>]
+  migite-blueprint                                  (asks for the brief)
+
+Options:
+  --brief <file>            read the brief from a file (one sentence to several pages)
+  --name <slug>             the project's name (asked for when missing)
+  --stack "<stack>"         state the tech stack instead of inferring it from the brief
+  --output <dir>            output directory (default: <vault>/<org>/<name>/blueprint)
+  --from-blueprint <file>   re-extract the milestone intakes and knowledge.md from an
+                            existing, possibly hand-edited, blueprint.md
+  -h, --help                show this help
+
+Outputs: blueprint.md, knowledge.md, and one migite intake per milestone
+(intake-NN-<slug>.md), each runnable with: migite <intake.md>
+EOF
+}
+
+# --help works anywhere: before the Python, langgraph, and git checks below.
+wants_help "$@" && { usage; exit 0; }
 migite_resolve_python
 require_python
 VAULT_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
@@ -73,7 +100,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -*)
-      echo "✘ Unknown option: $1" >&2
+      echo "✘ Unknown option: $1 (see: migite-blueprint --help)" >&2
       exit 1
       ;;
     *)

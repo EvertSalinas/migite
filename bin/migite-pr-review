@@ -25,6 +25,38 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+migite-pr-review - review a branch's changes against its base, with a verdict. Read-only.
+
+Usage:
+  migite-pr-review --branch <branch> [--base <branch>] [--skip-tests]
+                   [--jira <key-or-url>] [--output <file>]
+
+Options:
+  --branch <branch>     the branch to review (required)
+  --base <branch>       compare against this (default: origin/HEAD, then main, master, develop)
+  --skip-tests          skip rubocop and rspec
+  --jira <key-or-url>   file the review under that ticket's vault folder
+  --output <file>       write the review here instead of the vault
+  -h, --help            show this help
+
+Four reviewers run in parallel (correctness, security, test coverage, conventions and
+migrations), then a synthesis writes the verdict.
+EOF
+}
+
+# --help works anywhere: before the Python, langgraph, and git checks below.
+wants_help "$@" && { usage; exit 0; }
+
+# ── Require --branch ─────────────────────────────────────────────────────────────
+if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
+  echo "✘ --branch is required" >&2
+  echo "" >&2
+  usage >&2
+  exit 1
+fi
 migite_resolve_python
 require_python
 
@@ -37,11 +69,6 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 
 require_langgraph
 
-# ── Require --branch ─────────────────────────────────────────────────────────────
-if [[ "$#" -eq 0 ]] || [[ "$*" != *"--branch"* ]]; then
-  echo "Usage: migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--output <file>]" >&2
-  exit 1
-fi
 
 # ── Run ──────────────────────────────────────────────────────────────────────────
 exec "$MIGITE_PYTHON" -m migite.tools.pr_review --repo-root "$REPO_ROOT" "$@"

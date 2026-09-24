@@ -25,6 +25,33 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+migite-ticket - read a Jira ticket the way migite's planner sees it
+
+Usage:
+  migite-ticket <key-or-url> [--out <file>]     fetch the ticket; markdown on stdout
+  migite-ticket fetch <key-or-url> [--out <file>] [--source jira-acli|jira-agent]
+  migite-ticket sources [<key-or-url>]          which source would be used here, and why
+  migite-ticket parse <key-or-url> [--shell]    the key, URL, and site, as JSON or for bash
+
+Options:
+  --out <file>      write the ticket here instead of stdout (only when the fetch succeeds)
+  --source <name>   use only this source, with no fallback
+  --shell           parse: print TICKET_KEY= and TICKET_URL= for bash to eval
+  -h, --help        show this help
+
+Sources, from tracker.provider in .migite.yml: Atlassian's acli, logged in once with
+`acli jira auth login --web`, else the agent's Atlassian MCP tools (one model call).
+Exit codes: 0 fetched, 1 failed or not a ticket, 2 no source can run here.
+Setup: docs/tickets.md
+EOF
+}
+
+case "${1:-}" in
+  ""|-h|--help|help) usage; exit 0 ;;
+esac
 migite_resolve_python
 require_python
 
@@ -35,9 +62,6 @@ if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
 fi
 
 case "${1:-}" in
-  ""|-h|--help)
-    sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-    exit 0 ;;
   parse|fetch|sources)
     exec "$MIGITE_PYTHON" -m migite.tickets ${repo_args[@]+"${repo_args[@]}"} "$@" ;;
   *)

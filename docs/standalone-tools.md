@@ -2,6 +2,7 @@
 
 Reference for the four tools that run independently of `migite`, plus the small
 `migite-ticket` helper. See the [README](../README.md) for the "which tool for which situation" table.
+Every tool prints its options with `--help`, outside a repo and before any dependency check.
 
 All four read the same layered configuration as `migite`
 ([docs/configuration.md](./configuration.md)): `vault.base` / `vault.org` for output paths,

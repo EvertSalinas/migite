@@ -50,7 +50,7 @@ pip3 install langgraph pyyaml
 
 # 3. Your personal defaults (vault location, editor, models). Every value in the
 #    generated file is a default — delete the lines you don't change.
-migite config --init --user && $EDITOR ~/.config/migite/config.yml
+migite config --edit --user
 
 # 4. Check the install, then run your first task
 cd ~/Code/your-rails-app
@@ -164,9 +164,10 @@ Precedence: **flags > env vars > `$MIGITE_CONFIG` > `<repo>/.migite.yml` > `~/.c
 Every default equals the behaviour without a file, so nothing changes until you write one.
 
 ```bash
-migite config --init --user   # once: ~/.config/migite/config.yml, your defaults for every repo
-migite config --init          # per repo: .migite.yml, commit it with the project
+migite config --edit --user   # once: ~/.config/migite/config.yml, your defaults for every repo
+migite config --edit          # per repo: .migite.yml, commit it with the project
 migite config                 # effective config, with the source of every value
+migite --help                 # every command and flag (each tool also has --help)
 ```
 
 A repo file that turns on the strict gate and pins one model:

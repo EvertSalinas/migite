@@ -43,7 +43,7 @@ check "migite-ticket: a bare key means fetch (no source → exit 2)" \
 check "migite-ticket: sources explains the choice" \
   bash -c 'cd "$1" && MIGITE_PYTHON="$2" "$3/bin/migite-ticket" sources 2>&1 | grep -q "acli logged in to acme.atlassian.net"' _ "$tk_dir" "$MIGITE_PYTHON" "$MIGITE_HOME"
 check "migite-ticket: --help prints usage" \
-  bash -c 'MIGITE_PYTHON="$1" "$2/bin/migite-ticket" --help | grep -q "migite-ticket BB-1234"' _ "$MIGITE_PYTHON" "$MIGITE_HOME"
+  bash -c 'MIGITE_PYTHON="$1" "$2/bin/migite-ticket" --help | grep -q "migite-ticket <key-or-url>"' _ "$MIGITE_PYTHON" "$MIGITE_HOME"
 
 check "migite --jira: input that isn't a ticket stops the run with a clear error" \
   bash -c 'cd "$1" && git init -q . 2>/dev/null; out=$(MIGITE_PYTHON="$2" bash "$3/bin/migite" --jira "not a ticket" 2>&1); [[ $? != 0 && "$out" == *"Not a Jira ticket key or ticket URL"* ]]' _ "$tk_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"

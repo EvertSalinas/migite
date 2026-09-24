@@ -108,8 +108,7 @@ the exact file and key that failed validation.
 ## Your personal config
 
 ```bash
-migite config --init --user
-$EDITOR ~/.config/migite/config.yml
+migite config --edit --user      # writes the starter the first time, then opens it
 ```
 
 The generated file has every setting at its default with a one-line comment. The usual first
@@ -127,7 +126,7 @@ models:
 
 Delete everything else. Then `migite config` shows the effective result with the source of each
 value, and `migite doctor` validates the file. A repo can override any key with its own
-`.migite.yml` (`migite config --init` inside the repo). Details: [configuration.md](./configuration.md).
+`.migite.yml` (`migite config --edit` inside the repo). Details: [configuration.md](./configuration.md).
 
 **If you use Jira**, install Atlassian's CLI so `--jira` plans from the real description and
 acceptance criteria. It logs in through your browser, so there is no token to store, and it costs

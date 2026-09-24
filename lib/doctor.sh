@@ -13,17 +13,39 @@
 # detect_stack/STACK_PROFILES to already be available (sourced by migite
 # before this file).
 
+# doctor_usage - `migite doctor --help`
+doctor_usage() {
+  cat <<'EOF'
+migite doctor - read-only health check for a repo and your migite install
+
+Usage:
+  migite doctor [--repo <path>]
+
+Checks the stack detection, the agent CLI and its version, where --jira gets tickets,
+git and Python, bundle (rails stack), the configuration, the four phase prompts,
+scratchpad and vault drift, orphaned sentinels, and duplicate knowledge entries.
+It changes nothing, and exits 1 when it finds an issue.
+
+  --repo <path>   check another repo (default: the current directory)
+  -h, --help      show this help
+EOF
+}
+
 run_doctor() {
   local doc_repo_arg="$PWD"
   while [[ $# -gt 0 ]]; do
     case "${1:-}" in
+      -h|--help)
+        doctor_usage
+        return 0
+        ;;
       --repo)
         doc_repo_arg="${2:-}"
         [[ -z "$doc_repo_arg" ]] && { echo "Provide a path after --repo" >&2; return 1; }
         shift 2
         ;;
       *)
-        echo "Unknown doctor argument: $1 (supported: --repo <path>)" >&2
+        echo "Unknown doctor argument: $1 (see: migite doctor --help)" >&2
         return 1
         ;;
     esac

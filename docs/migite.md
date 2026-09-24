@@ -39,8 +39,11 @@ migite --staged                             # one implement session per Scope su
 migite --stack rails|generic                # override stack detection
 migite --amend ["feedback"] | --amend-file <file> [--jira KEY]   # scope a delta against a built task
 migite doctor [--repo <path>]               # read-only health check
-migite config [--init [--user] [--force] | --validate]           # layered configuration
+migite config [--edit [--user] | --init [--user] [--force] | --validate | --path [--user]]   # layered configuration
+migite --help                               # all of the above; every subcommand and tool also takes --help
 ```
+
+An option migite doesn't recognise is an error that points at `--help`, not a task description.
 
 <a id="type-values"></a>
 **`--type` values**

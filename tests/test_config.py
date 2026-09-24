@@ -306,10 +306,35 @@ class ShellExportTest(_Isolated):
         self.assertEqual(rc.returncode, 0, rc.stderr)
 
 
+class ConfigFilePathTest(_Isolated):
+    """config_file_path: the file `migite config --edit` opens."""
+
+    def test_repo_default_and_existing(self):
+        self.assertEqual(config.config_file_path(self.repo), self.repo / ".migite.yml")
+        self.write_repo({}, name=".migite.json")
+        self.assertEqual(config.config_file_path(self.repo), self.repo / ".migite.json")   # an existing file wins
+
+    def test_user_default_and_existing(self):
+        user_dir = self.home / ".config" / "migite"
+        self.assertEqual(config.config_file_path(self.repo, user=True), user_dir / "config.yml")
+        self.write_user({}, name="config.json")
+        self.assertEqual(config.config_file_path(self.repo, user=True), user_dir / "config.json")
+
+
+
 class CliTest(_Isolated):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, "-m", "migite.config", "--repo-root", str(self.repo), *args],
                               capture_output=True, text=True, env=os.environ, cwd=ROOT)
+
+    def test_path_answers_even_when_the_config_is_broken(self):
+        (self.repo / ".migite.json").write_text("{ not json")
+        r = self.run_cli("path")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), str(self.repo / ".migite.json"))
+        self.assertEqual(self.run_cli("validate").returncode, 1)          # the file really is broken
+        r = self.run_cli("path", "--user")
+        self.assertEqual(r.stdout.strip(), str(self.home / ".config" / "migite" / "config.yml"))
 
     def test_env_get_show_validate(self):
         self.write_repo({"models": {"strong": "cli-strong"}, "bogus": 1})

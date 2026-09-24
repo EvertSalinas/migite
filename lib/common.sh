@@ -15,6 +15,18 @@ CYAN='\033[0;36m'
 RED='\033[0;31m'
 RESET='\033[0m'
 
+# ── Help ──────────────────────────────────────────────────────────────────────
+# wants_help "$@" - true when -h or --help is among the arguments. Every command
+# calls it right after sourcing this file, before resolving Python or checking for
+# a repo, so --help works anywhere.
+wants_help() {
+  local arg
+  for arg in "$@"; do
+    [[ "$arg" == "-h" || "$arg" == "--help" ]] && return 0
+  done
+  return 1
+}
+
 # ── Output ────────────────────────────────────────────────────────────────────
 log()     { echo -e "${CYAN}▶ $1${RESET}"; }
 success() { echo -e "${GREEN}✔ $1${RESET}"; }

@@ -23,6 +23,28 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+migite-audit - audit this repository for correctness, security, and performance risks
+
+Usage:
+  migite-audit [--focus <area>] [--jira <key-or-url>] [--output <file>]
+
+Options:
+  --focus <area>        only the areas whose name matches this keyword (e.g. jobs, controllers)
+  --jira <key-or-url>   file the report under that ticket's vault folder
+  --output <file>       write the report here instead of the vault
+  -h, --help            show this help
+
+One reviewer per area runs in parallel, then a synthesis ranks the findings. Read-only.
+Default output: <vault>/<org>/<repo>/audit-<date>.md
+Turn the report into a task with: migite --audit <report.md>
+EOF
+}
+
+# --help works anywhere: before the Python, langgraph, and git checks below.
+wants_help "$@" && { usage; exit 0; }
 migite_resolve_python
 require_python
 

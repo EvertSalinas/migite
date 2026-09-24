@@ -31,25 +31,6 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
-migite_resolve_python
-require_python
-VAULT_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
-
-# ── Preflight ─────────────────────────────────────────────────────────────────
-# The git check lives after arg parsing - re-extract mode reads an exploration.md
-# from the vault and needs no repo at all.
-require_langgraph
-
-# ── Parse args ────────────────────────────────────────────────────────────────
-BRIEF_TEXT=""
-BRIEF_FILE=""
-INIT_NAME=""
-OUTPUT_DIR=""
-FOCUS=""
-WANT_INTAKES=false
-FROM_EXPLORATION=""
-JIRA=""
-ATTACH_FILES=()
 
 usage() {
   cat <<'EOF'
@@ -88,6 +69,29 @@ Outputs (in the output directory):
   intake-NN-<slug>.md   one migite intake per workstream (with --intakes)
 EOF
 }
+
+# --help works anywhere: before the Python, langgraph, and git checks below.
+wants_help "$@" && { usage; exit 0; }
+migite_resolve_python
+require_python
+VAULT_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
+
+# ── Preflight ─────────────────────────────────────────────────────────────────
+# The git check lives after arg parsing - re-extract mode reads an exploration.md
+# from the vault and needs no repo at all.
+require_langgraph
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+BRIEF_TEXT=""
+BRIEF_FILE=""
+INIT_NAME=""
+OUTPUT_DIR=""
+FOCUS=""
+WANT_INTAKES=false
+FROM_EXPLORATION=""
+JIRA=""
+ATTACH_FILES=()
+
 
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
@@ -135,7 +139,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -*)
-      echo "✘ Unknown option: $1" >&2
+      echo "✘ Unknown option: $1 (see: migite-explore --help)" >&2
       exit 1
       ;;
     *)
