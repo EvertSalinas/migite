@@ -1,0 +1,141 @@
+name: Something went wrong
+description: A run failed, stalled, produced a bad plan or review, or did something you didn't expect.
+title: "[bug] <workflow>: <what went wrong, in a few words>"
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The most useful reports say **which workflow**, **where in it**, and
+        **what you saw versus what you expected**. Paste real output where you can.
+
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow
+      description: Which one were you running? The tutorials are in docs/workflows/.
+      options:
+        - Build a task (migite "…" / --jira)
+        - Amend a task (--amend)
+        - Start from an intake (--intake / a .md file)
+        - Explore an initiative (migite-explore)
+        - Blueprint a project (migite-blueprint)
+        - Audit and remediate (migite-audit / --audit)
+        - Review a pull request (migite-pr-review)
+        - Read a ticket (migite-ticket)
+        - Configure or check (migite config / migite doctor)
+        - Install or setup
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it went wrong
+      description: The phase or gate it happened at, if the workflow has phases.
+      options:
+        - Before it started (arguments, config, setup)
+        - Ticket fetch
+        - Planning
+        - Plan gate
+        - TDD specs
+        - Implementation session
+        - Auto-heal
+        - Review
+        - Commit gate
+        - Knowledge capture
+        - PR description
+        - A standalone tool's output
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of problem
+      options:
+        - It crashed or exited with an error
+        - It hung or never finished
+        - The output was wrong or poor (plan, review, verdict, PR description)
+        - It did something I didn't ask for
+        - It was confusing (a prompt, a message, a gate)
+        - It was too slow or too expensive
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw. Paste the terminal output around the problem.
+      placeholder: |
+        At the commit gate the verdict said NEEDS FIXES, but review.md's findings were all Notes…
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: A READY TO COMMIT verdict, since nothing was Critical or a Warning.
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: Exactly as typed, with flags.
+      render: shell
+      placeholder: migite --jira BB-1234 --type feature --staged
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `migite doctor`
+      description: |
+        Run it in the same repo. It shows the agent CLI and its version, the stack, the config
+        files in effect, and the ticket source, which answers most setup questions.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent CLI
+      options:
+        - Claude Code
+        - Cursor CLI
+        - OpenCode
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: migite version
+      description: "The commit you're on: `git -C \"$(dirname \"$(readlink -f \"$(command -v migite)\")\")/..\" log --oneline -1`"
+      placeholder: 0111518 add workflows in documentation
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Files that show the problem (optional)
+      description: |
+        From the task's `scratchpad/<slug>/`: the relevant part of `plan.md`, `review.md`,
+        `review.json`, or `usage.json`. Trim to what matters.
+      render: text
+
+  - type: checkboxes
+    id: safe
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, tokens, credentials, and customer data from everything above.
+          required: true
