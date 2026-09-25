@@ -65,7 +65,7 @@ Before planning a fix, investigate using the exploration reports:
 - Root cause (confirmed or most likely hypothesis, and which it is)
 - Files to change and exactly what changes
 - Whether a migration or data fix is needed
-- Regression spec to add
+- Regression spec to add (a system spec when the bug only shows in the browser and the repo has spec/system)
 - Any related areas that might have the same issue
 - If the bug involves an endpoint: cURL examples reproducing the broken behaviour and the expected correct response
 - If the bug involves a non-trivial call chain: Mermaid flowchart tracing the execution path to the failure point
@@ -78,7 +78,7 @@ Before planning a fix, investigate using the exploration reports:
 
 1. Translate acceptance criteria into a test list — these become the spec examples
 2. Design the API contract precisely (if not fully specified in the intake, derive it from context and flag it as derived)
-3. Identify all layers that need to change (for a Rails app: route → controller → service → model → serializer → specs; use the equivalent layering for other stacks)
+3. Identify all layers that need to change (for a Rails app: route → controller → service → model → serializer → specs; when the feature has UI, also views/partials → Turbo Frame or Turbo Stream responses → Stimulus controllers; use the equivalent layering for other stacks)
 4. Flag any acceptance criteria that are ambiguous — route them to Open questions
 
 **Plan output for features:**
@@ -87,7 +87,7 @@ Before planning a fix, investigate using the exploration reports:
 - DB migration plan if applicable
 - Background job plan if applicable
 - Auth/policy changes
-- Full list of spec examples to write (unit + request)
+- Full list of spec examples to write (unit + request; for UI work, request specs that assert on turbo_stream responses, and system specs for new interactive flows when the repo has spec/system)
 - Explicit out-of-scope list (copy from intake + anything you're adding)
 - If the feature involves endpoints: cURL examples covering the happy path and key error scenarios
 - If the feature spans multiple layers: Mermaid flowchart of the call chain

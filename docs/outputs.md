@@ -39,6 +39,7 @@ copy never lags behind.
 | `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
 | `review.md` | Code review verdict and findings |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass |
+| `browser-check.md` | Only with `frontend.browser_check: ask` / `on` and a diff that touches views or JavaScript: the agent's PASS / FAIL / SKIPPED walk through the testing plan in a real browser, read by the `frontend` reviewer. See [Frontend](./phases.md#frontend) |
 | `pr-description.md` | Ready to paste into GitHub |
 | `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
@@ -97,10 +98,12 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 
 | Signal | Source |
 |--------|--------|
-| Tooling error | `tooling_failed()` matched either log: `No version is set for command`, `Bundler::GitError` / `not yet checked out`, or `0 examples` alongside a DB connection or load error — the tool never ran, so all results below are untrustworthy. Re-evaluated on every commit-gate re-check |
+| Tooling error | `tooling_failed()` matched a rubocop, rspec or frontend lint log: `No version is set for command`, `Bundler::GitError` / `not yet checked out`, `0 examples` alongside a DB connection or load error, a system-spec browser that never started (Ferrum, Selenium or Playwright), or a frontend linter configured but not installed — the tool never ran, so all results below are untrustworthy. Re-evaluated on every commit-gate re-check |
 | Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`lib/gate.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |
+| FE lint | erb_lint / eslint result, only when the diff touches views or JavaScript and the repo configures a linter |
+| Browser | The `Result:` line of `browser-check.md`, when the browser check ran |
 | Findings / Reason | From `review.json`: critical / warning / note counts and the one-line reason the verdict was decided. Only shown when the envelope exists (i.e. not after a hand-edit of `review.md`) |
 | Cost | Running total of headless model calls from the usage ledger — interactive sessions aren't metered |
 

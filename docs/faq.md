@@ -41,7 +41,8 @@ Yes. Re-run the same command. An existing intake is reused; an existing `plan.md
 See [resuming a run](./migite.md#resuming-a-run).
 
 **Why do the explorers read only a handful of files?**
-Cost and context. Each of the seven parallel explorers is capped at 14 files and 14k characters.
+Cost and context. Each of the seven parallel explorers (eight when the task may touch the
+frontend) is capped at 14 files and 14k characters.
 They ground the plan in real file and method names; the implement session, with full read and
 search access, does the deep exploration. Changed files are always read first, then files ranked
 by intake-keyword hits, weighted 5x for a hit in the path.

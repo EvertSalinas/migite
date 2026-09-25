@@ -17,6 +17,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [gates](#gates)
   - [permissions](#permissions)
   - [heal](#heal)
+  - [frontend](#frontend)
   - [prompts, templates](#prompts)
   - [budget](#budget)
   - [ui](#ui)
@@ -235,11 +236,12 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 
 | Role | Default tier | Where |
 |---|---|---|
-| `explore` | fast | `migite-plan` — the 7 parallel codebase explorers (grounding, capped at 14 files each) |
+| `explore` | fast | `migite-plan` — the 7 parallel codebase explorers, 8 when the task may touch the frontend (grounding, capped at 14 files each) |
 | `think` | **strong** | `migite-plan` — synthesis, refine, testing plan: the highest-leverage text in the run |
 | `critic` | strong | `migite-plan` — architecture critic |
 | `review_correctness`, `review_security` | **strong** | `migite-review` — the two reviewers where a miss costs the most |
 | `review_test_coverage`, `review_testing_plan` | standard | `migite-review` — checklist dimensions |
+| `review_frontend` | standard | `migite-review` - Hotwire/Stimulus checklist, only when the diff touches views or JavaScript |
 | `verdict` | strong | `migite-review` — structured verdict synthesis (decides the gate) |
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
 | `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
@@ -333,6 +335,21 @@ heal:
 
 `full_suite_fallback: false` makes Phase 3 consistent with Phase 2.5 (skip rspec, say so) instead
 of running the full suite, which needs a live DB and verifies nothing about the diff.
+
+<a id="frontend"></a>
+### `frontend`
+
+```yaml
+frontend:
+  lint: auto            # auto = erb_lint / eslint when the repo configures them; off = never
+  system_specs: on      # off = skip spec/system in the changed-spec run and the full-suite fallback
+  browser_check: off    # off | ask | on: Phase 3.1, the agent walks the testing plan in a browser
+```
+
+Every key here applies only when the diff touches views or JavaScript, so a backend-only task
+behaves exactly as before. A bare `on` / `off` is fine in YAML: these keys (and `ui.tmux` /
+`ui.notify`) read the YAML booleans back as the words. How the frontend is detected, and what
+each check does, is in [docs/phases.md](./phases.md#frontend).
 
 <a id="prompts"></a>
 ### `prompts`, `templates`

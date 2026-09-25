@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # lib/gate.sh - the human gates: banner, review verdict, commit context.
 #
-# Reads the run's globals (REVIEW_FILE, RSPEC_LOG, RUBOCOP_FINAL_*, TOOLING_ERROR)
-# at call time; sets $GATE_CHOICE.
+# Reads the run's globals (REVIEW_FILE, RSPEC_LOG, RUBOCOP_FINAL_*, TOOLING_ERROR,
+# FRONTEND_LINT_LOG, FRONTEND_LINT_DIRTY, BROWSER_CHECK_FILE) at call time;
+# sets $GATE_CHOICE.
 
 # read_gate_choice <banner-line> <prompt-text> — sets $GATE_CHOICE
 # Prints the standard gate banner then reads one line of input. Must be called
@@ -121,6 +122,25 @@ show_commit_context() {
     echo -e "  Rubocop: ${RED}${BOLD}$RUBOCOP_FINAL_OFFENSES offense(s) remain${RESET}"
   elif [[ -n "${RUBOCOP_FINAL_LOG:-}" && -f "$RUBOCOP_FINAL_LOG" ]]; then
     echo -e "  Rubocop: ${GREEN}clean${RESET}"
+  fi
+
+  # Frontend lint (erb_lint / eslint) - only shown when a linter actually ran,
+  # i.e. the diff touched views or JavaScript and the repo configures one.
+  if [[ "${FRONTEND_LINT_DIRTY:-false}" == "true" ]]; then
+    echo -e "  FE lint: ${RED}${BOLD}problems remain - check $FRONTEND_LINT_LOG${RESET}"
+  elif [[ -f "${FRONTEND_LINT_LOG:-}" ]] && grep -q '^== ' "$FRONTEND_LINT_LOG"; then
+    echo -e "  FE lint: ${GREEN}clean${RESET}"
+  fi
+
+  # Browser check (frontend.browser_check) - its Result line, when one ran
+  if [[ -s "${BROWSER_CHECK_FILE:-}" ]]; then
+    local browser_result
+    browser_result=$(grep -m1 -E '^Result:' "$BROWSER_CHECK_FILE" | sed -E 's/^Result:[[:space:]]*//' || true)
+    case "$browser_result" in
+      PASS*) echo -e "  Browser: ${GREEN}${browser_result}${RESET}" ;;
+      FAIL*) echo -e "  Browser: ${RED}${BOLD}${browser_result}${RESET}" ;;
+      *)     echo -e "  Browser: ${YELLOW}${browser_result:-no Result line - check $BROWSER_CHECK_FILE}${RESET}" ;;
+    esac
   fi
 
   # Running total from the usage ledger (headless calls only), with the soft budget cap
