@@ -14,6 +14,7 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 - [Phase 2.5 — Auto-heal loop](#phase-2-5-heal)
 - [Which files get linted and tested](#lint-test-selection)
 - [Phase 3 — Review](#phase-3-review)
+- [Frontend: views, Turbo and Stimulus](#frontend)
 - [Phase 3.5 — Knowledge capture](#phase-3-5-knowledge)
 - [Phase 4 — PR description](#phase-4-pr-description)
 - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
@@ -49,6 +50,10 @@ load_context
          │
     write_outputs   → plan.md + architecture-critic.md + testing-plan.md + sentinel
 ```
+
+An eighth explorer, `views_frontend` (views, components, helpers, Stimulus controllers, the
+importmap), joins the seven when the task may touch the frontend. See
+[Frontend: views, Turbo and Stimulus](#frontend) for how that's decided.
 
 Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis, refinement, and the testing plan use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
 
@@ -115,6 +120,11 @@ After implementation, migite runs rubocop and rspec automatically. If failures e
 
 Phase 3 always runs its own authoritative rubocop + rspec pass regardless — the heal loop delivers clean inputs to the reviewer, it doesn't skip the review.
 
+When the diff touches views or JavaScript, the loop also autofixes them with erb_lint / eslint
+(when the repo configures them) and hands the agent only what autofix left. Spec failures that
+`tooling_failed` puts down to the toolchain (no browser for system specs, DB down) are never sent
+to the agent: changing application code can't fix a missing Chrome.
+
 <a id="lint-test-selection"></a>
 ### Which files get linted and tested
 
@@ -166,7 +176,8 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
     ├── review: correctness      (logic vs plan, scope creep, acceptance criteria)
     ├── review: security         (auth, N+1, SQL injection, raw params, scopes)
     ├── review: test_coverage    (unit + request specs, factories, context wording)
-    └── review: testing_plan     (testing-plan.md completeness — see below)
+    ├── review: testing_plan     (testing-plan.md completeness — see below)
+    └── review: frontend         (only when the diff touches views or JavaScript - see Frontend)
          │
     synthesize_verdict   → de-duplicates findings → READY TO COMMIT | NEEDS FIXES
          │
@@ -195,6 +206,51 @@ the first pass regardless of what the banner says. With `strict`, `y` is refused
 `NEEDS FIXES` verdict (read from `review.json`), spec failures, a tooling error, or remaining
 rubocop offenses stand — the blockers are listed — and only a capital `Y` approves anyway,
 appending the blockers to `gate-overrides.md` beside the review so the override is on record.
+
+<a id="frontend"></a>
+### Frontend: views, Turbo and Stimulus
+
+Migite works out whether a task touches the frontend twice, from two different sources.
+
+| When | Decided from | What it adds |
+|------|--------------|--------------|
+| Planning (Phase 1) | The intake's `**Frontend:**` line (`yes` / `no`), else the repo: an `app/javascript` dir, `config/importmap.rb`, or `turbo-rails` / `stimulus-rails` / `view_component` in the Gemfile. `app/views` alone doesn't count, since API-only apps still have mailer templates | The `views_frontend` explorer, frontend planning guidance, and testing-plan UI steps written so a person or an agent in a browser can follow them literally |
+| Checks and review (Phases 2.5 and 3) | The actual diff: `changed_frontend_files` (`lib/stack.sh`) lists changed `.erb`, `.js`, `.mjs`, `.ts`, `.jsx` and `.tsx` files under `app/`, minus `app/assets/builds/`. A root `eslint.config.js` or `tailwind.config.js` is tooling, not frontend | erb_lint / eslint, the `frontend` reviewer, and the optional browser check |
+
+The intake line is a hint for planning, not a requirement. Leaving it blank or `unknown` lets the
+repo decide. Setting `no` in a Hotwire repo skips the eighth explorer, and the planner is told to
+raise any UI need under Open questions instead of planning it blind. Setting `yes` explores the
+frontend even where nothing is detected. Checks and review always go by the diff, so a
+backend-only diff never runs the frontend linters or reviewer, whatever the intake said.
+
+**Linting.** erb_lint runs on changed `.erb` files when `erb_lint` is in `Gemfile.lock` and the
+repo has a `.erb_lint.yml`; eslint runs on changed JavaScript when the repo has an eslint config.
+An eslint config without `node_modules/.bin/eslint` is a tooling error, not a pass. Remaining
+problems appear as `FE lint:` in the commit banner and count as a lint blocker under
+`gates.commit.policy: strict`. `frontend.lint: off` turns both off.
+
+**Reviewing.** `security` and `test_coverage` always check the Hotwire items that are really
+security or coverage: no user content through `html_safe` / `raw`, broadcasts scoped to who may
+see them, request specs asserting `turbo_stream` responses. The fifth reviewer, `frontend` (role
+`review_frontend`, standard tier), checks the mechanics that break in the browser, not in a spec:
+422 on failed form submits, 303 after successful non-GET redirects, frame and stream targets
+that exist, Stimulus names that match their controllers. Its system-spec rule depends on the
+repo. Where `spec/system` exists, a new interactive flow without a system spec is a warning;
+where it doesn't, it's only a note, so an unrelated change never has to set up a browser driver.
+
+**System specs** run like any other spec when they change. If the browser never starts (Cuprite
+without Chrome, a Selenium driver mismatch, Playwright without downloaded browsers),
+`tooling_failed` reports a tooling error instead of N failures. On a machine with no browser, set
+`frontend.system_specs: off` to drop `spec/system` from both the changed-spec run and the
+full-suite fallback.
+
+**Browser check (Phase 3.1, opt-in).** With `frontend.browser_check: ask` or `on`, and a diff
+that touches the frontend, an interactive session runs before the review. The agent follows the
+testing plan's browser steps with whatever browser tool it has (a Playwright MCP server, a Chrome
+extension), writes `browser-check.md` with PASS / FAIL / SKIPPED per step, and changes no code.
+The `frontend` reviewer reads that report, and a FAIL caused by the code is Critical. An agent
+with no browser tool writes `SKIPPED`. The report is reused on resume; delete it to run the
+check again. It isn't re-run after commit-gate fix rounds.
 
 <a id="phase-3-5-knowledge"></a>
 ### Phase 3.5 — Knowledge capture

@@ -12,7 +12,7 @@ Terms used across the docs, in the order you meet them in a run.
 | **Phase** | One step of the pipeline: 1 plan, 1.5 TDD, 2 implement, 2.5 heal, 3 review, 3.5 knowledge, 4 PR description, 4.5 self-improvement. |
 | **Gate** | A prompt where a human decides. Plan gate `[y/f/e/n/q]`, commit gate `[y/f/e/n/q]`, amendment gate `[y/f/e/q]`, stage checkpoint `[c/r/e/q]`. |
 | **Refine (`f`)** | At a gate, one model call that revises the document from one line of your feedback and shows a diff. |
-| **Explorer** | One of the seven parallel fast-tier calls in the planner, each reading up to 14 files from one area of the codebase (models, controllers, services, ...). |
+| **Explorer** | One of the seven parallel fast-tier calls in the planner, each reading up to 14 files from one area of the codebase (models, controllers, services, ...). An eighth, `views_frontend`, joins when the task may touch views or JavaScript. |
 | **Architecture critic** | The strong-tier call that attacks the draft plan for N+1s, missing indexes, auth gaps, migration safety, race conditions. Its findings feed the refine step and are printed at the plan gate. |
 | **Testing plan** | `testing-plan.md`: seed script, verification steps, teardown. Kept as a separate file and regenerated in full on every amendment and fix round so it describes current behaviour. |
 | **Heal loop** | Phase 2.5: rubocop autocorrect with no model call, rspec on changed specs, then headless fix attempts for what remains, capped by `heal.max_attempts`. |

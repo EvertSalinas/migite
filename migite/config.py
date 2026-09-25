@@ -113,6 +113,13 @@ DEFAULTS: dict[str, Any] = {
         "max_attempts": 3,                   # MAX_HEAL_ATTEMPTS
         "full_suite_fallback": True,         # Phase 3: run the full rspec suite when no spec files changed
     },
+    "frontend": {
+        # The Hotwire half of a Rails app. Each of these only ever runs when the diff
+        # touches views or JavaScript (lib/stack.sh changed_frontend_files).
+        "lint": "auto",                      # auto = erb_lint / eslint when the repo configures them; off = never
+        "system_specs": "on",                # on = run changed spec/system specs (and in the full-suite fallback); off = skip them
+        "browser_check": "off",              # Phase 3.1: the agent walks the testing plan in a browser. off | ask | on
+    },
     "prompts": {
         "dir": None,                         # per-project overrides for prompts/<name>.md (relative to repo root)
     },
@@ -145,6 +152,7 @@ ROLE_TIERS: dict[str, str] = {
     "review_security": "strong",
     "review_test_coverage": "standard",
     "review_testing_plan": "standard",
+    "review_frontend": "standard",  # Hotwire/Stimulus checklist; only runs when the diff touches views or JS
     "verdict": "strong",          # structured verdict synthesis: decides the gate
     # migite bash phases
     "knowledge": "standard", "improve": "standard", "amend": "standard",
@@ -203,6 +211,9 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "permissions.interactive": PERMISSION_WORDS,
     "permissions.heal": PERMISSION_WORDS,
     "permissions.headless": PERMISSION_WORDS,
+    "frontend.lint": ("auto", "off"),
+    "frontend.system_specs": ("on", "off"),
+    "frontend.browser_check": ("off", "ask", "on"),
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
 }
@@ -273,6 +284,11 @@ permissions:                 # auto | edits | plan | ask | none  (Claude Code's 
 heal:
   max_attempts: 3
   full_suite_fallback: true  # Phase 3 runs the whole rspec suite when no spec files changed; false = skip
+
+frontend:                    # views + Stimulus/Turbo; each runs only when the diff touches views or JavaScript
+  lint: auto                 # auto = erb_lint / eslint when the repo configures them; off = never
+  system_specs: on           # off = skip spec/system (e.g. no Chrome on this machine)
+  browser_check: off         # off | ask | on: the agent walks the testing plan in a browser before review
 
 # prompts:
 #   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md
@@ -390,6 +406,10 @@ def _coerce(key: str, value: Any, source: str) -> Any:
         if s in ("false", "no", "0", "off"):
             return False
         raise ConfigError(f"{key} must be true or false (got {value!r} from {source})")
+    if key in ENUMS and isinstance(value, bool) and {"on", "off"} & set(ENUMS[key]):
+        # YAML 1.1 (PyYAML) reads a bare `on` / `off` as a boolean, so
+        # `tmux: off` or `browser_check: on` would otherwise fail the check below.
+        value = "on" if value else "off"
     if key in ENUMS and str(value) not in ENUMS[key]:
         raise ConfigError(f"{key} must be one of {', '.join(ENUMS[key])} (got {value!r} from {source})")
     if key in PERMISSION_KEYS:

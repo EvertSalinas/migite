@@ -389,5 +389,40 @@ class CliTest(_Isolated):
             self.assertEqual(cfg.warnings, [])   # the starter is valid and default-equivalent
 
 
+class FrontendConfigTest(_Isolated):
+    def test_defaults_lint_when_configured_run_system_specs_and_skip_the_browser_check(self):
+        cfg = self.load()
+        self.assertEqual(cfg.get("frontend.lint"), "auto")
+        self.assertEqual(cfg.get("frontend.system_specs"), "on")
+        self.assertEqual(cfg.get("frontend.browser_check"), "off")
+
+    def test_frontend_reviewer_sits_on_the_standard_tier(self):
+        self.assertEqual(config.ROLE_TIERS["review_frontend"], "standard")
+        self.assertEqual(self.load().model("review_frontend"), "claude-sonnet-5")
+
+    def test_unknown_browser_check_mode_is_an_error(self):
+        self.write_repo({"frontend": {"browser_check": "always"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("frontend.browser_check", str(cm.exception))
+
+    @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+    def test_bare_yaml_on_and_off_are_read_as_the_words_not_booleans(self):
+        # YAML 1.1 parses `off` as False; ui.tmux used to reject `tmux: off` for this reason.
+        (self.repo / ".migite.yml").write_text(
+            "frontend:\n  system_specs: off\n  browser_check: on\nui:\n  tmux: off\n")
+        cfg = self.load()
+        self.assertEqual(cfg.get("frontend.system_specs"), "off")
+        self.assertEqual(cfg.get("frontend.browser_check"), "on")
+        self.assertEqual(cfg.get("ui.tmux"), "off")
+
+    @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+    def test_yaml_on_is_still_rejected_where_on_is_not_an_option(self):
+        (self.repo / ".migite.yml").write_text("frontend:\n  lint: on\n")
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("frontend.lint", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

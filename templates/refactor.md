@@ -37,6 +37,10 @@
 <!-- What could break? What are the blast radius concerns?
      Which other parts of the codebase depend on the thing being refactored? -->
 
+**Frontend:** <!-- yes | no | unknown -->
+<!-- Does the refactor touch views, partials, components or Stimulus controllers?
+     no = backend only, views and JavaScript aren't explored; unknown = migite decides from the repo -->
+
 **Test coverage before starting:** <!-- good | partial | none -->
 <!-- If partial or none: do we add coverage first, or is this low-risk enough to proceed? -->
 

@@ -2,7 +2,8 @@
 # migite.tools.review (migite-review) — autonomous LangGraph review agent
 #
 # Reads plan.md, implementation notes, rubocop/rspec logs, and git diff.
-# Fans out 4 parallel specialist reviewers, synthesises a verdict, and writes
+# Fans out 4 parallel specialist reviewers (5 when the diff touches views or
+# JavaScript: see FRONTEND_DIMENSION), synthesises a verdict, and writes
 # review.md + sentinel. Called by migite's spawn_langgraph().
 #
 # Usage:
@@ -85,22 +86,58 @@ REVIEW_DIMENSIONS = [
         "security",
         "All controller actions authorised. Resources scoped to current_user. No N+1 queries "
         "(check .each over AR collections). No raw SQL without parameterisation. No hardcoded secrets. "
-        "Strong params on every action. No SQL injection vectors.",
+        "Strong params on every action. No SQL injection vectors. In views: no user-supplied content "
+        "passed through html_safe, raw or <%== %>. Turbo Stream broadcasts (broadcasts_to, "
+        "broadcast_*_to, turbo_stream_from) are scoped to the user or account allowed to see them, "
+        "never a shared stream name that carries private data.",
     ),
     (
         "test_coverage",
         "New public methods have unit specs. New endpoints have request specs covering success, 401, 422. "
+        "Actions that respond with turbo_stream have request specs asserting the <turbo-stream> action and target. "
         "Factories used (not fixtures). No real HTTP calls in specs. Spec descriptions use 'when/with/without' for context blocks.",
     ),
     (
         "testing_plan",
         "The testing plan document exists and is complete: contains a real Rails console seed script "
-        "(generic emails only), step-by-step verification actions (curl or browser steps), log lines to grep, "
+        "(generic emails only), step-by-step verification actions (curl or browser steps; for UI changes, "
+        "the page, the exact action and what should change on the page), log lines to grep, "
         "and a teardown script. A missing, placeholder, or empty testing plan is a critical failure. If this "
         "task had any amendments, the testing plan must reflect the CURRENT amended behaviour, not just the "
         "original plan — flag any step that still describes pre-amendment behaviour.",
     ),
 ]
+
+
+# Runs only when migite passes --frontend-files (lib/stack.sh changed_frontend_files
+# found views or JavaScript in the diff), so a backend-only review stays at four
+# reviewers. XSS and broadcast scoping live under security; this is the Hotwire
+# mechanics that break silently in the browser rather than in a spec.
+FRONTEND_DIMENSION = (
+    "frontend",
+    "Hotwire and Stimulus correctness in the changed views and JavaScript. Form submissions that fail "
+    "validation render with status :unprocessable_entity (422), and redirects after a successful non-GET "
+    "use :see_other (303); otherwise Turbo won't show the errors or follow the redirect. Every "
+    "turbo_frame_tag id and turbo_stream target the diff references exists in the rendered markup, with "
+    "dom_id used the same way on both sides. Stimulus controllers are registered (importmap pin or "
+    "controllers/index.js), and data-controller, data-<name>-target, data-<name>-value and data-action "
+    "names match the controller's file name and its static targets/values. No inline <script> or on* "
+    "attribute handlers. Partials rendered per row don't query per row (N+1 in collection rendering). "
+    "Frontend lint problems that remain (log below) are warnings unless they break the page.",
+)
+
+
+def frontend_criteria(system_specs: bool) -> str:
+    """FRONTEND_DIMENSION's criteria plus the system-spec rule, which depends on
+    whether the repo already has spec/system: demanding a first system spec (and
+    a browser driver) as part of an unrelated change is scope creep."""
+    if system_specs:
+        rule = ("The repo has system specs (spec/system): a new interactive flow (Stimulus behaviour, "
+                "Turbo frame navigation, a form that updates the page) with no system spec is a 🟡 Warning.")
+    else:
+        rule = ("The repo has no system specs: do not demand one, but add a 🟢 Note when a new "
+                "interactive flow is covered only by the testing plan's manual steps.")
+    return f"{FRONTEND_DIMENSION[1]} {rule}"
 
 
 # ── Agent call ───────────────────────────────────────────────────────────────────
@@ -144,6 +181,10 @@ class ReviewState(TypedDict):
     repo_root: str
     base_branch: str
     testing_plan: str
+    frontend_files: list[str]   # changed views/JS; empty = no frontend reviewer
+    frontend_lint_log: str
+    system_specs: bool          # the repo has spec/system
+    browser_check: str          # browser-check.md from Phase 3.1, when it ran
     review_output: str
     sentinel: str
     review_cmd: str
@@ -161,6 +202,9 @@ class DimensionInput(TypedDict):
     rspec_log: str
     git_diff: str
     testing_plan: str
+    frontend_files: list[str]
+    frontend_lint_log: str
+    browser_check: str
 
 
 # ── Nodes ───────────────────────────────────────────────────────────────────────
@@ -178,8 +222,17 @@ def load_inputs(state: ReviewState) -> dict:
     return {"git_diff": diff}
 
 
+def active_dimensions(state: ReviewState) -> list[tuple[str, str]]:
+    """REVIEW_DIMENSIONS, plus the frontend reviewer when the diff touches views or JS."""
+    dims = list(REVIEW_DIMENSIONS)
+    if state.get("frontend_files"):
+        dims.append((FRONTEND_DIMENSION[0], frontend_criteria(state.get("system_specs", False))))
+    return dims
+
+
 def route_to_reviewers(state: ReviewState) -> list[Send]:
-    print(f"  ▶ Fanning out {len(REVIEW_DIMENSIONS)} specialist reviewers in parallel", flush=True)
+    dims = active_dimensions(state)
+    print(f"  ▶ Fanning out {len(dims)} specialist reviewers in parallel", flush=True)
     return [
         Send("review_dimension", {
             "dimension": dim,
@@ -190,8 +243,11 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
             "rspec_log": state["rspec_log"],
             "git_diff": state["git_diff"],
             "testing_plan": state["testing_plan"],
+            "frontend_files": state.get("frontend_files", []),
+            "frontend_lint_log": state.get("frontend_lint_log", ""),
+            "browser_check": state.get("browser_check", ""),
         })
-        for dim, desc in REVIEW_DIMENSIONS
+        for dim, desc in dims
     ]
 
 
@@ -202,6 +258,19 @@ def review_dimension(state: DimensionInput) -> dict:
     if dim == "testing_plan":
         content = state.get("testing_plan") or "(no testing-plan.md found for this task)"
         testing_plan_block = f"\n## Testing plan document (full)\n{content}\n"
+    if dim == FRONTEND_DIMENSION[0]:
+        files = "\n".join(f"- {f}" for f in state.get("frontend_files", []))
+        testing_plan_block = (
+            f"\n## Changed views and JavaScript\n{files}\n"
+            f"\n## Frontend lint results (erb_lint / eslint)\n{state.get('frontend_lint_log', '')[:1500] or '(not run)'}\n"
+        )
+        if state.get("browser_check"):
+            testing_plan_block += (
+                f"\n## Browser check report (the agent walked the testing plan in a real browser)\n"
+                f"{state['browser_check'][:3000]}\n"
+                "A FAIL step or a JavaScript console error is 🔴 Critical unless the report shows it is an "
+                "environment problem (server not running, seed data missing), which is a 🟡 Warning.\n"
+            )
     prompt = f"""You are a senior Rails engineer doing a focused code review.
 Your dimension: **{dim}**
 
@@ -237,6 +306,18 @@ Do not repeat findings that other dimensions would cover."""
     return {"findings": [f"### {dim}\n{result}"]}
 
 
+def synth_frontend_block(state: ReviewState) -> str:
+    """Frontend lint results and the browser check's Result line for the verdict
+    synthesis, when the diff touched views or JavaScript; "" otherwise."""
+    if not state.get("frontend_files"):
+        return ""
+    block = f"\n## Frontend lint (erb_lint / eslint)\n{state.get('frontend_lint_log', '')[:800] or '(not run)'}\n"
+    result = next((l for l in state.get("browser_check", "").splitlines() if l.startswith("Result:")), "")
+    if result:
+        block += f"\n## Browser check\n{result}\n"
+    return block
+
+
 def synthesize_verdict(state: ReviewState) -> dict:
     print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
     findings_text = "\n\n".join(state["findings"])
@@ -254,7 +335,7 @@ def synthesize_verdict(state: ReviewState) -> dict:
 
 ## RSpec
 {state['rspec_log'][:800]}
-
+{synth_frontend_block(state)}
 Synthesise these findings into a single review document following the format above.
 De-duplicate overlapping findings. Assign the final verdict:
 - READY TO COMMIT — no critical issues
@@ -382,6 +463,10 @@ def main() -> None:
     ap.add_argument("--sentinel",        required=True)
     ap.add_argument("--base-branch",     default=None, help="Branch to diff against (default: auto-detect origin/HEAD, then main/master/develop)")
     ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
+    ap.add_argument("--frontend-files",  default="", help="Space-separated changed views/JS; adds the frontend reviewer (optional)")
+    ap.add_argument("--frontend-lint-log", default="", help="Path to the erb_lint/eslint log (optional)")
+    ap.add_argument("--system-specs",    action="store_true", help="The repo has spec/system (shapes the frontend reviewer's system-spec rule)")
+    ap.add_argument("--browser-check",   default="", help="Path to browser-check.md from Phase 3.1 (optional)")
     args = ap.parse_args()
 
     global REVIEW_CMD_PATH
@@ -411,9 +496,13 @@ def main() -> None:
     rubocop_log    = read_or_empty(args.rubocop_log)
     rspec_log      = read_or_empty(args.rspec_log)
     testing_plan   = read_or_empty(args.testing_plan) if args.testing_plan else ""
+    frontend_files = args.frontend_files.split()
+    frontend_lint_log = read_or_empty(args.frontend_lint_log) if args.frontend_lint_log else ""
+    browser_check  = read_or_empty(args.browser_check) if args.browser_check else ""
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
-    dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d, _ in REVIEW_DIMENSIONS)
+    dim_names = [d for d, _ in REVIEW_DIMENSIONS] + ([FRONTEND_DIMENSION[0]] if frontend_files else [])
+    dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d in dim_names)
     print(f"\n  migite-review | {dims}  verdict={gateway.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
 
     graph = build_graph()
@@ -427,6 +516,10 @@ def main() -> None:
             "repo_root": args.repo_root,
             "base_branch": base_branch,
             "testing_plan": testing_plan,
+            "frontend_files": frontend_files,
+            "frontend_lint_log": frontend_lint_log,
+            "system_specs": args.system_specs,
+            "browser_check": browser_check,
             "review_output": args.review_output,
             "sentinel": args.sentinel,
             "review_cmd": review_cmd,
