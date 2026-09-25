@@ -1,2 +1,4 @@
 __pycache__/
 scratchpad/
+.venv/
+.migite.yml
