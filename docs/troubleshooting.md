@@ -7,6 +7,7 @@ Symptoms first; each entry names the check that proves the cause.
 | `✘ migite config error: ...` before anything runs | [Config errors](#config-errors) |
 | `... exists but PyYAML is not installed` | [PyYAML](#pyyaml) |
 | `No version is set for command python3`, or `Python not found at ...` | [Python](#python) |
+| `error: externally-managed-environment` from pip, or `ensurepip is not available` | [Installing Python packages](#pip) |
 | `Prompt file missing: .../prompts/plan.md` | [Prompt files](#prompts) |
 | rubocop / rspec never run, or a phase asks for permissions and hangs | [Permission failures](#troubleshooting-permissions) |
 | a headless phase exits immediately when launched from inside Claude Code | [Nested sessions](#nested) |
@@ -34,8 +35,8 @@ and the run continues on the default for that key.
 <a id="pyyaml"></a>
 ### PyYAML
 
-Only needed when a `.yml` / `.yaml` config file exists. `pip3 install pyyaml` into the Python
-`MIGITE_PYTHON` points at, or rename the file to `.json`. With no config files at all, migite
+Only needed when a `.yml` / `.yaml` config file exists. `"$MIGITE_PYTHON" -m pip install pyyaml`
+installs it into the Python migite uses, or rename the file to `.json`. With no config files at all, migite
 runs without PyYAML.
 
 <a id="python"></a>
@@ -45,12 +46,29 @@ Migite uses `MIGITE_PYTHON` if set, else `python3` if it actually runs, else an 
 path. `No version is set for command python3` means an asdf shim is on `PATH` with no version
 selected for this directory; migite's own check skips it, but the four standalone wrappers and
 `tests/run.sh` resolve Python the same way only when `MIGITE_PYTHON` is unset. The robust fix is
-one line in your shell profile:
+a venv in the checkout and one line in your shell profile
+([getting-started.md](./getting-started.md#python)):
 
 ```bash
-export MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"
+export MIGITE_PYTHON="$HOME/Code/migite/.venv/bin/python3"
 "$MIGITE_PYTHON" -c "import langgraph" || "$MIGITE_PYTHON" -m pip install langgraph
 ```
+
+`Python dependencies missing` when langgraph is installed usually means it went into a different
+interpreter than the one migite runs: a venv that is active in one terminal but not another, or the
+system Python. `"$MIGITE_PYTHON" -m pip install ...` always targets the right one.
+
+<a id="pip"></a>
+### Installing Python packages
+
+`error: externally-managed-environment` is pip refusing to write into a system Python that the OS
+package manager owns (Debian 12+, Ubuntu 23.04+, Fedora 38+, Arch, Homebrew). Don't work around
+it with `--break-system-packages`; create a venv in the checkout and point `MIGITE_PYTHON` at it,
+as in [getting-started.md](./getting-started.md#python).
+
+`ensurepip is not available` while creating that venv means Debian or Ubuntu's `venv` module is
+not installed: `sudo apt install python3-venv` (or `python3.12-venv` for a deadsnakes Python), then
+delete the half-created `.venv` and create it again.
 
 <a id="prompts"></a>
 ### Prompt files

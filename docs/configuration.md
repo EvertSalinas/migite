@@ -46,7 +46,7 @@ else from your user file and the defaults.
 ## Files and formats
 
 `.migite.yml`, `.migite.yaml`, or `.migite.json` at the repo root; `config.yml` / `.yaml` /
-`.json` under `~/.config/migite/`. YAML needs **PyYAML** (`pip install pyyaml`); it is only
+`.json` under `~/.config/migite/`. YAML needs **PyYAML** (`"$MIGITE_PYTHON" -m pip install pyyaml`); it is only
 required when a YAML file actually exists — with no config files, or JSON ones, migite runs
 without it.
 

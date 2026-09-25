@@ -355,7 +355,7 @@ def _read_file(path: Path) -> dict:
             import yaml  # type: ignore
         except ImportError as e:  # pragma: no cover - depends on the environment
             raise ConfigError(
-                f"{path} exists but PyYAML is not installed. Run: pip install pyyaml "
+                f"{path} exists but PyYAML is not installed. Run: {sys.executable} -m pip install pyyaml "
                 f"(or rename the file to .json)"
             ) from e
         try:

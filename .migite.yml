@@ -1,0 +1,76 @@
+# .migite.yml — per-repo migite configuration.
+# Precedence: flags > env vars > $MIGITE_CONFIG > this file > ~/.config/migite/config.yml > defaults.
+# Every value below is the default; delete what you don't change. `migite config` shows the
+# effective result and where each value came from. Needs PyYAML: pip install pyyaml
+
+agent:
+  backend: claude            # claude | cursor | opencode  (MIGITE_AGENT). See docs/agents.md
+  # command: /path/to/cli    # override the executable (default: claude / cursor-agent / opencode)
+
+tracker:
+  provider: auto             # auto | jira-acli | jira-agent | none  (MIGITE_TRACKER). See docs/tickets.md
+  # jira:
+  #   acli: acli                          # MIGITE_ACLI: Atlassian's CLI; log in once with `acli jira auth login --web`
+  #   acceptance_field: customfield_10035 # optional: where your Jira keeps acceptance criteria
+
+vault:
+  base: /home/zakicmatic/Documents/MasterVault/dev-log
+  # org: Acme                # MIGITE_ORG — default: name of the directory containing the repo
+
+logs:
+  dir: ~/.dev-workflow/logs  # LOG_DIR
+
+models:
+  # Tiers are model ids for the ACTIVE backend. Unset = that backend's default:
+  #   claude:   fast=claude-haiku-4-5-20251001  standard=claude-sonnet-5  strong=claude-opus-5-5
+  #   cursor / opencode: no --model is passed until you pin one (`cursor-agent --list-models`, `opencode models`)
+  # fast: claude-haiku-4-5-20251001   # explorers
+  # standard: claude-sonnet-5         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments, heal
+  # strong: claude-opus-5-5           # plan synthesis/refine, critic, correctness + security review, verdicts
+  # roles:                          # pin one call site without changing its tier (see docs/configuration.md for the list)
+  #   think: claude-sonnet-5
+  #   review_security: claude-opus-5-5
+  effort:                           # --effort per tier: low | medium | high | xhigh | max | none (none = CLI default)
+    fast: none                      # Haiku 4.5 never receives --effort regardless
+    standard: none
+    strong: none
+  # roles_effort:                   # per-role effort override
+  #   critic: max
+  timeout_seconds: 600
+  thinking_timeout_seconds: 900
+
+stack: auto                  # auto | rails | generic  (or --stack on the command line)
+
+gates:
+  commit:
+    policy: lenient          # strict: 'y' is refused while blockers remain; 'Y' overrides and is logged
+    require_clean_lint: true
+    require_green_specs: true
+  plan:
+    warn_after_rejections: 3
+
+permissions:                 # auto | edits | plan | ask | none  (Claude Code's names also accepted)
+  interactive: auto          # implement / fix / PR-description sessions
+  heal: auto                 # auto-heal loop
+  headless: none             # plan, review, knowledge, ... (none = pass no permission flag)
+
+heal:
+  max_attempts: 3
+  full_suite_fallback: true  # Phase 3 runs the whole rspec suite when no spec files changed; false = skip
+
+# prompts:
+#   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md
+# templates:
+#   dir: .migite/templates   # override intake templates or commit.md (the PR-description prompt)
+#   # {org} and {repo} are substituted, e.g. in ~/.config/migite/config.yml:
+#   # dir: ~/.config/migite/templates/{org}   → ~/.config/migite/templates/Acme/commit.md for repos under ~/Code/Acme/
+
+budget:
+  max_usd_per_run: 5.00    # soft cap: every gate banner warns once the run's headless spend passes it
+  print_summary: true
+
+ui:
+  tmux: auto                 # auto | on | off
+  # notify: on               # auto | off
+  editor: nvim             # EDITOR
+  prompt_inline_max: 100000  # MIGITE_PROMPT_INLINE_MAX

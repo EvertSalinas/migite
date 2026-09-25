@@ -6,9 +6,10 @@ produces. The [README quickstart](../README.md#quickstart) is the five-line vers
 ## Contents
 
 - [Install](#install)
-  - [macOS](#macos)
-  - [Linux](#linux)
-  - [Python and asdf](#python)
+  - [1. Clone and link](#clone)
+  - [2. Platform prerequisites](#platforms): [macOS](#macos) · [Ubuntu](#ubuntu) · [Debian](#debian) · [Fedora and RHEL](#fedora) · [Arch, Manjaro, Omarchy](#arch)
+  - [3. Python dependencies in a venv](#python)
+  - [Version managers: asdf, mise, pyenv, uv](#version-managers)
 - [Verify with `migite doctor`](#doctor)
 - [Your personal config](#user-config)
 - [First run, step by step](#first-run)
@@ -21,8 +22,12 @@ produces. The [README quickstart](../README.md#quickstart) is the five-line vers
 <a id="install"></a>
 ## Install
 
-Migite is a git checkout plus symlinks on your `PATH`. Nothing is installed system-wide, and
-uninstalling is deleting the symlinks and the checkout.
+Migite is a git checkout, symlinks on your `PATH`, and a Python virtual environment inside the
+checkout. Nothing is installed system-wide, and uninstalling is deleting the symlinks and the
+checkout. Three steps, the same on every platform; only step 2 differs per OS.
+
+<a id="clone"></a>
+### 1. Clone and link
 
 ```bash
 git clone <this-repo> ~/Code/migite
@@ -34,44 +39,168 @@ for f in "$MIGITE_SRC"/bin/*; do ln -sf "$f" "$BIN/$(basename "$f")"; done
 
 Only `bin/` goes on your `PATH`. Every command there resolves its real location through the
 symlink, sources `lib/`, and puts the checkout on `PYTHONPATH`, so the Python package (`migite/`)
-and the LangGraph tools (`python -m migite.tools.<name>`) need no symlink and no install.
+and the LangGraph tools (`python -m migite.tools.<name>`) need no symlink and no install. A
+`git pull` in the checkout updates every command at once.
+
+Then make sure `~/.local/bin` is on your `PATH`. Many Linux distributions already add it; adding
+it again is harmless. Use the file your shell reads: `~/.zshrc` for zsh (the macOS default),
+`~/.bashrc` for bash (the default on most Linux distributions).
+
+```bash
+RC=~/.zshrc   # or ~/.bashrc
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC" && source "$RC"
+```
+
+<a id="platforms"></a>
+### 2. Platform prerequisites
+
+What each platform needs: `git`, a **Python 3.11+** that can create virtual environments, and
+optionally a notifier. Pick your OS, run its block, then continue to [step 3](#python).
+
+| Platform | Python it ships | Enough? | Notifications |
+|---|---|---|---|
+| macOS | 3.9 (Command Line Tools) | No, use Homebrew | `osascript`, built in |
+| Ubuntu 24.04+ | 3.12+ | Yes | `libnotify-bin` |
+| Ubuntu 22.04 | 3.10 | No, use deadsnakes or a version manager | `libnotify-bin` |
+| Debian 12 / 13 | 3.11 / 3.13 | Yes | `libnotify-bin` |
+| Debian 11 | 3.9 | No, use a version manager | `libnotify-bin` |
+| Fedora 39+ | 3.12+ | Yes | `libnotify` |
+| RHEL / Rocky / Alma 9 | 3.9 | No, install `python3.11` | `libnotify` |
+| Arch, Manjaro, Omarchy | latest | Yes | `libnotify` |
 
 <a id="macos"></a>
-### macOS
+#### macOS
+
+The `/usr/bin/python3` Apple ships is 3.9, too old for migite. Install a current one with
+[Homebrew](https://brew.sh):
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
-pip3 install langgraph pyyaml
+xcode-select --install          # git; skip if already installed
+brew install python@3.13
+PY=python3.13
 ```
 
-Notifications use `osascript` and need no setup. Symlinks are resolved with a plain
-`readlink` walk, so no GNU coreutils are needed.
+Notifications use `osascript` and need no setup. Symlinks are resolved with a plain `readlink`
+walk, so no GNU coreutils are needed.
 
-<a id="linux"></a>
-### Linux
+<a id="ubuntu"></a>
+#### Ubuntu
+
+Ubuntu splits the `venv` module into its own package; without it, step 3 fails with
+`ensurepip is not available`.
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-python3 -m pip install --user langgraph pyyaml
-sudo apt-get install -y libnotify-bin    # optional: desktop notifications via notify-send
+# 24.04 and newer
+sudo apt update
+sudo apt install -y git python3 python3-venv libnotify-bin
+PY=python3
 ```
 
-Everything else is POSIX or bash 4. If `python3` is not 3.11+, install one and point
-`MIGITE_PYTHON` at it (below).
+Ubuntu 22.04 ships 3.10. Install 3.12 alongside it from the deadsnakes PPA (or use a
+[version manager](#version-managers)) and leave the system `python3` alone:
+
+```bash
+# 22.04
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt install -y git python3.12 python3.12-venv libnotify-bin
+PY=python3.12
+```
+
+<a id="debian"></a>
+#### Debian
+
+```bash
+# 12 (bookworm) and 13 (trixie)
+sudo apt update
+sudo apt install -y git python3 python3-venv libnotify-bin
+PY=python3
+```
+
+Debian 11 ships 3.9; use a [version manager](#version-managers) for a 3.11+ Python.
+
+<a id="fedora"></a>
+#### Fedora and RHEL
+
+Fedora's `python3` includes `venv`. RHEL 9 and its rebuilds ship 3.9 as `python3` but package
+newer versions side by side:
+
+```bash
+# Fedora
+sudo dnf install -y git python3 libnotify
+PY=python3
+
+# RHEL / Rocky / Alma 9
+sudo dnf install -y git python3.11 libnotify
+PY=python3.11
+```
+
+<a id="arch"></a>
+#### Arch, Manjaro, Omarchy
+
+Arch's `python` package is always current and includes `venv`. Omarchy already has Python and a
+notification daemon, so there is usually nothing to install.
+
+```bash
+sudo pacman -S --needed git python libnotify
+PY=python3
+```
 
 <a id="python"></a>
-### Python and asdf
+### 3. Python dependencies in a venv
 
-Migite picks its Python in this order: `MIGITE_PYTHON` if set, then `python3` **if it actually
-runs**, then a fallback under `~/.asdf`. The "actually runs" check matters with asdf: a shim is
-always on `PATH` even when no version is selected for the current directory, and would fail with
-`No version is set for command python3`. Migite detects that and falls through. To remove the
-guesswork:
+Install migite's Python packages into a virtual environment inside the checkout, not into the
+system Python. This is the one recipe that works everywhere: Debian 12+, Ubuntu 23.04+, Arch,
+Fedora 38+ and Homebrew all mark their system Python as *externally managed*, so a plain
+`pip install` there fails with `error: externally-managed-environment`, and `--user` fails the
+same way.
 
 ```bash
-export MIGITE_PYTHON="$HOME/.asdf/installs/python/3.13.5/bin/python3"   # in ~/.zshrc or ~/.bashrc
+$PY -m venv ~/Code/migite/.venv
+~/Code/migite/.venv/bin/python -m pip install --upgrade pip
+~/Code/migite/.venv/bin/python -m pip install langgraph pyyaml    # pyyaml: only for .yml configs
+```
+
+Then tell migite to use that interpreter, so it works from any repo without activating the venv:
+
+```bash
+echo 'export MIGITE_PYTHON="$HOME/Code/migite/.venv/bin/python3"' >> "$RC" && source "$RC"
 "$MIGITE_PYTHON" -c "import langgraph, yaml; print('ok')"
 ```
+
+Packages belong to an interpreter, not to a directory: the venv's Python sees langgraph whether
+you run migite from `~/Code/migite` or from `~/Code/your-app`, and your projects' own Pythons
+stay separate from migite's. To add or upgrade a package later, run
+`"$MIGITE_PYTHON" -m pip install ...`.
+
+`.venv/` is ignored by git, so `git pull` never touches it. If you upgrade the Python it was built
+from (an Arch or Homebrew minor-version bump), the venv breaks with a `No such file or directory`
+for its interpreter; delete `.venv` and rerun this step.
+
+<a id="version-managers"></a>
+### Version managers: asdf, mise, pyenv, uv
+
+Any Python 3.11+ works as the base for the venv, including one from a version manager. Create the
+venv from its full path, not from a shim, so it keeps working in directories where no version is
+pinned:
+
+```bash
+PY="$(asdf where python 3.13.5)/bin/python3"   # asdf
+PY="$(mise where python@3.13)/bin/python3"     # mise (preinstalled on Omarchy)
+PY="$(pyenv prefix 3.13.5)/bin/python3"        # pyenv
+```
+
+Then run [step 3](#python) as written. With [uv](https://docs.astral.sh/uv/), which downloads its
+own Python, step 3 is:
+
+```bash
+uv venv --python 3.13 ~/Code/migite/.venv
+uv pip install --python ~/Code/migite/.venv/bin/python langgraph pyyaml
+```
+
+Why `MIGITE_PYTHON` matters here: without it, migite uses `python3` from `PATH` **if it actually
+runs**, then falls back to a path under `~/.asdf`. An asdf or mise shim is on `PATH` even when no
+version is selected for the current directory and fails with `No version is set for command
+python3`. Migite detects that and falls through, but setting `MIGITE_PYTHON` removes the guesswork.
 
 <a id="doctor"></a>
 ## Verify with `migite doctor`

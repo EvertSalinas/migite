@@ -188,7 +188,7 @@ ledger lines (`MIGITE_USAGE_LEDGER`, in `logs.dir`).
 |---|---|
 | `✘ migite config error: …` before anything runs | `migite config --edit` opens the file even while it is broken |
 | a setting doesn't take effect | `migite config` shows which file or env var won |
-| `... exists but PyYAML is not installed` | `pip3 install pyyaml`, or rename the file to `.json` |
+| `... exists but PyYAML is not installed` | `"$MIGITE_PYTHON" -m pip install pyyaml`, or rename the file to `.json` |
 
 ## See also
 
