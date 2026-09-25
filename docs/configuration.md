@@ -35,7 +35,7 @@ Highest first:
 | Command-line flags | `--stack generic`, `--type bug` |
 | Environment variables | `DEV_LOG_BASE`, `MIGITE_ORG`, `MAX_HEAL_ATTEMPTS`, ... ([full list](#env)) |
 | `$MIGITE_CONFIG` | an explicit file, any path |
-| `<repo root>/.migite.yml` | per-project settings, committed with the repo |
+| `<repo root>/.migite.yml` | per-project settings, kept out of git ([why](#gitignore)) |
 | `~/.config/migite/config.yml` | your personal defaults (`$XDG_CONFIG_HOME` honoured) |
 | Built-in defaults | identical to migite's pre-config behaviour |
 
@@ -55,12 +55,33 @@ An invalid file (bad YAML, a value outside its enum, a non-integer where one is 
 config would be worse than stopping. Unknown keys are a warning, not an error, so a typo is
 visible but not fatal.
 
+<a id="gitignore"></a>
+## Keep repo config out of git
+
+The per-repo `.migite.yml` (and a `.migite/` directory of prompt or template overrides) is your
+local setup for that repo, not part of the project. Don't commit it: teammates who don't use
+migite shouldn't see it in the tree, and yours shouldn't overwrite theirs on a pull.
+
+Ignore it once for every repo on your machine, with git's global ignore file, instead of editing
+each project's shared `.gitignore`:
+
+```bash
+mkdir -p ~/.config/git
+printf '%s\n' '.migite.yml' '.migite.yaml' '.migite.json' '.migite/' >> ~/.config/git/ignore
+```
+
+`~/.config/git/ignore` is the file git reads when `core.excludesFile` is unset. If you have set
+`core.excludesFile` (`git config --global core.excludesFile` prints it), append the lines to that
+file instead. To ignore it in a single repo without touching its `.gitignore`, add the same lines
+to that repo's `.git/info/exclude`. Check that it took effect with
+`git check-ignore -v .migite.yml`.
+
 <a id="command"></a>
 ## `migite config`
 
 ```bash
 migite config --edit --user   # open ~/.config/migite/config.yml, your defaults for every repo
-migite config --edit          # open this repo's .migite.yml (commit it)
+migite config --edit          # open this repo's .migite.yml (git-ignored, see above)
 migite config                 # effective configuration, with the source of every value
 migite config --init [--user] # write a starter file without opening it (--force overwrites)
 migite config --validate      # exit 1 on errors, print warnings
@@ -104,7 +125,7 @@ models:
     strong: xhigh
 ```
 
-**Team repo with a hard gate** (`<repo>/.migite.yml`, committed)
+**Repo with a hard gate** (`<repo>/.migite.yml`)
 
 ```yaml
 gates:
@@ -115,7 +136,7 @@ gates:
 heal:
   full_suite_fallback: false    # never run the whole suite when no spec files changed
 templates:
-  dir: .migite/templates        # this team's own PR template: .migite/templates/commit.md
+  dir: .migite/templates        # your own PR template for this repo: .migite/templates/commit.md
 ```
 
 **Cheap mode** for spikes and throwaway branches (`.migite.yml` or `MIGITE_CONFIG=cheap.yml`)
@@ -151,7 +172,7 @@ prompts:
 
 ```bash
 mkdir -p .migite/prompts && cp ~/Code/migite/prompts/review.md .migite/prompts/review.md
-$EDITOR .migite/prompts/review.md      # e.g. add your team's checklist items
+$EDITOR .migite/prompts/review.md      # e.g. add the repo's checklist items
 migite config | grep prompts           # confirm it is picked up
 ```
 

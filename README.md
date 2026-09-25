@@ -169,10 +169,12 @@ All commands: [docs/migite.md](./docs/migite.md) for the orchestrator's modes,
 
 Precedence: **flags > env vars > `$MIGITE_CONFIG` > `<repo>/.migite.yml` > `~/.config/migite/config.yml` > defaults**.
 Every default equals the behaviour without a file, so nothing changes until you write one.
+The repo file is local to you: ignore it globally, once, rather than committing it
+([how](./docs/configuration.md#gitignore)).
 
 ```bash
 migite config --edit --user   # once: ~/.config/migite/config.yml, your defaults for every repo
-migite config --edit          # per repo: .migite.yml, commit it with the project
+migite config --edit          # per repo: .migite.yml, keep it out of git (below)
 migite config                 # effective config, with the source of every value
 migite --help                 # every command and flag (each tool also has --help)
 ```

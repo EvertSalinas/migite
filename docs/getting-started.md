@@ -9,6 +9,7 @@ produces. The [README quickstart](../README.md#quickstart) is the five-line vers
   - [1. Clone and link](#clone)
   - [2. Platform prerequisites](#platforms): [macOS](#macos) · [Ubuntu](#ubuntu) · [Debian](#debian) · [Fedora and RHEL](#fedora) · [Arch, Manjaro, Omarchy](#arch)
   - [3. Python dependencies in a venv](#python)
+  - [4. Keep per-repo config out of git](#ignore-config)
   - [Version managers: asdf, mise, pyenv, uv](#version-managers)
 - [Verify with `migite doctor`](#doctor)
 - [Your personal config](#user-config)
@@ -24,7 +25,7 @@ produces. The [README quickstart](../README.md#quickstart) is the five-line vers
 
 Migite is a git checkout, symlinks on your `PATH`, and a Python virtual environment inside the
 checkout. Nothing is installed system-wide, and uninstalling is deleting the symlinks and the
-checkout. Three steps, the same on every platform; only step 2 differs per OS.
+checkout. Four steps, the same on every platform; only step 2 differs per OS.
 
 <a id="clone"></a>
 ### 1. Clone and link
@@ -175,6 +176,19 @@ stay separate from migite's. To add or upgrade a package later, run
 `.venv/` is ignored by git, so `git pull` never touches it. If you upgrade the Python it was built
 from (an Arch or Homebrew minor-version bump), the venv breaks with a `No such file or directory`
 for its interpreter; delete `.venv` and rerun this step.
+
+<a id="ignore-config"></a>
+### 4. Keep per-repo config out of git
+
+A repo's `.migite.yml` is your local setup, not part of the project. Ignore it once for every repo
+on this machine:
+
+```bash
+mkdir -p ~/.config/git
+printf '%s\n' '.migite.yml' '.migite.yaml' '.migite.json' '.migite/' >> ~/.config/git/ignore
+```
+
+Details and per-repo alternatives: [configuration.md](./configuration.md#gitignore).
 
 <a id="version-managers"></a>
 ### Version managers: asdf, mise, pyenv, uv

@@ -1,13 +1,13 @@
 # Configure migite
 
 Migite works with no configuration at all. You configure it to make it yours (your vault, your
-editor, stronger models where it pays) and to make a repo behave the same for everyone on the team
-(a strict commit gate, a team PR template, a checklist in the review prompt). This workflow covers
-both, and how to keep an install healthy.
+editor, stronger models where it pays) and to tune it for a particular repo (a strict commit gate,
+a PR template, a checklist in the review prompt). This workflow covers both, and how to keep an
+install healthy. Both files are yours: the repo file is git-ignored, not committed.
 
 ```text
 flags  >  env vars  >  $MIGITE_CONFIG  >  <repo>/.migite.yml  >  ~/.config/migite/config.yml  >  defaults
-                                            the team's file          your personal file
+                                            this repo (ignored)      every repo
 ```
 
 ## Walkthrough: set yourself up
@@ -68,16 +68,18 @@ migite doctor
 Run it after installing, after upgrading your agent CLI, and whenever a run misbehaves. It changes
 nothing.
 
-## Walkthrough: set up a team repo
+## Walkthrough: set up a repo
 
-In the repo, create a shared file and commit it:
+In the repo, create its config file. It stays on your machine: make sure git ignores it first
+(once per machine, see [configuration.md](../configuration.md#gitignore)):
 
 ```bash
 cd ~/Code/Acme/invoices-api
+git check-ignore -q .migite.yml || echo "not ignored yet: see configuration.md#gitignore"
 migite config --edit
 ```
 
-Keep only the keys the team agrees on. A typical team file:
+Keep only the keys this repo needs. A typical repo file:
 
 ```yaml
 gates:
@@ -86,21 +88,19 @@ gates:
 heal:
   max_attempts: 2
 prompts:
-  dir: .migite/prompts           # team versions of any prompt; the rest fall back to migite's
+  dir: .migite/prompts           # your versions of any prompt; the rest fall back to migite's
 templates:
-  dir: .migite/templates         # the team's PR template: .migite/templates/commit.md
+  dir: .migite/templates         # your PR template for this repo: .migite/templates/commit.md
 ```
 
-```bash
-git add .migite.yml .migite/ && git commit -m "chore: team migite config"
-```
+Neither `.migite.yml` nor `.migite/` is committed; `git status` should not list them.
 
-Personal settings (vault, editor) stay in each person's user file; the repo file wins where both
-set the same key.
+Settings you want in every repo (vault, editor) belong in your user file; the repo file wins where
+both set the same key.
 
 ## Variants
 
-### Add the team's checklist to the review
+### Add your own checklist to the review
 
 ```bash
 mkdir -p .migite/prompts
