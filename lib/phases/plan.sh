@@ -3,7 +3,8 @@
 #
 # Sourced by migite. run_plan expects TASK, JIRA_TICKET, JIRA_URL, TASK_TYPE,
 # AUDIT_FILE, BLUEPRINT_FILE, INTAKE_FILE_ARG, ATTACH_FILES, ORG, REPO_NAME,
-# REPO_ROOT, BRANCH, DEV_LOG_BASE, MIGITE_HOME to be set, and sets TASK_SLUG,
+# REPO_ROOT, BRANCH, BASE_BRANCH, DEV_LOG_BASE, MIGITE_HOME to be set (BRANCH is
+# updated when the intake names another branch to check out), and sets TASK_SLUG,
 # TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, TASK_FILE, PLAN_FILE, PLAN_VAULT,
 # IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT,
 # REVIEW_FILE, REVIEW_VAULT, TESTING_PLAN_FILE, TESTING_PLAN_VAULT, CRITIC_FILE,
@@ -203,6 +204,9 @@ run_plan() {
     INTAKE_FILE="$SCRATCHPAD_DIR/intake.md"
     log "Dirs renamed to: $TASK_SLUG"
   fi
+
+  # Work on the branch the intake names, creating it from the base branch if missing
+  ensure_task_branch "$(intake_branch "$INTAKE_FILE")" "$BASE_BRANCH"
 
   local INTAKE_VAULT="$TASK_DIR/intake.md"
   PLAN_FILE="$SCRATCHPAD_DIR/plan.md"
