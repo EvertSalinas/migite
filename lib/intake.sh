@@ -58,3 +58,15 @@ fill_intake_field() {
     { print }
   ' "$file" > "$tmp" && mv "$tmp" "$file"
 }
+
+# intake_branch <intake-file> - echoes the branch the intake asks to work on:
+# the value of its "Branch base:" line (the templates' field) or "Branch:" line
+# (the audit-generated intake), with placeholder comments and bold markers
+# stripped. Echoes nothing when the field is missing, empty, or N/A.
+intake_branch() {
+  local line value
+  line=$(grep -m1 -iE '^\**branch( base)?:' "$1" || true)
+  value=$(printf '%s' "$line" | sed -E 's/^[^:]*:\**//; s/<!--.*-->//g' | xargs 2>/dev/null || true)
+  [[ "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" == "n/a" ]] && return 0
+  printf '%s' "$value"
+}
