@@ -18,7 +18,7 @@ does; these say which ones to combine, in what order, for a real piece of work.
 | Review a teammate's branch | [Review a pull request](./review-a-pull-request.md) | `migite-pr-review --branch ...` |
 | Read a Jira ticket the way the planner does | [Read a ticket](./read-a-ticket.md) | `migite-ticket BB-1234` |
 | Set migite up for yourself or a team, and keep it healthy | [Configure migite](./configure-migite.md) | `migite config --edit`, `migite doctor` |
-| Run any of the above on Cursor or OpenCode | [Use another agent](./use-another-agent.md) | `MIGITE_AGENT=cursor migite ...` |
+| Run any of the above on Cursor, Kimi, or OpenCode | [Use another agent](./use-another-agent.md) | `MIGITE_AGENT=cursor migite ...` |
 
 The workflows chain. The common paths:
 

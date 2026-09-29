@@ -140,6 +140,10 @@ class AgentInfo:
     env_unset: tuple[str, ...] = ()    # variables that must not reach the CLI
     exit_hint: str = "exit the session"
     instruction_files: str = "its instruction files"   # what the CLI reads for project rules
+    permission_flags: bool = True      # migite's permission words reach the CLI as flags;
+                                       # False = the CLI runs its own policy (Kimi -p forces auto)
+    session_mode: str = "interactive"  # "interactive" (a seeded TUI session) |
+                                       # "headless" (no seeded session; one-shot per phase)
 
 
 class Agent:
@@ -186,4 +190,5 @@ class Agent:
             "scopes": sorted(i.scopes), "prompt_via": i.prompt_via, "max_arg_bytes": i.max_arg_bytes,
             "env_unset": list(i.env_unset), "exit_hint": i.exit_hint,
             "instruction_files": i.instruction_files, "models": dict(i.models),
+            "permission_flags": i.permission_flags, "session_mode": i.session_mode,
         }

@@ -146,6 +146,11 @@ run_auto_heal_loop() {
 
   local HEAL_RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rubocop.txt"
   local HEAL_RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rspec.txt"
+  # Per-log cap on the excerpts embedded in a heal prompt — an unbounded rspec
+  # log (mass failures print a backtrace per failure) overflows the model's
+  # context window and the CLI rejects the call.
+  local HEAL_LOG_MAX
+  HEAL_LOG_MAX=$(cfg heal.prompt_log_max_bytes 60000)
   local HEAL_CHANGED_RUBY
   local HEAL_CHANGED_SPECS
   HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
@@ -181,13 +186,13 @@ run_auto_heal_loop() {
     local FAILURE_SECTIONS=""
     if [[ "$RUBOCOP_REMAINING" == "true" ]]; then
       FAILURE_SECTIONS="${FAILURE_SECTIONS}## Rubocop output (autocorrect already applied — these remain and need a manual fix)
-$(cat "$HEAL_RUBOCOP_LOG")
+$(truncate_log "$HEAL_RUBOCOP_LOG" "$HEAL_LOG_MAX")
 
 "
     fi
     if [[ "$RSPEC_STILL_FAILING" == "true" ]]; then
       FAILURE_SECTIONS="${FAILURE_SECTIONS}## RSpec output
-$(cat "$HEAL_RSPEC_LOG")
+$(compact_rspec_log "$HEAL_RSPEC_LOG" "$HEAL_LOG_MAX")
 
 "
     fi
@@ -200,9 +205,14 @@ $(cat "$PLAN_FILE")
 ## Implementation notes
 $(cat "$IMPLEMENTATION_FILE")
 
-Fix all failures above. Do not run rubocop yourself — migite already runs \`rubocop -A\` after every attempt, so only genuinely unfixable-by-autocorrect offenses are shown here. When done, update: $IMPLEMENTATION_FILE"
+Fix all failures above. Do not run rubocop yourself — migite already runs \`rubocop -A\` after every attempt, so only genuinely unfixable-by-autocorrect offenses are shown here. Long logs above are excerpts; the full output is at $HEAL_RUBOCOP_LOG and $HEAL_RSPEC_LOG if you need more of it. When done, update: $IMPLEMENTATION_FILE"
 
-    agent_think --quiet --permission "$(cfg permissions.heal auto)" "Auto-heal $HEAL_ATTEMPT" heal "$HEAL_FIX_LOG" "$HEAL_FIX_PROMPT"
+    # A failed call (e.g. a CLI error) must not kill the run — degrade to the
+    # review phase seeing the remaining failures, as if heal were exhausted.
+    if ! agent_think --quiet --permission "$(cfg permissions.heal auto)" "Auto-heal $HEAL_ATTEMPT" heal "$HEAL_FIX_LOG" "$HEAL_FIX_PROMPT"; then
+      warn "Auto-heal call failed — skipping to review with failures still present"
+      break
+    fi
 
     log "Re-running checks after heal attempt $HEAL_ATTEMPT..."
     _heal_autofix_rubocop
@@ -212,8 +222,8 @@ Fix all failures above. Do not run rubocop yourself — migite already runs \`ru
 
   if [[ $HEAL_ATTEMPT -eq 0 ]]; then
     success "All checks passed — no healing needed"
-  elif [[ $HEAL_ATTEMPT -ge $MAX_HEAL_ATTEMPTS ]] && { grep -qE '[1-9][0-9]* failure' "$HEAL_RSPEC_LOG" 2>/dev/null || [[ "$RUBOCOP_REMAINING" == "true" ]]; }; then
-    warn "Auto-heal exhausted ($MAX_HEAL_ATTEMPTS attempts) — review phase will see remaining failures"
+  elif grep -qE '[1-9][0-9]* failure' "$HEAL_RSPEC_LOG" 2>/dev/null || [[ "$RUBOCOP_REMAINING" == "true" ]]; then
+    warn "Auto-heal stopped with failures remaining ($HEAL_ATTEMPT/$MAX_HEAL_ATTEMPTS attempts) — review phase will see them"
   else
     success "Auto-heal resolved failures after $HEAL_ATTEMPT attempt(s)"
   fi

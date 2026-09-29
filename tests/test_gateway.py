@@ -374,5 +374,42 @@ class MissingCliTest(unittest.TestCase):
         self.assertIn("no-such-agent-cli", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
+class TimeoutResolutionTest(unittest.TestCase):
+    """The strong tier always gets the longer timeout; config can override per role."""
+
+    def setUp(self):
+        self._saved = (gateway.DEFAULT_TIMEOUT, gateway.THINKING_TIMEOUT, dict(gateway.ROLE_TIMEOUT))
+        gateway.DEFAULT_TIMEOUT, gateway.THINKING_TIMEOUT = 600, 900
+        gateway.ROLE_TIMEOUT = {}
+
+    def tearDown(self):
+        default, thinking, role_timeout = self._saved
+        gateway.DEFAULT_TIMEOUT, gateway.THINKING_TIMEOUT = default, thinking
+        gateway.ROLE_TIMEOUT = role_timeout
+
+    def test_strong_tier_gets_the_thinking_timeout(self):
+        self.assertEqual(gateway.resolve_timeout("critic"), 900)     # strong
+        self.assertEqual(gateway.resolve_timeout("think"), 900)      # strong (testing plan)
+        self.assertEqual(gateway.resolve_timeout("knowledge"), 600)  # standard
+        self.assertEqual(gateway.resolve_timeout("explore"), 600)    # fast
+
+    def test_thinking_flag_lifts_any_tier(self):
+        self.assertEqual(gateway.resolve_timeout("knowledge", thinking=True), 900)
+
+    def test_config_role_timeout_wins_over_the_tier_default(self):
+        gateway.ROLE_TIMEOUT = {"critic": 1800, "think": None}
+        self.assertEqual(gateway.resolve_timeout("critic"), 1800)
+        self.assertEqual(gateway.resolve_timeout("think"), 900)      # None -> tier default
+
+    def test_explicit_timeout_beats_everything(self):
+        gateway.ROLE_TIMEOUT = {"critic": 1800}
+        self.assertEqual(gateway.resolve_timeout("critic", explicit=5), 5)
+
+    def test_reset_clears_role_timeouts(self):
+        gateway.ROLE_TIMEOUT = {"critic": 1800}
+        gateway.reset()
+        self.assertEqual(gateway.ROLE_TIMEOUT, {})
+
+
 if __name__ == "__main__":
     unittest.main()

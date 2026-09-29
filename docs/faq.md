@@ -6,8 +6,8 @@ loop and moves on to knowledge capture and the PR description. The commit is alw
 [the commit gate](./outputs.md#commit-gate-banner).
 
 **Do I need an Anthropic API key?**
-No. Every model call shells out to the configured agent CLI (Claude Code by default, Cursor CLI or
-OpenCode via `agent.backend`) and uses that CLI's own login.
+No. Every model call shells out to the configured agent CLI (Claude Code by default, Cursor CLI, Kimi Code,
+or OpenCode via `agent.backend`) and uses that CLI's own login.
 
 **What does a run cost?**
 It is printed at the end of every run and written to `usage.json`; the commit-gate banner shows

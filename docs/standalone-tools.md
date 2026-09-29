@@ -8,8 +8,10 @@ All four read the same layered configuration as `migite`
 ([docs/configuration.md](./configuration.md)): `vault.base` / `vault.org` for output paths,
 `models` for every call (roles `lens`, `explore_synth`, `challenge`, `explore_refine`, `analyst`,
 `blueprint_synth`, `extract`, `audit_area`, `audit_synth`, `pr_review_<dimension>`, `pr_verdict`),
-`models.effort` / `models.roles_effort` for `--effort`, `models.timeout_seconds`, and
-`permissions.headless`. The "Models used" notes below describe the original defaults; the current
+`models.effort` / `models.roles_effort` for `--effort`, `models.timeout_seconds` /
+`models.thinking_timeout_seconds` (plus the optional `models.timeouts` / `models.roles_timeouts`
+overrides) for per-call limits, and `permissions.headless`. The "Models used" notes below
+describe the original defaults; the current
 default tiering (Opus 5.5 for the strong tier, Sonnet for audit areas and explore refine on the
 strong tier) is in [docs/configuration.md](./configuration.md#models). Every call is metered in
 the usage ledger when `MIGITE_USAGE_LEDGER` is set.

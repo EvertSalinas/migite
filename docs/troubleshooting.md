@@ -13,7 +13,7 @@ Symptoms first; each entry names the check that proves the cause.
 | a headless phase exits immediately when launched from inside Claude Code | [Nested sessions](#nested) |
 | the commit gate keeps saying NEEDS FIXES | [Review loops](#troubleshooting-needs-fixes) |
 | `migite doctor` reports scratchpad/vault drift | [Drift](#drift) |
-| `Not logged in` from Cursor, `No API key configured` from OpenCode, or `refusing a tool-enabled call` | [Other backends](#backends) |
+| `Not logged in` from Cursor, `401` from Kimi, `No API key configured` from OpenCode, or `refusing a tool-enabled call` | [Other backends](#backends) |
 | `planning without ticket context`, `acli is not logged in`, or `no ticket source available` | [Jira fetch](#jira) |
 
 <a id="config-errors"></a>
@@ -160,10 +160,11 @@ ready. With `gates.commit.policy: strict`, a capital `Y` approves over the remai
 records them in `gate-overrides.md`.
 
 <a id="backends"></a>
-### Other backends (Cursor, OpenCode)
+### Other backends (Cursor, Kimi, OpenCode)
 
 `agent.backend` picks the CLI. Each has its own login: `cursor-agent login` (or `CURSOR_API_KEY`),
-`opencode auth login`. An `is_error` result from Cursor or an `error` event from OpenCode fails the
+`kimi` then `/login`, `opencode auth login`. An `is_error` result from Cursor, a non-zero `kimi -p`, or
+an `error` event from OpenCode fails the
 call with that CLI's message. Two things are by design, not bugs:
 
 - `cannot restrict a call to the jira.read scope`: only Claude Code can run a headless call limited

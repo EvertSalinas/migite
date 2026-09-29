@@ -189,7 +189,7 @@ filled in.
 
 ```yaml
 agent:
-  backend: claude        # claude | cursor | opencode   (MIGITE_AGENT)
+  backend: claude        # claude | cursor | kimi | opencode   (MIGITE_AGENT)
   command: null          # override the executable: a name on PATH or a full path
 ```
 
@@ -246,8 +246,12 @@ models:
     strong: none
   roles_effort:                     # optional — per-role effort override
     critic: max
-  timeout_seconds: 600              # per headless call
-  thinking_timeout_seconds: 900     # for the calls marked as thinking-heavy (synthesis, critic)
+  timeout_seconds: 600              # headless calls off the strong tier
+  thinking_timeout_seconds: 900     # strong-tier calls (synthesis, critic, review, verdict)
+  timeouts:                         # optional per-tier timeout override, in seconds
+    strong: 1800
+  roles_timeouts:                   # optional per-role timeout override, in seconds (beats the tier)
+    think: 1800
 ```
 
 The default tiering follows one rule: **a drafter is never weaker than the critic whose findings it
@@ -285,6 +289,14 @@ quality/cost lever: `xhigh` is the recommended setting for coding work, `low` fo
 Haiku 4.5 rejects the flag and never receives it, whatever the fast tier says. To go back to the
 pre-2026-09 cheaper tiering, pin `think`, `explore_refine`, `review_correctness`, and
 `review_security` to `claude-sonnet-5` and `audit_area` to the Haiku id.
+
+**Timeouts.** Every headless call is bounded. Strong-tier calls (synthesis, critic, review,
+verdict — the slow ones) get `thinking_timeout_seconds`; every other call gets
+`timeout_seconds`. The tier is enough, so a slow call can't be forgotten: a role on the strong
+tier always gets the longer limit. To size a specific model or call, override per tier with
+`models.timeouts.<fast|standard|strong>` or per role with `models.roles_timeouts.<role>` (the
+role wins). Set a generous value when a reasoning backend routinely runs long — e.g.
+`models.timeouts.strong: 1800`. `migite config` prints each role's resolved `timeout=`.
 
 <a id="stack"></a>
 ### `stack`
@@ -350,10 +362,17 @@ each word becomes on each CLI.
 heal:
   max_attempts: 3             # MAX_HEAL_ATTEMPTS — Phase 2.5 fix-loop cap
   full_suite_fallback: true   # Phase 3: run the whole rspec suite when no spec files changed
+  prompt_log_max_bytes: 60000 # per-log cap on the rubocop/rspec excerpts in a heal prompt
 ```
 
 `full_suite_fallback: false` makes Phase 3 consistent with Phase 2.5 (skip rspec, say so) instead
 of running the full suite, which needs a live DB and verifies nothing about the diff.
+
+`prompt_log_max_bytes` bounds each tooling log embedded in a heal prompt: over the cap, the
+excerpt keeps the head (the first failure blocks) and the tail (the examples summary and the
+failed-examples list) and elides the middle, naming the full log's path so the agent can read
+more. Without a cap, a mass-failure rspec run (hundreds of backtraces) overflows the model's
+context window and the CLI rejects the call.
 
 <a id="prompts"></a>
 ### `prompts`, `templates`
@@ -454,6 +473,7 @@ description as `MIGITE_AGENT_*` (`load_agent_info`).
 The Python agents and standalone tools call `migite.config.load(repo_root)` themselves, so they
 work identically when invoked directly. `migite.paths.detect_org` consults `vault.org` after the
 `MIGITE_ORG` env var. `migite.gateway.configure_from(cfg)` selects the agent and applies
-timeouts, the headless permission mode, the role-to-model table, and the per-role effort table
-to every later call. Bash reaches the same gateway through `python -m migite.agent_cli ask --role <role>`,
+timeouts, the headless permission mode, the role-to-model table, the per-role effort table, and
+the per-role timeout table to every later call. Bash reaches the same gateway through
+`python -m migite.agent_cli ask --role <role>`,
 so the model and effort for a bash call site are resolved in exactly the same place.

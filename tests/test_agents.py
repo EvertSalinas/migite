@@ -44,7 +44,7 @@ class VocabularyTest(unittest.TestCase):
         self.assertNotIn("X", env); self.assertEqual(env["Y"], "2"); self.assertEqual(env["K"], "v")
 
     def test_registry(self):
-        self.assertEqual(agents.names(), ("claude", "cursor", "opencode"))
+        self.assertEqual(agents.names(), ("claude", "cursor", "kimi", "opencode"))
         self.assertEqual(agents.get().name, "claude")
         self.assertEqual(agents.get("cursor", binary="/opt/agent").binary, "/opt/agent")
         with self.assertRaises(ValueError):
@@ -56,6 +56,11 @@ class VocabularyTest(unittest.TestCase):
         self.assertFalse(cursor.supports("usage")); self.assertFalse(cursor.supports("scope:jira.read"))
         self.assertTrue(opencode.supports("usage")); self.assertFalse(opencode.supports("effort"))
         self.assertFalse(claude.supports("scope:not-a-scope"))
+        kimi = agents.get("kimi")
+        self.assertFalse(kimi.supports("structured_output")); self.assertFalse(kimi.supports("usage"))
+        self.assertFalse(kimi.supports("effort")); self.assertFalse(kimi.supports("scope:jira.read"))
+        self.assertFalse(kimi.info.permission_flags)
+        self.assertEqual(kimi.info.session_mode, "headless")
 
 
 class ClaudeTest(unittest.TestCase):
@@ -138,6 +143,46 @@ class CursorTest(unittest.TestCase):
         self.assertFalse(r.is_envelope); self.assertEqual(r.text, "just text"); self.assertTrue(r.ok)
 
 
+class KimiTest(unittest.TestCase):
+    def setUp(self):
+        self.agent = agents.get("kimi")
+
+    def test_headless_takes_prompt_as_argument(self):
+        launch = self.agent.ask_launch(ask(model="kimi-code/k3-256k", permission="auto", effort="high", schema={"x": 1}))
+        argv = launch.argv
+        self.assertEqual(argv[:3], ["kimi", "--model", "kimi-code/k3-256k"])
+        self.assertEqual(argv[3:5], ["-p", "P"])
+        self.assertIn("stream-json", argv)
+        self.assertNotIn("--effort", argv)        # no effort flag
+        self.assertNotIn("--json-schema", argv)   # no structured output
+        self.assertNotIn("--auto", argv)          # -p cannot take permission flags; runs auto anyway
+        self.assertIsNone(launch.stdin)
+        self.assertNotIn("--model", self.agent.ask_launch(ask()).argv)
+
+    def test_session_runs_headless(self):
+        self.assertEqual(self.agent.session_launch(agents.SessionRequest(prompt="P", permission="plan")).argv,
+                         ["kimi", "-p", "P"])
+
+    def test_parse_stream_json_takes_the_final_answer(self):
+        lines = [
+            {"role": "meta", "type": "system.version", "version": "0.0-fake"},
+            {"role": "assistant", "content": "let me read that file",
+             "tool_calls": [{"type": "function", "id": "t1", "function": {"name": "Read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "file contents"},
+            {"role": "assistant", "content": "here is the answer"},
+            {"role": "meta", "type": "session.resume_hint", "session_id": "s", "command": "kimi -r s", "content": "x"},
+        ]
+        r = self.agent.parse("\n".join(json.dumps(line) for line in lines), 0, ask(model="m"))
+        self.assertTrue(r.ok); self.assertTrue(r.is_envelope); self.assertEqual(r.text, "here is the answer")
+        self.assertEqual(r.model, "m"); self.assertEqual(r.cost_usd, 0.0)
+
+    def test_parse_falls_back_and_flags_failure(self):
+        r = self.agent.parse("plain kimi text", 0, ask(model="m"))
+        self.assertFalse(r.is_envelope); self.assertEqual(r.text, "plain kimi text"); self.assertTrue(r.ok)
+        r = self.agent.parse('{"role":"meta","type":"system.version","version":"1"}', 1, ask())
+        self.assertTrue(r.is_envelope); self.assertFalse(r.ok); self.assertEqual(r.text, "")
+
+
 class OpenCodeTest(unittest.TestCase):
     def setUp(self):
         self.agent = agents.get("opencode")
@@ -185,9 +230,10 @@ class EndToEndTest(unittest.TestCase):
         self._env = dict(os.environ)
         self.tmp = tempfile.TemporaryDirectory()
         bin_dir = Path(self.tmp.name) / "bin"; bin_dir.mkdir()
-        for name, fake in (("claude", "fake-claude"), ("cursor-agent", "fake-cursor-agent"), ("opencode", "fake-opencode")):
+        for name, fake in (("claude", "fake-claude"), ("cursor-agent", "fake-cursor-agent"),
+                           ("kimi", "fake-kimi"), ("opencode", "fake-opencode")):
             (bin_dir / name).write_text(f'#!/usr/bin/env bash\nexec "{FAKES}/{fake}" "$@"\n'); (bin_dir / name).chmod(0o755)
-        for f in ("fake-claude", "fake-cursor-agent", "fake-opencode"):
+        for f in ("fake-claude", "fake-cursor-agent", "fake-kimi", "fake-opencode"):
             os.chmod(FAKES / f, 0o755)
         os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ["PATH"]
         for var in ("MIGITE_USAGE_LEDGER", "MIGITE_AGENT", "MIGITE_CONFIG", "MIGITE_PERMISSION_MODE"):

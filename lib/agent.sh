@@ -38,7 +38,7 @@ agent_field() {
   case "$field" in
     name) var=MIGITE_AGENT_NAME ;; display_name) var=MIGITE_AGENT_DISPLAY ;;
     binary) var=MIGITE_AGENT_BINARY ;; exit_hint) var=MIGITE_AGENT_EXIT_HINT ;;
-    instruction_files) var=MIGITE_AGENT_INSTRUCTIONS ;;
+    instruction_files) var=MIGITE_AGENT_INSTRUCTIONS ;; session_mode) var=MIGITE_AGENT_SESSION_MODE ;;
   esac
   if [[ -n "$var" && -n "${!var:-}" ]]; then
     echo "${!var}"
@@ -130,15 +130,20 @@ run_phase() {
   local permission_mode="${4:-${MIGITE_CFG_PERMISSIONS_INTERACTIVE:-auto}}"
   local prompt_file
   prompt_file=$(write_prompt "$label" "$prompt")
-  local agent_name exit_hint
+  local agent_name exit_hint session_mode
   agent_name="$(agent_field display_name || echo "the agent")"
   exit_hint="$(agent_field exit_hint || echo "exit the session")"
+  session_mode="$(agent_field session_mode || echo interactive)"
 
   echo ""
   echo -e "${CYAN}  Starting interactive ${agent_name} session: ${BOLD}$label${RESET}"
   echo -e "  ${CYAN}Output file: ${outfile}${RESET}"
   echo -e "  ${CYAN}Permission mode: ${permission_mode}${RESET}"
-  echo -e "  ${YELLOW}Type ${exit_hint} when done to return here${RESET}"
+  if [[ "$session_mode" == "headless" ]]; then
+    echo -e "  ${CYAN}${agent_name} runs this phase headlessly and returns automatically when done${RESET}"
+  else
+    echo -e "  ${YELLOW}Type ${exit_hint} when done to return here${RESET}"
+  fi
   echo ""
 
   # One shell-quoted command line from the adapter: that CLI's flags for the
