@@ -48,6 +48,7 @@ migite/                       ← wherever you clone this repo
 │   │   ├── base.py           ← the interface: AgentInfo, AskRequest, SessionRequest, Launch, AskResult, permission words, scopes
 │   │   ├── claude.py         ← Claude Code
 │   │   ├── cursor.py         ← Cursor CLI
+│   │   ├── kimi.py           ← Kimi Code
 │   │   └── opencode.py       ← OpenCode
 │   ├── trackers/             ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
 │   └── tools/                ← the LangGraph tools
@@ -166,7 +167,7 @@ Every headless model call goes through **`call_agent` in `migite/gateway.py`** (
 `lib/agent.sh`, which pipes the prompt through `python -m migite.agent_cli ask`). It asks the configured
 agent's adapter in `migite/agents/` for a command line and parses that CLI's output into one shape. On Claude Code that is
 the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `duration_ms`, and with
-`--json-schema` a validated `structured_output`. Cursor and OpenCode report what they can; see
+`--json-schema` a validated `structured_output`. Cursor, Kimi, and OpenCode report what they can; see
 [agents.md](./agents.md). Each call appends one line to the run's ledger
 (`$MIGITE_USAGE_LEDGER`, default `~/.dev-workflow/logs/<ts>-usage.jsonl`):
 

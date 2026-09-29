@@ -2,7 +2,7 @@
 
 > 右手 (みぎて) — right hand. The trusted assistant that handles the groundwork so you can focus on what matters.
 
-Migite wraps an agent CLI (Claude Code by default, Cursor CLI or OpenCode by config) around every
+Migite wraps an agent CLI (Claude Code by default, Cursor CLI, Kimi Code, or OpenCode by config) around every
 engineering task in the same shape: **plan** before you touch
 a file, **gate** before you implement, **review** before you commit, and **write down** what was
 learned. It never commits for you. It extends your reach without replacing your judgment.
@@ -16,7 +16,7 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 - **Memory**: every artifact mirrored to a markdown vault (Obsidian-friendly), and a per-repo `knowledge.md` injected into every future plan.
 - **Machine-readable**: `plan.json`, `review.json`, and a per-run usage ledger with cost per model.
 - **Configurable**: one layered `.migite.yml` for models, effort, gates, permissions, prompts, budget.
-- **Agent-agnostic**: drives Claude Code by default, Cursor CLI or OpenCode with one config line (`agent.backend`). Capabilities a CLI lacks degrade explicitly, never silently.
+- **Agent-agnostic**: drives Claude Code by default, Cursor CLI, Kimi Code, or OpenCode with one config line (`agent.backend`). Capabilities a CLI lacks degrade explicitly, never silently.
 
 ---
 
@@ -64,7 +64,7 @@ migite doctor
 migite "add a health-check endpoint" --type feature
 ```
 
-Prerequisites: an agent CLI logged in (Claude Code by default; Cursor CLI or OpenCode via
+Prerequisites: an agent CLI logged in (Claude Code by default; Cursor CLI, Kimi Code, or OpenCode via
 `agent.backend`), `git`, Python 3.11+ (macOS's built-in `python3` is 3.9: `brew install python`;
 on Debian/Ubuntu also `apt install python3-venv`), and `bundle` for Rails repos. No separate API key: every
 model call shells out to the CLI and shares its auth.
@@ -204,7 +204,7 @@ five ready-made recipes: [docs/configuration.md](./docs/configuration.md).
 
 | Needs | Why |
 |-------|-----|
-| An agent CLI, logged in: `claude` (default), `cursor-agent`, or `opencode` | Every model call. Auth is the CLI's own; no API key. See [docs/agents.md](./docs/agents.md) |
+| An agent CLI, logged in: `claude` (default), `cursor-agent`, `kimi`, or `opencode` | Every model call. Auth is the CLI's own; no API key. See [docs/agents.md](./docs/agents.md) |
 | `git` | Branch detection, diff scoping, base-branch resolution |
 | Python 3.11+ with `langgraph`, ideally in a venv that `MIGITE_PYTHON` points at | The planning, review, explore, audit, blueprint, and PR-review agents. Per-OS setup: [getting-started.md](./docs/getting-started.md#platforms) |
 | `bundle` | Only for the `rails` stack (rubocop + rspec). Not needed for `generic` |
@@ -234,7 +234,7 @@ Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down;
 | [docs/phases.md](./docs/phases.md) | Phase by phase: what each step calls, every gate key, which files get linted and tested, memory injection, tmux |
 | [docs/outputs.md](./docs/outputs.md) | Every file a run writes, the commit-gate banner, the testing-plan requirement |
 | [docs/configuration.md](./docs/configuration.md) | You are writing a `.migite.yml`: every key, model roles and effort, strict gate, recipes |
-| [docs/agents.md](./docs/agents.md) | Running migite on Cursor CLI or OpenCode instead of Claude Code: capability matrix, per-backend models, what degrades |
+| [docs/agents.md](./docs/agents.md) | Running migite on Cursor CLI, Kimi Code, or OpenCode instead of Claude Code: capability matrix, per-backend models, what degrades |
 | [docs/standalone-tools.md](./docs/standalone-tools.md) | `migite-blueprint`, `migite-explore`, `migite-audit`, `migite-pr-review` |
 | [docs/tickets.md](./docs/tickets.md) | Using `--jira`: setting up `acli` (browser login, no token), the agent fallback, `migite-ticket` |
 | [docs/internals.md](./docs/internals.md) | Repository layout, the agent scripts' CLIs, `plan.json` / `review.json` / usage ledger with examples |
@@ -290,6 +290,6 @@ Roughly in the order they are likely to land:
 - **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
 - **Run manifest and `--yes`.** A `run.json` at every phase boundary so a run can resume from a recorded state, and a non-interactive mode so migite can run from CI or from another agent.
 - **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
-- **Verify Cursor and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
+- **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
 - **One-line installer** to replace the clone-and-symlink block above.

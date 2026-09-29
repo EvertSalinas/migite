@@ -2,7 +2,7 @@
 # agent_think through `python -m migite.agent_cli ask` on each backend, the session command
 # run_phase uses, the cached agent description (load_agent_info), neutral
 # permission words, named scopes, and doctor's health check. Fake CLIs
-# (tests/fake-claude, fake-cursor-agent, fake-opencode) are put first on PATH under
+# (tests/fake-claude, fake-cursor-agent, fake-kimi, fake-opencode) are put first on PATH under
 # their real names so no real agent is ever invoked.
 
 if ! "$MIGITE_PYTHON" -c 'import sys' &>/dev/null; then
@@ -12,12 +12,14 @@ fi
 
 ag_dir=$(mktemp -d); CLEANUP_DIRS+=("$ag_dir")
 mkdir -p "$ag_dir/bin" "$ag_dir/repo" "$ag_dir/home/.config/migite"
-chmod +x "$SCRIPT_DIR"/fake-claude "$SCRIPT_DIR"/fake-cursor-agent "$SCRIPT_DIR"/fake-opencode
+chmod +x "$SCRIPT_DIR"/fake-claude "$SCRIPT_DIR"/fake-cursor-agent "$SCRIPT_DIR"/fake-opencode "$SCRIPT_DIR"/fake-kimi
 ln -sf "$SCRIPT_DIR/fake-claude"       "$ag_dir/bin/claude"
 ln -sf "$SCRIPT_DIR/fake-cursor-agent" "$ag_dir/bin/cursor-agent"
 ln -sf "$SCRIPT_DIR/fake-opencode"     "$ag_dir/bin/opencode"
+ln -sf "$SCRIPT_DIR/fake-kimi"         "$ag_dir/bin/kimi"
 _ag_path="$PATH"; PATH="$ag_dir/bin:$PATH"
-_ag_home="$HOME"; export HOME="$ag_dir/home" XDG_CONFIG_HOME="$ag_dir/home/.config"
+_ag_home="$HOME"; _ag_xdg="${XDG_CONFIG_HOME:-}"
+export HOME="$ag_dir/home" XDG_CONFIG_HOME="$ag_dir/home/.config"
 export MIGITE_USAGE_LEDGER="$ag_dir/usage.jsonl" FAKE_AGENT_ARGV="$ag_dir/argv.log"
 _ag_repo_root="${REPO_ROOT:-}"          # run.sh's REPO_ROOT is the migite checkout — restore it at the end
 REPO_ROOT="$ag_dir/repo"
@@ -30,9 +32,9 @@ use_agent() {
   LOG_DIR="$_ag_saved_log_dir"
 }
 
-for backend in claude cursor opencode; do
+for backend in claude cursor kimi opencode; do
   use_agent "$backend"
-  case "$backend" in claude) bin=claude ;; cursor) bin=cursor-agent ;; opencode) bin=opencode ;; esac
+  case "$backend" in claude) bin=claude ;; cursor) bin=cursor-agent ;; kimi) bin=kimi ;; opencode) bin=opencode ;; esac
   check "agent info cached: $backend → binary $bin" test "$(agent_binary)" = "$bin"
   check "agent info cached: MIGITE_AGENT_NAME=$backend" test "${MIGITE_AGENT_NAME:-}" = "$backend"
   : > "$FAKE_AGENT_ARGV"
@@ -42,6 +44,9 @@ for backend in claude cursor opencode; do
     cursor)   check "agent_ask via $backend returns the result text" bash -c '[[ "$1" == cursor:summarise* ]]' _ "$out"
               check "agent_ask via cursor: headless flags -p --output-format json --trust, no --model" \
                 bash -c 'grep -q -- "-p --output-format json --trust" "$1" && ! grep -q -- "--model" "$1"' _ "$FAKE_AGENT_ARGV" ;;
+    kimi)     check "agent_ask via $backend returns the final assistant text" bash -c '[[ "$1" == kimi:summarise* ]]' _ "$out"
+              check "agent_ask via kimi: -p --output-format stream-json, no --model" \
+                bash -c 'grep -q -- "-p summarise this --output-format stream-json" "$1" && ! grep -q -- "--model" "$1"' _ "$FAKE_AGENT_ARGV" ;;
     opencode) check "agent_ask via $backend returns the joined text events" bash -c '[[ "$1" == opencode:summarise*second\ part ]]' _ "$out"
               check "agent_ask via opencode: run --format json, no --model" \
                 bash -c 'grep -q "run --format json" "$1" && ! grep -q -- "--model" "$1"' _ "$FAKE_AGENT_ARGV" ;;
@@ -116,6 +121,9 @@ check "session: opencode → opencode --prompt <prompt> --auto" \
   test "$(session_cmd --permission edits)" = "opencode --prompt 'do the thing' --auto"
 check "session: plan on opencode → no approval flag" \
   test "$(session_cmd --permission plan)" = "opencode --prompt 'do the thing'"
+use_agent kimi
+check "session: kimi runs the phase headless (kimi -p <prompt>, no permission flag)" \
+  test "$(session_cmd --permission plan)" = "kimi -p 'do the thing'"
 big="$ag_dir/big.txt"; head -c 200000 /dev/zero | tr '\0' 'x' > "$big"
 bigcmd=$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" session --prompt-file "$big" 2>/dev/null)
 check "session: a prompt over ui.prompt_inline_max becomes a pointer to its prompt file" \
@@ -125,6 +133,8 @@ check "session: a prompt over ui.prompt_inline_max becomes a pointer to its prom
 use_agent claude;   check "exit hint: claude → /exit"   test "$(agent_field exit_hint)" = "/exit"
                     check "instruction files: claude → CLAUDE.md" test "$(agent_field instruction_files)" = "CLAUDE.md"
 use_agent opencode; check "instruction files: opencode → AGENTS.md" test "$(agent_field instruction_files)" = "AGENTS.md"
+use_agent kimi;     check "session mode: kimi → headless" test "$(agent_field session_mode)" = "headless"
+                    check "instruction files: kimi → AGENTS.md" test "$(agent_field instruction_files)" = "AGENTS.md"
 
 # doctor names the backend and runs the adapter's health check
 export MIGITE_AGENT=opencode
@@ -133,7 +143,11 @@ check "doctor: reports the configured backend and finds its CLI" \
 check "doctor: a missing agent CLI is reported as an issue" \
   bash -c 'cd "$1" && PATH="/usr/bin:/bin" MIGITE_AGENT=cursor MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/bin/migite" doctor 2>&1 | grep -q "✘ Agent CLI not found: cursor-agent"' _ "$ag_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
 
-unset MIGITE_AGENT FAKE_AGENT_ARGV MIGITE_USAGE_LEDGER FAKE_AGENT_MODE XDG_CONFIG_HOME
+unset MIGITE_AGENT FAKE_AGENT_ARGV MIGITE_USAGE_LEDGER FAKE_AGENT_MODE
 unset MIGITE_AGENT_NAME MIGITE_AGENT_DISPLAY MIGITE_AGENT_BINARY MIGITE_AGENT_EXIT_HINT MIGITE_AGENT_INSTRUCTIONS MIGITE_AGENT_CAPS
+unset MIGITE_AGENT_SESSION_MODE
 unset -f use_agent session_cmd
+# Restore the caller's config isolation — unsetting it here let every later test
+# file fall through to the developer's real ~/.config/migite/config.yml.
+if [[ -n "${_ag_xdg:-}" ]]; then export XDG_CONFIG_HOME="$_ag_xdg"; else unset XDG_CONFIG_HOME; fi
 export HOME="$_ag_home"; PATH="$_ag_path"; REPO_ROOT="$_ag_repo_root"; LOG_DIR="$_ag_saved_log_dir"

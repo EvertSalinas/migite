@@ -56,6 +56,7 @@ THINKING_TIMEOUT = 900
 DEFAULT_PERMISSION = "none"
 INLINE_MAX = 100_000                     # ui.prompt_inline_max
 ROLE_EFFORT: dict[str, str | None] = {}  # role -> effort level
+ROLE_TIMEOUT: dict[str, int | None] = {}  # role -> explicit timeout (config), else None
 
 
 class AgentError(RuntimeError):
@@ -71,7 +72,7 @@ class ScopeUnsupported(AgentError):
 def configure_from(cfg: config.Config) -> None:
     """Point every later call at the agent, models, efforts, timeouts, and permission
     the loaded config selects. Each tool calls this once after config.load()."""
-    global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT
+    global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT, ROLE_TIMEOUT
     AGENT = agents.from_config(cfg)
     CONFIG = cfg
     DEFAULT_TIMEOUT = int(cfg.get("models.timeout_seconds") or DEFAULT_TIMEOUT)
@@ -80,15 +81,17 @@ def configure_from(cfg: config.Config) -> None:
         os.environ.get("MIGITE_PERMISSION_MODE") or cfg.get("permissions.headless") or "none")
     INLINE_MAX = int(cfg.get("ui.prompt_inline_max") or INLINE_MAX)
     ROLE_EFFORT = dict(cfg.efforts_by_role())
+    ROLE_TIMEOUT = dict(cfg.timeouts_by_role())
 
 
 def reset() -> None:
     """Back to the built-in state: the default agent, no config, built-in timeouts,
     no permission flag, no effort. Tests call this between agents."""
-    global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT
+    global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT, ROLE_TIMEOUT
     AGENT, CONFIG = agents.get(), None
     DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX = 600, 900, "none", 100_000
     ROLE_EFFORT = {}
+    ROLE_TIMEOUT = {}
 
 
 def model_for(role: str) -> str:
@@ -101,6 +104,22 @@ def model_for(role: str) -> str:
 def supports(capability: str) -> bool:
     """structured_output | effort | usage | scope:<name>, for the active agent."""
     return AGENT.supports(capability)
+
+
+def resolve_timeout(role: str = "", *, thinking: bool = False, explicit: int | None = None) -> int:
+    """Seconds allowed for one headless call. An explicit timeout wins, then a configured
+    per-role/per-tier override (models.roles_timeouts / models.timeouts), then the tier
+    default: strong-tier calls get thinking_timeout_seconds (synthesis, critic, review,
+    verdict are the slow ones), everything else timeout_seconds. `thinking=True` requests
+    the longer default on any tier."""
+    if explicit:
+        return explicit
+    override = ROLE_TIMEOUT.get(role) if role else None
+    if override:
+        return override
+    if thinking or (role and config.ROLE_TIERS.get(role) == "strong"):
+        return THINKING_TIMEOUT
+    return DEFAULT_TIMEOUT
 
 
 def _missing_cli_message(agent: agents.Agent, detail: str = "") -> str:
@@ -227,15 +246,20 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
                                f"{', '.join(missing)} scope; refusing to run it with every tool")
     resolved_model = model if model is not None else (model_for(role) if role else "")
     resolved_effort = effort if effort is not None else ROLE_EFFORT.get(role)
+    resolved_permission = agents.normalize_permission(permission if permission is not None else DEFAULT_PERMISSION)
+    if not agent.info.permission_flags and resolved_permission not in ("auto", "none"):
+        # Kimi's -p always runs its own auto policy and rejects the permission flags.
+        print(f"      ⚠ the {agent.name} backend has no headless permission flag; "
+              f"running with its own default instead of {resolved_permission}", file=sys.stderr, flush=True)
     req = agents.AskRequest(
         prompt=prompt,
         model=resolved_model or None,
         effort=resolved_effort if agent.info.effort else None,
         schema=schema if agent.info.structured_output else None,   # caller falls back to text
-        permission=agents.normalize_permission(permission if permission is not None else DEFAULT_PERMISSION),
+        permission=resolved_permission,
         scopes=scopes,
     )
-    timeout = timeout or (THINKING_TIMEOUT if thinking else DEFAULT_TIMEOUT)
+    timeout = resolve_timeout(role, thinking=thinking, explicit=timeout)
 
     pointer_file = None
     if agent.info.prompt_via == "arg":
@@ -298,11 +322,14 @@ def session_launch(prompt: str, *, permission: str | None = None, prompt_file: s
     one becomes a pointer to `prompt_file`. Unset permission = permissions.interactive."""
     if permission is None:
         permission = (CONFIG.get("permissions.interactive") if CONFIG is not None else None) or "auto"
+    word = agents.normalize_permission(permission)
+    if not AGENT.info.permission_flags:
+        word = "auto"   # the CLI fixes its own policy; no flag exists to pass
     text, tmp = fit_prompt(prompt, prompt_file=prompt_file)
     if tmp:
         # No caller-owned file to point at: keep the temp file, the session reads it later.
         print(f"      ⚠ prompt kept at {tmp} for the session to read", file=sys.stderr, flush=True)
-    return AGENT.session_launch(agents.SessionRequest(prompt=text, permission=agents.normalize_permission(permission)))
+    return AGENT.session_launch(agents.SessionRequest(prompt=text, permission=word))
 
 
 # ── Envelope helpers shared by the agents ─────────────────────────────────────

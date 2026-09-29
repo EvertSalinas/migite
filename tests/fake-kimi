@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# tests/fake-kimi — stand-in for the Kimi Code CLI (`kimi`). Mirrors the
+# `-p --output-format stream-json` JSONL shape from apps/kimi-code/src/cli/
+# prompt-render.ts: a `meta` version line, assistant messages (a tool-calling
+# turn carries `tool_calls`), a `tool` result, a final assistant answer, and a
+# `meta` resume hint. The prompt is the argument after -p / --prompt.
+# $FAKE_AGENT_MODE: ok (default) | error | text | exit1. Records argv to $FAKE_AGENT_ARGV.
+set -u
+[[ -n "${FAKE_AGENT_ARGV:-}" ]] && printf '%s\n' "$*" >> "$FAKE_AGENT_ARGV"
+
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "--version" ]]; then echo "kimi 0.0-fake"; exit 0; fi
+  if [[ "${args[$i]}" == "-p" || "${args[$i]}" == "--prompt" ]]; then prompt="${args[$((i + 1))]:-}"; fi
+done
+prompt="${prompt:-}"
+snippet="${prompt:0:40}"; snippet="${snippet//\"/\\\"}"; snippet="${snippet//$'\n'/ }"
+
+case "${FAKE_AGENT_MODE:-ok}" in
+  ok) cat <<JSON
+{"role":"meta","type":"system.version","version":"0.0-fake"}
+{"role":"assistant","content":"reading the repo, then answering","tool_calls":[{"type":"function","id":"t1","function":{"name":"Read","arguments":"{\"path\":\"x\"}"}}]}
+{"role":"tool","tool_call_id":"t1","content":"file contents"}
+{"role":"assistant","content":"kimi:${snippet}"}
+{"role":"meta","type":"session.resume_hint","session_id":"ses_fake","command":"kimi -r ses_fake","content":"To resume this session: kimi -r ses_fake"}
+JSON
+  ;;
+  error) printf '{"role":"meta","type":"system.version","version":"0.0-fake"}\n'
+         echo "error: 401 no K3 access — upgrade your plan" >&2; exit 1 ;;
+  text)  printf 'plain kimi text for: %s\n' "$snippet" ;;
+  exit1) echo "boom" >&2; exit 1 ;;
+esac
