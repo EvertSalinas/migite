@@ -63,7 +63,7 @@ class CompactRspecTest(unittest.TestCase):
         self.assertEqual(compact_rspec(LOG, len(LOG.encode()), "/logs/rspec.txt"), LOG)
 
     def test_identical_failures_merge_with_a_count(self):
-        out = over_budget(LOG, 2000)
+        out = over_budget(LOG, 1200)
         self.assertIn("3 total, 2 distinct", out)
         self.assertIn("[×2 failures with this exact error]", out)
         # The merged block keeps the first occurrence's frame; the rest are gone.
@@ -71,17 +71,17 @@ class CompactRspecTest(unittest.TestCase):
         self.assertNotIn("rails_helper", out)
 
     def test_distinct_failures_all_survive(self):
-        out = over_budget(LOG, 2000)
+        out = over_budget(LOG, 1200)
         self.assertIn("compared using ==", out)
         self.assertIn("ProductVariant.count", out)
 
     def test_summary_and_failed_examples_survive(self):
-        out = over_budget(LOG, 2000)
+        out = over_budget(LOG, 1200)
         self.assertIn("3 examples, 3 failures", out)
         self.assertIn("rspec ./spec/models/product_variant_spec.rb:240", out)
 
     def test_progress_dots_are_dropped(self):
-        out = over_budget(LOG, 2000)
+        out = over_budget(LOG, 1200)
         self.assertNotIn("......", out)
 
     def test_still_over_budget_elides_head_and_tail(self):

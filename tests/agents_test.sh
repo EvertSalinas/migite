@@ -18,7 +18,8 @@ ln -sf "$SCRIPT_DIR/fake-cursor-agent" "$ag_dir/bin/cursor-agent"
 ln -sf "$SCRIPT_DIR/fake-opencode"     "$ag_dir/bin/opencode"
 ln -sf "$SCRIPT_DIR/fake-kimi"         "$ag_dir/bin/kimi"
 _ag_path="$PATH"; PATH="$ag_dir/bin:$PATH"
-_ag_home="$HOME"; export HOME="$ag_dir/home" XDG_CONFIG_HOME="$ag_dir/home/.config"
+_ag_home="$HOME"; _ag_xdg="${XDG_CONFIG_HOME:-}"
+export HOME="$ag_dir/home" XDG_CONFIG_HOME="$ag_dir/home/.config"
 export MIGITE_USAGE_LEDGER="$ag_dir/usage.jsonl" FAKE_AGENT_ARGV="$ag_dir/argv.log"
 _ag_repo_root="${REPO_ROOT:-}"          # run.sh's REPO_ROOT is the migite checkout — restore it at the end
 REPO_ROOT="$ag_dir/repo"
@@ -142,8 +143,11 @@ check "doctor: reports the configured backend and finds its CLI" \
 check "doctor: a missing agent CLI is reported as an issue" \
   bash -c 'cd "$1" && PATH="/usr/bin:/bin" MIGITE_AGENT=cursor MIGITE_PYTHON="$2" MIGITE_HOME="$3" bash "$3/bin/migite" doctor 2>&1 | grep -q "✘ Agent CLI not found: cursor-agent"' _ "$ag_dir/repo" "$MIGITE_PYTHON" "$MIGITE_HOME"
 
-unset MIGITE_AGENT FAKE_AGENT_ARGV MIGITE_USAGE_LEDGER FAKE_AGENT_MODE XDG_CONFIG_HOME
+unset MIGITE_AGENT FAKE_AGENT_ARGV MIGITE_USAGE_LEDGER FAKE_AGENT_MODE
 unset MIGITE_AGENT_NAME MIGITE_AGENT_DISPLAY MIGITE_AGENT_BINARY MIGITE_AGENT_EXIT_HINT MIGITE_AGENT_INSTRUCTIONS MIGITE_AGENT_CAPS
 unset MIGITE_AGENT_SESSION_MODE
 unset -f use_agent session_cmd
+# Restore the caller's config isolation — unsetting it here let every later test
+# file fall through to the developer's real ~/.config/migite/config.yml.
+if [[ -n "${_ag_xdg:-}" ]]; then export XDG_CONFIG_HOME="$_ag_xdg"; else unset XDG_CONFIG_HOME; fi
 export HOME="$_ag_home"; PATH="$_ag_path"; REPO_ROOT="$_ag_repo_root"; LOG_DIR="$_ag_saved_log_dir"

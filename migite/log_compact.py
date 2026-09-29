@@ -77,6 +77,13 @@ def compact_rspec(text: str, max_bytes: int, path: str) -> str:
     seen: dict[str, tuple[str, list[str], str, int]] = {}   # body -> (header, content, first frame, count)
     for header, body in blocks:
         content = [l for l in body if not FRAME_LINE.match(l)]
+        # Blank lines around a block are separators, not content. Without this,
+        # the last block (which absorbs the blank line before the summary) never
+        # keys the same as an identical earlier one, so it never merges.
+        while content and not content[0].strip():
+            content.pop(0)
+        while content and not content[-1].strip():
+            content.pop()
         first_frame = next((l for l in body if FRAME_LINE.match(l)), "")
         key = "\n".join(content)
         if key in seen:

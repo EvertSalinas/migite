@@ -10,6 +10,12 @@ fi
 
 mr_dir=$(mktemp -d); CLEANUP_DIRS+=("$mr_dir")
 chmod +x "$SCRIPT_DIR/fake-claude"
+# This file asserts fake-claude's output shapes and default model tiers — pin the
+# backend and hide the developer's ~/.config/migite/config.yml so a real config
+# (agent.backend, models.*) can't change what agent_ask does here.
+_mr_saved_agent="${MIGITE_AGENT:-}" _mr_saved_xdg="${XDG_CONFIG_HOME:-}"
+export MIGITE_AGENT=claude XDG_CONFIG_HOME="$mr_dir/config"
+mkdir -p "$XDG_CONFIG_HOME"
 # A `claude` shim first on PATH → tests/fake-claude. Without this, `claude`
 # resolves to the REAL CLI and the tests below spend real money.
 mkdir -p "$mr_dir/bin"
@@ -115,3 +121,5 @@ check "sync_json: missing source is a silent no-op" \
 
 PATH="$_old_path"
 unset MIGITE_USAGE_LEDGER FAKE_CLAUDE_MODE
+[[ -n "${_mr_saved_agent:-}" ]] && export MIGITE_AGENT="$_mr_saved_agent" || unset MIGITE_AGENT
+[[ -n "${_mr_saved_xdg:-}" ]] && export XDG_CONFIG_HOME="$_mr_saved_xdg" || unset XDG_CONFIG_HOME
