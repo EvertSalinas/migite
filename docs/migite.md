@@ -39,6 +39,7 @@ migite --staged                             # one implement session per Scope su
 migite --stack rails|generic                # override stack detection
 migite --amend ["feedback"] | --amend-file <file> [--jira KEY]   # scope a delta against a built task
 migite doctor [--repo <path>]               # read-only health check
+migite migrate-vault [--dry-run]            # move pre-run-folder task folders into run folders
 migite config [--edit [--user] | --init [--user] [--force] | --validate | --path [--user]]   # layered configuration
 migite --help                               # all of the above; every subcommand and tool also takes --help
 ```
@@ -108,7 +109,7 @@ skip synthesis / architecture critic / refine
 ONE Sonnet call ── reads plan.md + implementation.md + review.md
                    + git diff <base> + knowledge.md + your feedback
       │
-amendment-NN.md → gate [y/f/e/q]
+NN-amend-<slug>/amendment.md → gate [y/f/e/q]
       │ (on y)
 regenerate testing-plan.md in full — one more Sonnet call
       │
@@ -125,12 +126,12 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 |-----|--------|
 | `y` | Approve — regenerates `testing-plan.md` in full, then continues to implementation |
 | `f` | Feedback - one more headless call revises the amendment document in place |
-| `e` | Edit — opens `amendment-NN.md` directly in `$EDITOR` |
+| `e` | Edit: opens `amendment.md` directly in `$EDITOR` |
 | `q` | Abort the workflow |
 
 Key properties:
 
-- **`plan.md` is never overwritten.** Amendments accumulate as `amendment-01.md`, `amendment-02.md` beside the original plan, so the record of what changed and why lives with the work.
+- **`plan.md` is never overwritten.** Each amendment gets its own run folder, `01-amend-<slug>/`, `02-amend-<slug>/`, beside the original plan, so the record of what changed and why lives with the work. See [Run folders](./vault-structure.md#run-folders).
 - **`testing-plan.md` is overwritten in full on approval**, unlike `plan.md` — it reflects current, post-amendment behaviour, not history. See [Testing Plan requirement](./outputs.md#testing-plan-requirement).
 - **Grounded in the diff, not a re-exploration.** The amendment prompt sees the actual built code, so it can say "this already handles that, only the retry path changes" instead of re-planning greenfield.
 - **Implementation is scoped to the amendment.** The implement prompt marks the original plan as already built and enforces the amendment's `Out of scope` section.
@@ -236,7 +237,8 @@ Two principles that already govern how migite has evolved, written down as a cit
 
 | State | Behaviour |
 |-------|-----------|
-| `scratchpad/<ticket>/intake.md` exists | Reused — no template copy |
+| Task still uses the flat, pre-run-folder layout | Moved into run folders first (scratchpad and vault), see [Run folders](./vault-structure.md#run-folders) |
+| `scratchpad/<ticket>/00-build/intake.md` exists | Reused, no template copy |
 | `scratchpad/<ticket>/plan.md` missing but vault has one | `resume_from_vault()` copies it into the scratchpad before the plan gate runs |
 | `plan.md` exists (scratchpad, after the above) | Offers `[u]se existing` or `[r]edo` |
 | `.plan.done` sentinel missing after agent | Hard error on the initial plan generation; only a warning (gate still opens) if it's missing after an `n`-redo from the plan gate |

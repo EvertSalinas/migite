@@ -236,14 +236,14 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
 Reading one field from bash and from Python:
 
 ```bash
-json_field scratchpad/bb-1234/review.json verdict            # → needs_fixes
-json_field scratchpad/bb-1234/review.json counts.critical    # → 1
+json_field scratchpad/bb-1234/00-build/review.json verdict            # → needs_fixes
+json_field scratchpad/bb-1234/00-build/review.json counts.critical    # → 1
 json_field scratchpad/bb-1234/plan.json critic.clean         # → false
 ```
 
 ```python
 import json
-review = json.load(open("scratchpad/bb-1234/review.json"))
+review = json.load(open("scratchpad/bb-1234/00-build/review.json"))
 blocking = [f for f in review["findings"] if f["severity"] == "critical"]
 ```
 
@@ -251,7 +251,8 @@ A `review.json` example, including `findings[]`, is in
 [getting-started.md](./getting-started.md#outputs).
 
 **`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
-report too) and summarises the ledger by model and by tool. Interactive sessions (`run_phase`:
+report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`) and summarises the ledger by
+model and by tool. Interactive sessions (`run_phase`:
 implement, gate fixes, PR description) are not metered — the CLI only emits usage in `--print` mode.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

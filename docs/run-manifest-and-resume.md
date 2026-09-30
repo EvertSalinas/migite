@@ -91,9 +91,10 @@ Every "done" transition also stamps `completed_at`; every write bumps `updated_a
    `lib/phases/plan.sh` / `lib/phases/amend.sh`). Every write runs `sync_json` to the
    vault mirror (never `sync_artifact` — frontmatter would corrupt the JSON). Sourced
    by `bin/migite` **and `tests/run.sh`** so it is unit-testable in the existing harness.
-   Also holds **`set_run_paths`**, factored out of `run_plan` (`lib/phases/plan.sh`
-   — the `PLAN_FILE`/`PLAN_VAULT`/`IMPLEMENTATION_FILE`/… block and the knowledge
-   block) so the normal plan path, amend mode, and resume derive every path identically.
+   Restore calls **`set_run_paths <run-slug>`**, which already exists in `lib/vault.sh`
+   and which `run_plan` and amend mode use, so the normal plan path, amend mode, and resume
+   derive every path identically. The manifest records the run slug (`00-build`,
+   `NN-amend-<slug>`) alongside `layout.slug`; see [Run folders](./vault-structure.md#run-folders).
 
 3. **Phase hooks** — call `manifest_boundary` at the write points above in
    `lib/phases/{plan,implement,review,deliver,amend}.sh`; record `PLAN_GATE_ATTEMPTS`,
@@ -102,8 +103,7 @@ Every "done" transition also stamps `completed_at`; every write bumps `updated_a
    to globals so staged runs resume mid-stage (stage notes
    `implementation-stage-N.md` already persist). Remove the internal
    `run_auto_heal_loop` call from `run_implement` so `bin/migite` sequences `heal` as
-   its own skippable phase. `lib/phases/plan.sh` and `lib/phases/amend.sh` call
-   `set_run_paths` instead of their inline path blocks.
+   its own skippable phase.
 
 4. **`bin/migite` dispatch + `--resume [file]`** — replaces the unconditional
    `run_plan → run_tdd → run_implement → run_review → run_deliver` sequence (which

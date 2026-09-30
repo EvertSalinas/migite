@@ -5,14 +5,14 @@
 # AUDIT_FILE, BLUEPRINT_FILE, INTAKE_FILE_ARG, ATTACH_FILES, ORG, REPO_NAME,
 # REPO_ROOT, BRANCH, BASE_BRANCH, DEV_LOG_BASE, MIGITE_HOME to be set (BRANCH is
 # updated when the intake names another branch to check out), and sets TASK_SLUG,
-# TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, TASK_FILE, PLAN_FILE, PLAN_VAULT,
-# IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT,
-# REVIEW_FILE, REVIEW_VAULT, TESTING_PLAN_FILE, TESTING_PLAN_VAULT, CRITIC_FILE,
-# CRITIC_VAULT, KNOWLEDGE_FILE, KNOWLEDGE_INJECT, PLAN_GATE_ATTEMPTS for the phases
-# that run after it. PLAN_FILE/TESTING_PLAN_FILE/CRITIC_FILE live in the scratchpad
-# (source of truth); the _VAULT siblings are synced mirrors under $TASK_DIR for
-# reading/browsing (e.g. in Obsidian) — never written to directly.
-# run_tdd expects PLAN_FILE, TASK_DIR, SCRATCHPAD_DIR, TASK_SLUG.
+# TASK_DIR, SCRATCHPAD_DIR, the set_run_paths variables for the 00-build run
+# (RUN_SLUG, RUN_SCRATCH_DIR, RUN_VAULT_DIR, PLAN_FILE, IMPLEMENTATION_FILE,
+# REVIEW_FILE, TESTING_PLAN_FILE and their _VAULT siblings), INTAKE_FILE,
+# TASK_FILE, CRITIC_FILE, CRITIC_VAULT, KNOWLEDGE_FILE, KNOWLEDGE_INJECT,
+# PLAN_GATE_ATTEMPTS for the phases that run after it. The scratchpad copies are
+# the source of truth; the _VAULT siblings are synced mirrors under $TASK_DIR for
+# reading/browsing (e.g. in Obsidian) - never written to directly.
+# run_tdd expects PLAN_FILE, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_SLUG.
 
 run_plan() {
   echo ""
@@ -31,6 +31,10 @@ run_plan() {
   TASK_DIR="$DEV_LOG_BASE/$ORG/$REPO_NAME/$PRELIMINARY_SLUG"
   SCRATCHPAD_DIR="$REPO_ROOT/scratchpad/$PRELIMINARY_SLUG"
   mkdir -p "$TASK_DIR" "$SCRATCHPAD_DIR"
+  # A task resumed from before the run-folder layout moves into it first, so
+  # the resume checks below find its files in 00-build/.
+  migrate_task_if_flat "$SCRATCHPAD_DIR" "$TASK_DIR"
+  set_run_paths "$BUILD_RUN_SLUG"
 
   # Falls back to when Title: can't be derived from the intake below (line ~120).
   # Stays PRELIMINARY_SLUG unless --intake overrides it with the file's own name.
@@ -45,8 +49,8 @@ run_plan() {
   # body, same as a missing knowledge.md, audit, or blueprint.
   local JIRA_CONTEXT_FILE=""
   if [[ -n "$JIRA_TICKET" ]]; then
-    JIRA_CONTEXT_FILE="$SCRATCHPAD_DIR/jira-context.md"
-    local JIRA_CONTEXT_VAULT="$TASK_DIR/jira-context.md"
+    JIRA_CONTEXT_FILE="$RUN_SCRATCH_DIR/jira-context.md"
+    local JIRA_CONTEXT_VAULT="$RUN_VAULT_DIR/jira-context.md"
     resume_from_vault "$JIRA_CONTEXT_FILE" "$JIRA_CONTEXT_VAULT"
     if [[ -s "$JIRA_CONTEXT_FILE" ]]; then
       log "Reusing cached Jira context for $JIRA_TICKET"
@@ -87,12 +91,12 @@ run_plan() {
   }
 
   # Intake lives in scratchpad — copy from vault if resuming, else copy fresh from template
-  INTAKE_FILE="$SCRATCHPAD_DIR/intake.md"
+  INTAKE_FILE="$RUN_SCRATCH_DIR/intake.md"
 
   if [[ -f "$INTAKE_FILE" ]]; then
     log "Resuming existing intake: $INTAKE_FILE"
-  elif [[ -f "$TASK_DIR/intake.md" ]]; then
-    cp "$TASK_DIR/intake.md" "$INTAKE_FILE"
+  elif [[ -f "$RUN_VAULT_DIR/intake.md" ]]; then
+    cp "$RUN_VAULT_DIR/intake.md" "$INTAKE_FILE"
     log "Loaded intake from vault"
   elif [[ -n "$INTAKE_FILE_ARG" ]]; then
     # ── Intake mode: use a pre-written intake file directly, no template/editor ──
@@ -201,24 +205,19 @@ run_plan() {
     mv "$SCRATCHPAD_DIR" "$NEW_SCRATCHPAD_DIR"
     TASK_DIR="$NEW_TASK_DIR"
     SCRATCHPAD_DIR="$NEW_SCRATCHPAD_DIR"
-    INTAKE_FILE="$SCRATCHPAD_DIR/intake.md"
+    set_run_paths "$BUILD_RUN_SLUG"
+    INTAKE_FILE="$RUN_SCRATCH_DIR/intake.md"
     log "Dirs renamed to: $TASK_SLUG"
   fi
 
   # Work on the branch the intake names, creating it from the base branch if missing
   ensure_task_branch "$(intake_branch "$INTAKE_FILE")" "$BASE_BRANCH"
 
-  local INTAKE_VAULT="$TASK_DIR/intake.md"
-  PLAN_FILE="$SCRATCHPAD_DIR/plan.md"
-  PLAN_VAULT="$TASK_DIR/plan.md"
-  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation.md"
-  IMPLEMENTATION_VAULT="$TASK_DIR/implementation.md"
-  REVIEW_FILE="$SCRATCHPAD_DIR/review.md"
-  REVIEW_VAULT="$TASK_DIR/review.md"
-  TESTING_PLAN_FILE="$SCRATCHPAD_DIR/testing-plan.md"
-  TESTING_PLAN_VAULT="$TASK_DIR/testing-plan.md"
-  CRITIC_FILE="$SCRATCHPAD_DIR/architecture-critic.md"
-  CRITIC_VAULT="$TASK_DIR/architecture-critic.md"
+  # PLAN_FILE, TESTING_PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE and their
+  # _VAULT siblings come from set_run_paths above.
+  local INTAKE_VAULT="$RUN_VAULT_DIR/intake.md"
+  CRITIC_FILE="$RUN_SCRATCH_DIR/architecture-critic.md"
+  CRITIC_VAULT="$RUN_VAULT_DIR/architecture-critic.md"
 
   resume_from_vault "$PLAN_FILE" "$PLAN_VAULT"
   resume_from_vault "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
@@ -254,9 +253,9 @@ run_plan() {
       local task_file_content
       task_file_content=$(grep -v '^<!--' "$TASK_FILE_TMP" || true)
       if [[ -n "$(echo "$task_file_content" | tr -d '[:space:]')" ]]; then
-        TASK_FILE="$SCRATCHPAD_DIR/task.md"
+        TASK_FILE="$RUN_SCRATCH_DIR/task.md"
         printf '%s\n' "$task_file_content" > "$TASK_FILE"
-        sync_artifact "$TASK_FILE" "$TASK_DIR/task.md"
+        sync_artifact "$TASK_FILE" "$RUN_VAULT_DIR/task.md"
         success "Additional task details saved to $TASK_FILE"
       else
         warn "No additional details entered — skipping task.md"
@@ -268,9 +267,9 @@ run_plan() {
   # --attach given but no editor pass wrote task.md above (non-intake mode, or
   # the prompt was declined/skipped) — still save the attachments on their own.
   if [[ -z "$TASK_FILE" && -n "$ATTACH_BLOCK" ]]; then
-    TASK_FILE="$SCRATCHPAD_DIR/task.md"
+    TASK_FILE="$RUN_SCRATCH_DIR/task.md"
     printf '%s' "$ATTACH_BLOCK" > "$TASK_FILE"
-    sync_artifact "$TASK_FILE" "$TASK_DIR/task.md"
+    sync_artifact "$TASK_FILE" "$RUN_VAULT_DIR/task.md"
     success "Attachment(s) saved to $TASK_FILE"
   fi
 
@@ -490,7 +489,7 @@ run_tdd() {
   if [[ "$tdd_choice" =~ ^[Yy]$ ]]; then
     log "Phase 1.5/4 — Writing specs (TDD red phase)"
 
-    local SPEC_IMPL_FILE="$SCRATCHPAD_DIR/spec-implementation.md"
+    local SPEC_IMPL_FILE="$RUN_SCRATCH_DIR/spec-implementation.md"
     local SPEC_IMPL_PROMPT="${KNOWLEDGE_INJECT}$(cat "$IMPLEMENT_CMD_PATH" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
 
 $(cat "$PLAN_FILE")
@@ -507,7 +506,7 @@ Rules:
 - When done, write the list of spec files created to: $SPEC_IMPL_FILE"
 
     run_phase "Writing specs (TDD)" "$SPEC_IMPL_FILE" "$SPEC_IMPL_PROMPT"
-    sync_artifact "$SPEC_IMPL_FILE" "$TASK_DIR/spec-implementation.md"
+    sync_artifact "$SPEC_IMPL_FILE" "$RUN_VAULT_DIR/spec-implementation.md"
     success "Spec files written"
 
     log "Confirming red state (specs should fail)..."

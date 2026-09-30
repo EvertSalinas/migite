@@ -127,7 +127,8 @@ run_doctor() {
   done
 
   # ── Scratchpad / vault sync drift ──────────────────────────────────────────
-  # Every scratchpad/<slug>/*.md should have a same-or-newer counterpart under
+  # Every scratchpad/<slug>/*.md, and every *.md in its run folders
+  # (00-build/, NN-amend-<slug>/), should have a same-or-newer counterpart under
   # the vault mirror — a mismatch means a sync_artifact call didn't happen
   # (crashed run, or a bug in a phase that forgot to sync).
   local scratchpad_root="$REPO_ROOT/scratchpad"
@@ -139,9 +140,9 @@ run_doctor() {
       [[ -d "$task_dir" ]] || continue
       local slug fname vault_f f
       slug=$(basename "$task_dir")
-      for f in "$task_dir"*.md; do
+      for f in "$task_dir"*.md "$task_dir"*/*.md; do
         [[ -f "$f" ]] || continue
-        fname=$(basename "$f")
+        fname="${f#"$task_dir"}"
         vault_f="$vault_root/$slug/$fname"
         if [[ ! -f "$vault_f" ]]; then
           drift+=("$slug/$fname — no vault counterpart")
@@ -176,7 +177,10 @@ run_doctor() {
       if [[ -f "$task_dir/.plan.done" && ! -s "$task_dir/plan.md" ]]; then
         orphans+=("$slug/.plan.done — plan.md missing or empty")
       fi
-      if [[ -f "$task_dir/.review.done" && ! -s "$task_dir/review.md" ]]; then
+      # review.md lives in the run folders; the sentinel is per task.
+      local _latest_review
+      _latest_review=$(task_run_files "${task_dir%/}" "" review.md | tail -1)
+      if [[ -f "$task_dir/.review.done" && ! -s "${_latest_review:-$task_dir/review.md}" ]]; then
         orphans+=("$slug/.review.done — review.md missing or empty")
       fi
     done

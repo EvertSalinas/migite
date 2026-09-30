@@ -4,14 +4,15 @@
 #
 # Sourced by migite. run_amend_mode expects BRANCH, ORG, REPO_NAME, DEV_LOG_BASE,
 # REPO_ROOT, JIRA_TICKET, AMEND_FEEDBACK, AMEND_FEEDBACK_FILE, DATE to be set,
-# and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, PLAN_FILE, PLAN_VAULT,
-# IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT, REVIEW_FILE, REVIEW_VAULT,
-# TESTING_PLAN_FILE, TESTING_PLAN_VAULT, AMEND_NUM, AMENDMENT_FILE,
-# PLAN_GATE_ATTEMPTS for the phases that run after it. IMPLEMENTATION_FILE is this
-# amendment's own implementation-amendment-NN.md, never implementation.md.
-# PLAN_FILE/REVIEW_FILE/TESTING_PLAN_FILE live in the scratchpad; resume_from_vault pulls them
-# back in from the vault mirror if the scratchpad copy is missing (e.g. amending an
-# older task on a fresh clone or after the branch's scratchpad was cleaned).
+# and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, AMEND_NUM,
+# AMENDMENT_FILE, PLAN_GATE_ATTEMPTS and the set_run_paths variables for this
+# amendment's own run folder, NN-amend-<slug>/ (RUN_SLUG, RUN_SCRATCH_DIR,
+# RUN_VAULT_DIR, PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE, TESTING_PLAN_FILE
+# and their _VAULT siblings) for the phases that run after it. The scratchpad is
+# the source of truth; plan.md and testing-plan.md are pulled back from the vault
+# mirror if the scratchpad copy is missing (e.g. amending an older task on a fresh
+# clone or after the branch's scratchpad was cleaned), and earlier runs are read
+# from whichever of the two still has them.
 
 run_amend_mode() {
   log "Amend mode — locating task to amend"
@@ -62,23 +63,16 @@ run_amend_mode() {
   TASK_DIR="$REPO_VAULT_DIR/$TASK_SLUG"
   SCRATCHPAD_DIR="$REPO_ROOT/scratchpad/$TASK_SLUG"
   mkdir -p "$SCRATCHPAD_DIR"
-  INTAKE_FILE="$SCRATCHPAD_DIR/intake.md"
-  PLAN_FILE="$SCRATCHPAD_DIR/plan.md"
-  PLAN_VAULT="$TASK_DIR/plan.md"
-  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation.md"
-  IMPLEMENTATION_VAULT="$TASK_DIR/implementation.md"
-  REVIEW_FILE="$SCRATCHPAD_DIR/review.md"
-  REVIEW_VAULT="$TASK_DIR/review.md"
-  TESTING_PLAN_FILE="$SCRATCHPAD_DIR/testing-plan.md"
-  TESTING_PLAN_VAULT="$TASK_DIR/testing-plan.md"
+  migrate_task_if_flat "$SCRATCHPAD_DIR" "$TASK_DIR"
+  INTAKE_FILE="$SCRATCHPAD_DIR/$BUILD_RUN_SLUG/intake.md"
+  mkdir -p "$(dirname "$INTAKE_FILE")"
+  resume_from_vault "$INTAKE_FILE" "$TASK_DIR/$BUILD_RUN_SLUG/intake.md"
+  # The current-state documents; the run folder itself is created once the
+  # feedback, which names it, is in.
+  resume_from_vault "$SCRATCHPAD_DIR/plan.md" "$TASK_DIR/plan.md"
+  resume_from_vault "$SCRATCHPAD_DIR/testing-plan.md" "$TASK_DIR/testing-plan.md"
 
-  resume_from_vault "$INTAKE_FILE" "$TASK_DIR/intake.md"
-  resume_from_vault "$PLAN_FILE" "$PLAN_VAULT"
-  resume_from_vault "$IMPLEMENTATION_FILE" "$IMPLEMENTATION_VAULT"
-  resume_from_vault "$REVIEW_FILE" "$REVIEW_VAULT"
-  resume_from_vault "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
-
-  [[ -f "$PLAN_FILE" ]] || error "No plan.md found in $TASK_DIR — amend requires an already-planned task"
+  [[ -f "$SCRATCHPAD_DIR/plan.md" ]] || error "No plan.md found in $TASK_DIR — amend requires an already-planned task"
 
   log "Amending: $TASK_DIR"
   log "Scratchpad: $SCRATCHPAD_DIR"
@@ -103,30 +97,28 @@ run_amend_mode() {
   fi
   [[ -n "$(echo "$AMEND_FEEDBACK_TEXT" | tr -d '[:space:]')" ]] || error "No amendment feedback provided"
 
-  # Next amendment number — plan.md is never overwritten, amendments accumulate beside it
-  # Checks both scratchpad and vault so a scratchpad that's missing older amendments
-  # (cleaned, fresh clone) can't reuse a number already taken in vault history.
-  local AMEND_LAST
-  AMEND_LAST=$(find "$TASK_DIR" "$SCRATCHPAD_DIR" -maxdepth 1 -name 'amendment-*.md' 2>/dev/null | sed -E 's/.*amendment-([0-9]+)\.md/\1/' | sort -n | tail -1)
-  AMEND_NUM=$(printf '%02d' "$(( ${AMEND_LAST:-0} + 1 ))")
-  AMENDMENT_FILE="$SCRATCHPAD_DIR/amendment-${AMEND_NUM}.md"
-  local AMENDMENT_VAULT="$TASK_DIR/amendment-${AMEND_NUM}.md"
+  # Next amendment number: one past the highest run folder in the scratchpad or
+  # the vault, so a scratchpad missing older runs (cleaned, fresh clone) can't
+  # reuse a number already taken in vault history. plan.md is never overwritten.
+  AMEND_NUM=$(next_amend_num "$SCRATCHPAD_DIR" "$TASK_DIR")
 
-  # Every implementation-notes file so far, oldest first. Read before
-  # IMPLEMENTATION_FILE is repointed below, so this amendment is scoped against
-  # the original build's notes and every earlier amendment's, not just the last.
-  local PRIOR_NOTES="" _notes_f
+  # Every earlier run's implementation notes, oldest first, and the latest
+  # review. Read before set_run_paths creates this run's (empty) folder.
+  local PRIOR_NOTES="" _notes_f _run
   while IFS= read -r _notes_f; do
+    _run=$(basename "$(dirname "$_notes_f")")
     PRIOR_NOTES="${PRIOR_NOTES}
-### $(basename "$_notes_f")
+### ${_run}/implementation.md
 $(cat "$_notes_f")
 "
-  done < <(implementation_notes_files "$SCRATCHPAD_DIR" "$TASK_DIR")
+  done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" implementation.md)
+  local LAST_REVIEW_FILE
+  LAST_REVIEW_FILE=$(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" review.md | tail -1)
 
-  # This amendment's implementation notes get their own file. Writing them to
-  # implementation.md overwrote the original build's notes on every amend.
-  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation-amendment-${AMEND_NUM}.md"
-  IMPLEMENTATION_VAULT="$TASK_DIR/implementation-amendment-${AMEND_NUM}.md"
+  set_run_paths "$(amend_run_slug "$AMEND_NUM" "$AMEND_FEEDBACK_TEXT")"
+  AMENDMENT_FILE="$RUN_SCRATCH_DIR/amendment.md"
+  local AMENDMENT_VAULT="$RUN_VAULT_DIR/amendment.md"
+  log "Run folder: $RUN_SLUG"
 
   local AMEND_DIFF
   AMEND_DIFF=$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
@@ -140,7 +132,7 @@ $(cat "$PLAN_FILE")
 ${PRIOR_NOTES:-(not yet implemented)}
 
 ## Last review
-$(cat "$REVIEW_FILE" 2>/dev/null || echo '(no review yet)')
+$( [[ -n "$LAST_REVIEW_FILE" ]] && cat "$LAST_REVIEW_FILE" || echo '(no review yet)')
 
 ## Current diff against $BASE_BRANCH
 $AMEND_DIFF

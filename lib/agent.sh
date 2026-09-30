@@ -88,8 +88,8 @@ run_cost_so_far() {
 }
 
 # print_usage_summary — end-of-run table of every headless model call (by
-# model: calls, tokens, time, cost), written to <scratchpad>/usage.json and
-# mirrored to the vault when a task dir is known. Runs from migite's EXIT trap
+# model: calls, tokens, time, cost), written to usage.json in the run's folder
+# (the task's scratchpad dir before one is known) and mirrored to the vault. Runs from migite's EXIT trap
 # so an aborted run still reports what it spent. Guarded to run once.
 print_usage_summary() {
   [[ "${_USAGE_SUMMARY_PRINTED:-}" == "1" ]] && return 0
@@ -97,10 +97,12 @@ print_usage_summary() {
   [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 0
   echo ""
   echo -e "${BOLD}── Usage ───────────────────────────────────────${RESET}"
-  if [[ -n "${SCRATCHPAD_DIR:-}" && -d "$SCRATCHPAD_DIR" ]]; then
-    local out="$SCRATCHPAD_DIR/usage.json"
+  local scratch_dir="${RUN_SCRATCH_DIR:-${SCRATCHPAD_DIR:-}}"
+  local vault_dir="${RUN_VAULT_DIR:-${TASK_DIR:-}}"
+  if [[ -n "$scratch_dir" && -d "$scratch_dir" ]]; then
+    local out="$scratch_dir/usage.json"
     "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
-    [[ -n "${TASK_DIR:-}" ]] && sync_json "$out" "$TASK_DIR/usage.json"
+    [[ -n "$vault_dir" ]] && sync_json "$out" "$vault_dir/usage.json"
   else
     "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" || true
   fi

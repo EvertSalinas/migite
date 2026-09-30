@@ -9,7 +9,7 @@ the delta. It then goes through implement, heal, review, and the commit gate lik
 your feedback
    │
    ├─ find the task ──── --jira, else the ticket key in the branch, else a picker
-   ├─ one call ───────── plan + implementation + review + git diff + feedback → amendment-NN.md
+   ├─ one call ───────── plan + every run's implementation notes + last review + git diff + feedback → NN-amend-<slug>/amendment.md
    ├─ AMENDMENT GATE ─── approve, refine, or edit
    ├─ testing plan ───── regenerated in full for the new behaviour
    └─ implement → auto-heal → review → COMMIT GATE → knowledge → PR description
@@ -31,15 +31,16 @@ migite --amend "the export must be idempotent on retry: a second call returns th
 ▶ Amend mode — locating task to amend
 ▶ Amend target from branch name: bb-1234                 ← found from the branch, no flag needed
 ▶ Amending: …/dev-log/Acme/invoices-api/bb-1234
+▶ Run folder: 01-amend-the-export-must-be-idempotent-on
   Claude Code is working: Generating amendment 01
-✔ Amendment written to …/scratchpad/bb-1234/amendment-01.md
+✔ Amendment written to …/scratchpad/bb-1234/01-amend-the-export-must-be-idempotent-on/amendment.md
 ────────────────────────────────────────
   REVIEW GATE: amendment 01
 ────────────────────────────────────────
 Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly, q=abort):
 ```
 
-Read `amendment-01.md`. It has a Scope (what changes), an Out of scope (what must not be touched),
+Read `amendment.md`. It has a Scope (what changes), an Out of scope (what must not be touched),
 and a Rationale grounded in the current code. Then:
 
 | The amendment is... | Press |
@@ -103,8 +104,10 @@ tasks for this repo and asks which one to amend.
 
 ### Several rounds of feedback
 
-Run `--amend` again for each round. Amendments accumulate as `amendment-01.md`, `amendment-02.md`,
-... beside the untouched `plan.md`, so the record of what changed and why stays with the work.
+Run `--amend` again for each round. Each one gets its own run folder, `01-amend-<slug>/`,
+`02-amend-<slug>/`, ... beside the untouched `plan.md` and the original build's `00-build/`, so the
+record of what changed and why stays with the work, and no round overwrites another's files. The
+vault's `index.md` lists every run with what it asked for and its review verdict.
 
 ### Feedback the code already satisfies
 
@@ -113,14 +116,23 @@ empty rather than inventing work. Answer `q`, reply to the reviewer, and move on
 
 ## What you get
 
+In the amendment's run folder, `NN-amend-<slug>/`:
+
 | File | Contents |
 |---|---|
-| `amendment-NN.md` | the scoped delta: Scope, Out of scope, Rationale |
-| `implementation-amendment-NN.md` | notes from this amendment's implementation session; `implementation.md` keeps the original build's |
-| `fix-r<N>.md` | one per commit-gate `f` round, numbered across the whole task so an amend never overwrites an earlier round |
-| `testing-plan.md` | rewritten in full for current behaviour (unlike `plan.md`, which never changes) |
+| `amendment.md` | the scoped delta: Scope, Out of scope, Rationale |
+| `implementation.md` | notes from this amendment's implementation session; `00-build/implementation.md` keeps the original build's |
+| `fix-r<N>.md` | one per commit-gate `f` round, numbered from 1 within this run |
 | `review.md`, `review.json` | the new review of the whole diff, graded against the plan and every amendment |
+| `usage.json` | this run's model calls and cost |
+
+At the task's top level:
+
+| File | Contents |
+|---|---|
+| `testing-plan.md` | rewritten in full for current behaviour (unlike `plan.md`, which never changes) |
 | `pr-description.md` | regenerated, including every amendment |
+| `index.md` | vault only: regenerated with a row for this run |
 
 ## When something goes wrong
 

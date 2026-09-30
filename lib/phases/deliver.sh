@@ -3,7 +3,7 @@
 # description), and Phase 4.5 (self-improvement notes).
 #
 # Sourced by migite. run_deliver expects TASK_DIR, ORG, REPO_NAME,
-# DEV_LOG_BASE, PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE, SCRATCHPAD_DIR,
+# DEV_LOG_BASE, PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE, SCRATCHPAD_DIR, RUN_SLUG,
 # TASK_SLUG, JIRA_TICKET, MIGITE_HOME, BRANCH, TASK_TYPE, PLAN_GATE_ATTEMPTS,
 # COMMIT_GATE_ATTEMPTS, RUBOCOP_LOG, RSPEC_LOG to be set.
 
@@ -12,7 +12,7 @@ run_deliver() {
   log "Phase 3.5/4 — Capturing knowledge"
 
   KNOWLEDGE_FILE="$DEV_LOG_BASE/$ORG/$REPO_NAME/knowledge.md"
-  local REVIEW_WIKILINK="dev-log/$ORG/$REPO_NAME/$TASK_SLUG/review"
+  local REVIEW_WIKILINK="dev-log/$ORG/$REPO_NAME/$TASK_SLUG/$RUN_SLUG/review"
   local KNOWLEDGE_WIKILINK="dev-log/$ORG/$REPO_NAME/knowledge"
 
   # Bootstrap knowledge file if it doesn't exist
@@ -106,22 +106,17 @@ End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
   local TICKET_SUFFIX=""
   [[ -n "$JIRA_TICKET" ]] && TICKET_SUFFIX=" [$JIRA_TICKET]"
 
-  # Amendments accumulate beside plan.md — fold every one into the PR so the description
-  # reflects the final delivered scope, not just the original plan. Scanned from both
-  # scratchpad and vault (deduped by basename, scratchpad wins) so an older amendment
-  # that only survives in the vault mirror isn't silently dropped.
-  local ALL_AMENDMENTS=""
-  local _seen_amendments=""
-  for _amend_f in "$SCRATCHPAD_DIR"/amendment-*.md "$TASK_DIR"/amendment-*.md; do
-    [[ -f "$_amend_f" ]] || continue
-    local _amend_base
-    _amend_base=$(basename "$_amend_f")
-    [[ "$_seen_amendments" == *" $_amend_base "* ]] && continue
-    _seen_amendments="$_seen_amendments $_amend_base "
+  # Amendments accumulate beside plan.md, one per NN-amend-<slug>/ run folder. Fold
+  # every one into the PR so the description reflects the final delivered scope, not
+  # just the original plan. Read from both scratchpad and vault (scratchpad wins) so
+  # an older amendment that only survives in the vault mirror isn't silently dropped.
+  local ALL_AMENDMENTS="" _amend_f
+  while IFS= read -r _amend_f; do
+    [[ -n "$_amend_f" ]] || continue
     ALL_AMENDMENTS="${ALL_AMENDMENTS}
 $(cat "$_amend_f")
 "
-  done
+  done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md)
 
   local PR_PROMPT="Plan:
 $(cat "$PLAN_FILE")

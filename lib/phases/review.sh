@@ -3,8 +3,8 @@
 # the commit gate.
 #
 # Sourced by migite. run_review expects PLAN_FILE, IMPLEMENTATION_FILE,
-# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG,
-# MIGITE_HOME, STACK to be set (plus AMEND_MODE/AMEND_NUM, which title an amend
+# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_DIR, RUN_SCRATCH_DIR,
+# RUN_VAULT_DIR, TASK_SLUG, MIGITE_HOME, STACK to be set (plus AMEND_MODE/AMEND_NUM, which title an amend
 # run's fix rounds), and sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
 # TOOLING_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
 # self-improvement prompt and by show_commit_context.
@@ -82,16 +82,16 @@ run_review() {
   fi
 
   # Detect files in the diff (tracked or untracked, minus scratchpad/) not
-  # mentioned in any implementation notes - warn before review. All of them,
-  # not just this run's: after an --amend the diff still holds the original
-  # build, which only implementation.md describes.
+  # mentioned in any run's implementation notes - warn before review. All of
+  # them, not just this run's: after an --amend the diff still holds the
+  # original build, which only 00-build/implementation.md describes.
   local CHANGED_ALL
   CHANGED_ALL=$(changed_all_files "$BASE_BRANCH")
   local -a NOTES_FILES=()
   local _notes_f
   while IFS= read -r _notes_f; do
     [[ -n "$_notes_f" ]] && NOTES_FILES+=("$_notes_f")
-  done < <(implementation_notes_files "$SCRATCHPAD_DIR" "$TASK_DIR")
+  done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" implementation.md)
   if [[ ${#NOTES_FILES[@]} -gt 0 && -n "$CHANGED_ALL" ]]; then
     local UNMENTIONED_FILES=""
     while IFS= read -r changed_file; do
@@ -126,7 +126,7 @@ run_review() {
   local _amend_f
   while IFS= read -r _amend_f; do
     [[ -n "$_amend_f" ]] && REVIEW_LANGGRAPH_ARGS+=(--amendment "$_amend_f")
-  done < <(task_files "$SCRATCHPAD_DIR" "$TASK_DIR" '^amendment-[0-9]+\.md$')
+  done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md)
 
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
@@ -214,13 +214,13 @@ run_review() {
     return 0
   }
   _record_gate_override() {
-    local blockers="$1" f="$SCRATCHPAD_DIR/gate-overrides.md"
+    local blockers="$1" f="$RUN_SCRATCH_DIR/gate-overrides.md"
     {
       echo "## $DATE $(date +%H:%M) — commit gate approved over blockers"
       printf '%s\n' "$blockers" | sed 's/^/- /'
       echo ""
     } >> "$f"
-    sync_artifact "$f" "$TASK_DIR/gate-overrides.md"
+    sync_artifact "$f" "$RUN_VAULT_DIR/gate-overrides.md"
   }
 
   while true; do
@@ -264,13 +264,13 @@ run_review() {
         # Build a fix prompt from the current review findings
         local REVIEW_CONTENT
         REVIEW_CONTENT=$(cat "$REVIEW_FILE" 2>/dev/null || echo "(review not found)")
-        # Numbered per task (see next_fix_round), so a fix round in an --amend run
-        # never overwrites one from the original run.
+        # Numbered within this run's folder, starting at 1, so no run can
+        # overwrite another run's fix rounds.
         local FIX_NUM
-        FIX_NUM=$(next_fix_round "$SCRATCHPAD_DIR" "$TASK_DIR")
+        FIX_NUM=$(next_fix_round "$RUN_SCRATCH_DIR" "$RUN_VAULT_DIR")
         local FIX_TITLE="Fix round $FIX_NUM"
         [[ "${AMEND_MODE:-false}" == "true" ]] && FIX_TITLE="$FIX_TITLE (amendment $AMEND_NUM)"
-        local FIX_IMPL_FILE="$SCRATCHPAD_DIR/fix-r${FIX_NUM}.md"
+        local FIX_IMPL_FILE="$RUN_SCRATCH_DIR/fix-r${FIX_NUM}.md"
         # The amendments are approved scope too; without them the fixer only sees
         # the original plan and can "fix" amended behaviour back to it.
         local FIX_AMENDMENTS="" _fix_amend_f
@@ -278,7 +278,7 @@ run_review() {
           FIX_AMENDMENTS="${FIX_AMENDMENTS}
 $(cat "$_fix_amend_f")
 "
-        done < <(task_files "$SCRATCHPAD_DIR" "$TASK_DIR" '^amendment-[0-9]+\.md$')
+        done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md)
         local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
 
 ## Original plan (for context)
@@ -296,7 +296,7 @@ ${REVIEW_CONTENT}
 
         log "Opening $(agent_field display_name) to fix review findings..."
         run_phase "Fixing review findings" "$FIX_IMPL_FILE" "$FIX_PROMPT"
-        sync_artifact "$FIX_IMPL_FILE" "$TASK_DIR/fix-r${FIX_NUM}.md"
+        sync_artifact "$FIX_IMPL_FILE" "$RUN_VAULT_DIR/fix-r${FIX_NUM}.md"
 
         # Fix rounds routinely change behaviour the testing plan asserts against
         # (log lines, method signatures, argument shapes) — leaving it stale just

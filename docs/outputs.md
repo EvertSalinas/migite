@@ -26,28 +26,45 @@ Every phase reads and writes here directly. `sync_artifact()` (`lib/vault.sh`) m
 each file out to the vault immediately after every write, edit, refine, or redo, so the vault
 copy never lags behind.
 
+The task folder's top level holds the documents that describe the task as it stands now. Each run
+gets its own folder beside them: `00-build/` for the original build and `NN-amend-<slug>/` for each
+`--amend` (the slug is the feedback's first words). A run's files go in its folder, so no run can
+overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree.
+
+**Top level: current state**
+
+| File | Contents |
+|------|----------|
+| `plan.md` | Implementation plan |
+| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
+| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Regenerated in full on every `--amend` and fix round, unlike `plan.md` |
+| `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
+| `.plan.done` | Sentinel written by migite-plan on success |
+| `.review.done` | Sentinel written by migite-review on success |
+| `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo |
+
+**`00-build/`: the original build**
+
 | File | Contents |
 |------|----------|
 | `intake.md` | Filled-in task intake |
 | `task.md` | Optional — supplementary details added via [Intake mode](./migite.md#intake-mode)'s prompt and/or `--attach`, kept separate from `intake.md` |
 | `jira-context.md` | Optional — fetched Jira ticket content when `--jira` is used and the fetch succeeds |
-| `plan.md` | Implementation plan |
-| `amendment-NN.md` | Scoped delta from each `--amend` run — original plan stays untouched |
-| `testing-plan.md` | QA/dev verification steps — seed script, curls, teardown. Regenerated in full on every `--amend`, unlike `plan.md` |
 | `architecture-critic.md` | Pre-implementation risk findings |
-| `implementation.md` | Notes from the original implementation session |
-| `implementation-amendment-NN.md` | Notes from each `--amend` run's implementation session |
+| `spec-implementation.md` | Optional: the spec files written in the TDD red phase |
+
+**Every run folder (`00-build/`, `NN-amend-<slug>/`)**
+
+| File | Contents |
+|------|----------|
+| `amendment.md` | Amend runs only: the scoped delta; the original plan stays untouched |
+| `implementation.md` | Notes from this run's implementation session |
 | `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
 | `review.md` | Code review verdict and findings |
-| `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass. Numbered across the whole task, starting at 1 |
-| `pr-description.md` | Ready to paste into GitHub |
-| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
-| `usage.json` | End-of-run summary of every headless model call (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
+| `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
+| `usage.json` | End-of-run summary of every headless model call in the run (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
 | `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
-| `.plan.done` | Sentinel written by migite-plan on success |
-| `.review.done` | Sentinel written by migite-review on success |
-| `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo |
 
 If the scratchpad copy of any of the above is missing (cleaned, fresh clone, different
 machine), `resume_from_vault()` pulls it back in from the vault mirror before the phase that
@@ -59,8 +76,11 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
 A synced copy of every file above (same names, same paths under `$TASK_DIR`), meant for
 reading/browsing later — e.g. in Obsidian — not for resuming or working from directly. Safe to
 delete the scratchpad copy after merging; the vault mirror keeps the durable record.
-`knowledge.md` (one file per repo, not per-ticket) and `docs/improvements.md` (in the migite
-tool's own repo) are the exceptions — they live in the vault only, with no scratchpad copy.
+`knowledge.md` (one file per repo, not per-ticket), each task's `index.md`, and
+`docs/improvements.md` (in the migite tool's own repo) are the exceptions: they live in the vault
+only, with no scratchpad copy. `index.md` is regenerated at the end of every run, aborted ones
+included: the task's current documents, then one row per run with what it was for, its review
+verdict, and links to its files.
 
 See [Vault structure](./vault-structure.md) for the full directory tree.
 

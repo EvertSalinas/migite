@@ -114,7 +114,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 ▶ Phase 3/4 — Reviewing
 ✔ Rubocop clean
   ▶ Fanning out 4 specialist reviewers in parallel
-    ✔ review.json → scratchpad/bb-1234/review.json  (verdict=ready, 0🔴 1🟡 2🟢, source=structured)
+    ✔ review.json → scratchpad/bb-1234/00-build/review.json  (verdict=ready, 0🔴 1🟡 2🟢, source=structured)
 
 ── Commit context ──────────────────────────
   Verdict: READY TO COMMIT
@@ -151,7 +151,7 @@ blockers remain and a capital `Y` overrides with a record.
 | Situation | Command | Output |
 |-----------|---------|--------|
 | Repo exists, work is decided, ready to build | `migite --jira BB-1234` | plan, review, PR description, knowledge |
-| Feedback arrived after implementation (PR comments, QA) | `migite --amend "must be idempotent on retry"` | `amendment-NN.md`, then the normal implement → review flow |
+| Feedback arrived after implementation (PR comments, QA) | `migite --amend "must be idempotent on retry"` | `NN-amend-<slug>/amendment.md`, then the normal implement → review flow |
 | Big initiative, unsure if it's worth doing | `migite-explore "extract billing into a service" --intakes` | feasibility doc with a PROCEED / SPIKE / DEFER / NOT WORTH IT verdict, adversarial challenge, one intake per workstream |
 | No repo yet, defining a new project | `migite-blueprint --brief brief.md --name billing-api` | blueprint, milestone intakes, seed `knowledge.md` |
 | What's wrong with this codebase? | `migite-audit --focus jobs` | ranked findings, feedable into `migite --audit` |
@@ -265,8 +265,8 @@ git -C "$(dirname "$(readlink -f "$(command -v migite)")")/.." log --oneline -1 
 ```
 
 Also useful: the exact command you ran, the workflow and the phase or gate where it went wrong,
-and the relevant part of the task's `scratchpad/<slug>/` files (`plan.md`, `review.md`,
-`review.json`, `usage.json`). For an idea, describe the problem before the solution; there may be
+and the relevant part of the task's `scratchpad/<slug>/` files (`plan.md`, and the run folder's
+`review.md`, `review.json`, `usage.json`, e.g. `00-build/`). For an idea, describe the problem before the solution; there may be
 a simpler fix than the one you have in mind.
 
 **What not to include.** Secrets, tokens, credentials, and customer data. Trim ticket descriptions

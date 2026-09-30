@@ -241,7 +241,7 @@ migite --jira BB-1234
 ```
 
 ```text
-▶ Resuming existing intake: …/scratchpad/bb-1234/intake.md
+▶ Resuming existing intake: …/scratchpad/bb-1234/00-build/intake.md
 …
 ────────────────────────────────────────
   EXISTING PLAN FOUND
@@ -275,12 +275,13 @@ Everything lands in `scratchpad/bb-1234/` in the repo and is mirrored to the vau
 
 | File | Use it for |
 |---|---|
-| `plan.md`, `architecture-critic.md` | what was agreed before any code, and what the critic flagged |
+| `plan.md`, `00-build/architecture-critic.md` | what was agreed before any code, and what the critic flagged |
 | `testing-plan.md` | seed data, curl steps, and teardown for verifying the change by hand |
-| `implementation.md` | the agent's notes on what it changed |
-| `review.md`, `review.json` | the review and its machine-readable verdict |
+| `00-build/implementation.md` | the agent's notes on what it changed |
+| `00-build/review.md`, `00-build/review.json` | the review and its machine-readable verdict |
 | `pr-description.md` | the PR body, ready to paste |
-| `usage.json` | calls, tokens, and cost for the run |
+| `00-build/usage.json` | calls, tokens, and cost for the run |
+| `index.md` (vault only) | every run of the task, its verdict, and links to its files |
 
 The full list is in [outputs.md](../outputs.md). Add `scratchpad/` to the repo's `.gitignore`.
 

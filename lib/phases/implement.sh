@@ -4,7 +4,8 @@
 #
 # Sourced by migite. run_implement expects AMEND_MODE, STAGED,
 # KNOWLEDGE_INJECT, PLAN_FILE, AMENDMENT_FILE, AMEND_NUM, IMPLEMENTATION_FILE,
-# IMPLEMENTATION_VAULT, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG, MAX_HEAL_ATTEMPTS to be set.
+# IMPLEMENTATION_VAULT, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG,
+# MAX_HEAL_ATTEMPTS to be set.
 # Leaves HEAL_ATTEMPT set for the caller's summary logging.
 
 run_implement() {
@@ -40,13 +41,16 @@ $(cat "$PLAN_FILE")
     # ── Staged implementation: parse plan scope into layers, gate between each ──
     log "Staged mode — parsing plan scope into layers"
 
-    # Extract layer groups from the plan's Scope section (lines starting with ###)
+    # Extract layer groups from the Scope section (lines starting with ###): the
+    # amendment's in amend mode, since the plan's layers are already built.
+    local STAGE_SOURCE="$PLAN_FILE"
+    [[ "$AMEND_MODE" == "true" ]] && STAGE_SOURCE="$AMENDMENT_FILE"
     local STAGE_LABELS=()
     while IFS= read -r line; do
       local label
       label=$(echo "$line" | sed 's/^### *//')
       [[ -n "$label" ]] && STAGE_LABELS+=("$label")
-    done < <(awk '/^## Scope/,/^## [^S]/' "$PLAN_FILE" | grep '^### ')
+    done < <(awk '/^## Scope/,/^## [^S]/' "$STAGE_SOURCE" | grep '^### ')
 
     # Fall back to a single stage if the plan has no ### sub-sections in Scope
     if [[ ${#STAGE_LABELS[@]} -eq 0 ]]; then
@@ -64,7 +68,7 @@ $(cat "$PLAN_FILE")
       echo ""
       log "Stage $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL"
 
-      local STAGE_OUTPUT_FILE="$SCRATCHPAD_DIR/implementation-stage-${STAGE_NUM}.md"
+      local STAGE_OUTPUT_FILE="$RUN_SCRATCH_DIR/implementation-stage-${STAGE_NUM}.md"
       local PRIOR_CONTEXT=""
       if [[ -n "$STAGE_NOTES_COMBINED" ]]; then
         PRIOR_CONTEXT="
@@ -81,7 +85,7 @@ Do not implement layers that come after this one — they will be handled in sub
 When done, write notes on what you built to: $STAGE_OUTPUT_FILE"
 
       run_phase "Stage $STAGE_NUM — $STAGE_LABEL" "$STAGE_OUTPUT_FILE" "$STAGE_PROMPT"
-      sync_artifact "$STAGE_OUTPUT_FILE" "$TASK_DIR/implementation-stage-${STAGE_NUM}.md"
+      sync_artifact "$STAGE_OUTPUT_FILE" "$RUN_VAULT_DIR/implementation-stage-${STAGE_NUM}.md"
       STAGE_NOTES_COMBINED="${STAGE_NOTES_COMBINED}
 ### Stage $STAGE_NUM: $STAGE_LABEL
 $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
