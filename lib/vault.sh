@@ -47,6 +47,41 @@ recent_task_dirs() {
   done
 }
 
+# task_files <scratch-dir> <vault-dir> <ERE> - paths of the files in either dir
+# whose basename matches <ERE>, one per line, sorted by basename (C locale).
+# A basename in both dirs is listed once, from the scratchpad (the source of
+# truth), so a file that only survives in the vault mirror still counts.
+task_files() {
+  local scratch="$1" vault="$2" re="$3"
+  local f base seen=" "
+  for f in "$scratch"/* "$vault"/*; do
+    [[ -f "$f" ]] || continue
+    base=$(basename "$f")
+    [[ "$base" =~ $re ]] || continue
+    [[ "$seen" == *" $base "* ]] && continue
+    seen="$seen$base "
+    printf '%s\t%s\n' "$base" "$f"
+  done | LC_ALL=C sort | cut -f2-
+}
+
+# implementation_notes_files <scratch-dir> <vault-dir> - every implementation
+# notes file for a task, oldest first: implementation.md (the original build),
+# then implementation-amendment-NN.md in amendment order.
+implementation_notes_files() {
+  task_files "$1" "$2" '^implementation\.md$'
+  task_files "$1" "$2" '^implementation-amendment-[0-9]+\.md$'
+}
+
+# next_fix_round <scratch-dir> <vault-dir> - the number for the next
+# fix-r<N>.md: one past the highest in either dir, starting at 1. Counted per
+# task, not per run: the per-run commit-gate counter restarted at 0 on every
+# --amend, so an amend's fix rounds overwrote the original run's fix-r0.md.
+next_fix_round() {
+  local last
+  last=$(task_files "$1" "$2" '^fix-r[0-9]+\.md$' | sed -E 's/.*fix-r([0-9]+)\.md$/\1/' | sort -n | tail -1)
+  echo $(( 10#${last:-0} + 1 ))
+}
+
 # stamp_file <file> — prepend created/updated frontmatter, or bump updated if already present
 stamp_file() {
   local file="$1"

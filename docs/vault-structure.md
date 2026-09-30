@@ -22,8 +22,9 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │           ├── amendment-NN.md                   ← one per --amend; plan.md is never rewritten
 │           ├── testing-plan.md                   ← regenerated in full on every --amend and fix round
 │           ├── architecture-critic.md
-│           ├── implementation.md
-│           ├── fix-rN.md                         ← one per commit-gate `f` round
+│           ├── implementation.md                 ← the original build's notes
+│           ├── implementation-amendment-NN.md    ← one per --amend
+│           ├── fix-rN.md                         ← one per commit-gate `f` round, numbered per task
 │           ├── review.md  +  review.json
 │           ├── gate-overrides.md                 ← only with gates.commit.policy: strict, on a `Y`
 │           ├── usage.json                        ← every headless model call in the run, by model
@@ -66,7 +67,7 @@ exists — see [standalone-tools.md](./standalone-tools.md#migite-pr-review) for
 
 **The `<ticket>/` files above are a read-only mirror, not the source of truth.** For the main
 `migite` command (not the standalone tools), every file under `<ticket>/` — `plan.md`,
-`testing-plan.md`, `architecture-critic.md`, `implementation.md`, `review.md`,
+`testing-plan.md`, `architecture-critic.md`, `implementation.md`, `implementation-amendment-NN.md`, `review.md`,
 `pr-description.md`, `amendment-NN.md`, `intake.md`, `task.md` — is written and read primarily in
 `<repo-root>/scratchpad/<ticket>/`, and synced out to this vault path after every write so both
 copies stay current. Use the vault copy for reading/browsing (e.g. in Obsidian); resuming or

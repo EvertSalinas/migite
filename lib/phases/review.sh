@@ -3,8 +3,9 @@
 # the commit gate.
 #
 # Sourced by migite. run_review expects PLAN_FILE, IMPLEMENTATION_FILE,
-# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME, STACK to be
-# set, and sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
+# REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG,
+# MIGITE_HOME, STACK to be set (plus AMEND_MODE/AMEND_NUM, which title an amend
+# run's fix rounds), and sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
 # TOOLING_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
 # self-improvement prompt and by show_commit_context.
 #
@@ -81,15 +82,22 @@ run_review() {
   fi
 
   # Detect files in the diff (tracked or untracked, minus scratchpad/) not
-  # mentioned in implementation notes — warn before review
+  # mentioned in any implementation notes - warn before review. All of them,
+  # not just this run's: after an --amend the diff still holds the original
+  # build, which only implementation.md describes.
   local CHANGED_ALL
   CHANGED_ALL=$(changed_all_files "$BASE_BRANCH")
-  if [[ -f "$IMPLEMENTATION_FILE" && -n "$CHANGED_ALL" ]]; then
+  local -a NOTES_FILES=()
+  local _notes_f
+  while IFS= read -r _notes_f; do
+    [[ -n "$_notes_f" ]] && NOTES_FILES+=("$_notes_f")
+  done < <(implementation_notes_files "$SCRATCHPAD_DIR" "$TASK_DIR")
+  if [[ ${#NOTES_FILES[@]} -gt 0 && -n "$CHANGED_ALL" ]]; then
     local UNMENTIONED_FILES=""
     while IFS= read -r changed_file; do
       local fname
       fname=$(basename "$changed_file")
-      if ! grep -qF "$fname" "$IMPLEMENTATION_FILE" 2>/dev/null; then
+      if ! grep -qF "$fname" "${NOTES_FILES[@]}" 2>/dev/null; then
         UNMENTIONED_FILES="${UNMENTIONED_FILES}  - ${changed_file}\n"
       fi
     done <<< "$CHANGED_ALL"
@@ -112,6 +120,13 @@ run_review() {
     --base-branch      "$BASE_BRANCH"
   )
   [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
+  # Every amendment is approved scope the plan doesn't describe. Without them the
+  # reviewer graded amended code against the original plan and reported the
+  # difference as drift.
+  local _amend_f
+  while IFS= read -r _amend_f; do
+    [[ -n "$_amend_f" ]] && REVIEW_LANGGRAPH_ARGS+=(--amendment "$_amend_f")
+  done < <(task_files "$SCRATCHPAD_DIR" "$TASK_DIR" '^amendment-[0-9]+\.md$')
 
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
@@ -249,11 +264,26 @@ run_review() {
         # Build a fix prompt from the current review findings
         local REVIEW_CONTENT
         REVIEW_CONTENT=$(cat "$REVIEW_FILE" 2>/dev/null || echo "(review not found)")
-        local FIX_IMPL_FILE="$SCRATCHPAD_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
+        # Numbered per task (see next_fix_round), so a fix round in an --amend run
+        # never overwrites one from the original run.
+        local FIX_NUM
+        FIX_NUM=$(next_fix_round "$SCRATCHPAD_DIR" "$TASK_DIR")
+        local FIX_TITLE="Fix round $FIX_NUM"
+        [[ "${AMEND_MODE:-false}" == "true" ]] && FIX_TITLE="$FIX_TITLE (amendment $AMEND_NUM)"
+        local FIX_IMPL_FILE="$SCRATCHPAD_DIR/fix-r${FIX_NUM}.md"
+        # The amendments are approved scope too; without them the fixer only sees
+        # the original plan and can "fix" amended behaviour back to it.
+        local FIX_AMENDMENTS="" _fix_amend_f
+        while IFS= read -r _fix_amend_f; do
+          FIX_AMENDMENTS="${FIX_AMENDMENTS}
+$(cat "$_fix_amend_f")
+"
+        done < <(task_files "$SCRATCHPAD_DIR" "$TASK_DIR" '^amendment-[0-9]+\.md$')
         local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
 
 ## Original plan (for context)
 $(cat "$PLAN_FILE" 2>/dev/null || echo "(plan not found)")
+$( [[ -n "$FIX_AMENDMENTS" ]] && printf '\n## Amendments (approved after the plan; where one conflicts with the plan, the amendment wins)\n%s\n' "$FIX_AMENDMENTS" )
 
 ## Review findings — address every issue below
 ${REVIEW_CONTENT}
@@ -261,18 +291,19 @@ ${REVIEW_CONTENT}
 ## Instructions
 - Fix every Critical and Warning finding listed above
 - Do not change anything not mentioned in the findings
-- After fixing, write a short summary of what you changed to: ${FIX_IMPL_FILE}"
+- After fixing, write a short summary of what you changed to: ${FIX_IMPL_FILE}
+- Start that summary with the heading: # ${FIX_TITLE}"
 
         log "Opening $(agent_field display_name) to fix review findings..."
         run_phase "Fixing review findings" "$FIX_IMPL_FILE" "$FIX_PROMPT"
-        sync_artifact "$FIX_IMPL_FILE" "$TASK_DIR/fix-r${COMMIT_GATE_ATTEMPTS}.md"
+        sync_artifact "$FIX_IMPL_FILE" "$TASK_DIR/fix-r${FIX_NUM}.md"
 
         # Fix rounds routinely change behaviour the testing plan asserts against
         # (log lines, method signatures, argument shapes) — leaving it stale just
         # means the next review re-diagnoses the same drift as a fresh finding
         # instead of it being fixed here, in the same round that caused it.
         if [[ -f "$TESTING_PLAN_FILE" ]]; then
-          log "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}..."
+          log "Updating testing plan for fix round ${FIX_NUM}..."
           local TESTING_PLAN_FIX_PROMPT="You are updating the QA/dev testing plan after a review-fix round. The testing plan must describe how to verify the CURRENT, post-fix behaviour — not what it was before this round's fixes.
 
 ## Current testing plan (supersede anything this fix round changes)
@@ -292,11 +323,11 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
           local testing_plan_tmp
           testing_plan_tmp=$(mktemp)
-          agent_think "Updating testing plan for fix round ${COMMIT_GATE_ATTEMPTS}" testing_plan "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT"
+          agent_think "Updating testing plan for fix round ${FIX_NUM}" testing_plan "$testing_plan_tmp" "$TESTING_PLAN_FIX_PROMPT"
           if [[ -s "$testing_plan_tmp" ]]; then
             mv "$testing_plan_tmp" "$TESTING_PLAN_FILE"
             sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
-            success "Testing plan updated for fix round ${COMMIT_GATE_ATTEMPTS}"
+            success "Testing plan updated for fix round ${FIX_NUM}"
           else
             rm -f "$testing_plan_tmp"
             warn "Testing plan regeneration returned empty — testing-plan.md left unchanged"

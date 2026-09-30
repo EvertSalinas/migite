@@ -35,10 +35,11 @@ copy never lags behind.
 | `amendment-NN.md` | Scoped delta from each `--amend` run — original plan stays untouched |
 | `testing-plan.md` | QA/dev verification steps — seed script, curls, teardown. Regenerated in full on every `--amend`, unlike `plan.md` |
 | `architecture-critic.md` | Pre-implementation risk findings |
-| `implementation.md` | Notes from the implementation session |
+| `implementation.md` | Notes from the original implementation session |
+| `implementation-amendment-NN.md` | Notes from each `--amend` run's implementation session |
 | `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
 | `review.md` | Code review verdict and findings |
-| `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass |
+| `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass. Numbered across the whole task, starting at 1 |
 | `pr-description.md` | Ready to paste into GitHub |
 | `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |

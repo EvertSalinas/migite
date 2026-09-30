@@ -116,8 +116,10 @@ empty rather than inventing work. Answer `q`, reply to the reviewer, and move on
 | File | Contents |
 |---|---|
 | `amendment-NN.md` | the scoped delta: Scope, Out of scope, Rationale |
+| `implementation-amendment-NN.md` | notes from this amendment's implementation session; `implementation.md` keeps the original build's |
+| `fix-r<N>.md` | one per commit-gate `f` round, numbered across the whole task so an amend never overwrites an earlier round |
 | `testing-plan.md` | rewritten in full for current behaviour (unlike `plan.md`, which never changes) |
-| `review.md`, `review.json` | the new review of the whole diff |
+| `review.md`, `review.json` | the new review of the whole diff, graded against the plan and every amendment |
 | `pr-description.md` | regenerated, including every amendment |
 
 ## When something goes wrong

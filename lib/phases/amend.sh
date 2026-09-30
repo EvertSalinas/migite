@@ -7,8 +7,9 @@
 # and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, PLAN_FILE, PLAN_VAULT,
 # IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT, REVIEW_FILE, REVIEW_VAULT,
 # TESTING_PLAN_FILE, TESTING_PLAN_VAULT, AMEND_NUM, AMENDMENT_FILE,
-# PLAN_GATE_ATTEMPTS for the phases that run after it. PLAN_FILE/IMPLEMENTATION_FILE/
-# REVIEW_FILE/TESTING_PLAN_FILE live in the scratchpad; resume_from_vault pulls them
+# PLAN_GATE_ATTEMPTS for the phases that run after it. IMPLEMENTATION_FILE is this
+# amendment's own implementation-amendment-NN.md, never implementation.md.
+# PLAN_FILE/REVIEW_FILE/TESTING_PLAN_FILE live in the scratchpad; resume_from_vault pulls them
 # back in from the vault mirror if the scratchpad copy is missing (e.g. amending an
 # older task on a fresh clone or after the branch's scratchpad was cleaned).
 
@@ -111,6 +112,22 @@ run_amend_mode() {
   AMENDMENT_FILE="$SCRATCHPAD_DIR/amendment-${AMEND_NUM}.md"
   local AMENDMENT_VAULT="$TASK_DIR/amendment-${AMEND_NUM}.md"
 
+  # Every implementation-notes file so far, oldest first. Read before
+  # IMPLEMENTATION_FILE is repointed below, so this amendment is scoped against
+  # the original build's notes and every earlier amendment's, not just the last.
+  local PRIOR_NOTES="" _notes_f
+  while IFS= read -r _notes_f; do
+    PRIOR_NOTES="${PRIOR_NOTES}
+### $(basename "$_notes_f")
+$(cat "$_notes_f")
+"
+  done < <(implementation_notes_files "$SCRATCHPAD_DIR" "$TASK_DIR")
+
+  # This amendment's implementation notes get their own file. Writing them to
+  # implementation.md overwrote the original build's notes on every amend.
+  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation-amendment-${AMEND_NUM}.md"
+  IMPLEMENTATION_VAULT="$TASK_DIR/implementation-amendment-${AMEND_NUM}.md"
+
   local AMEND_DIFF
   AMEND_DIFF=$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
 
@@ -119,8 +136,8 @@ run_amend_mode() {
 ## Original plan
 $(cat "$PLAN_FILE")
 
-## Implementation notes
-$(cat "$IMPLEMENTATION_FILE" 2>/dev/null || echo '(not yet implemented)')
+## Implementation notes (original build first, then each earlier amendment)
+${PRIOR_NOTES:-(not yet implemented)}
 
 ## Last review
 $(cat "$REVIEW_FILE" 2>/dev/null || echo '(no review yet)')

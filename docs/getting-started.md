@@ -503,7 +503,7 @@ The scratchpad is the working copy; the vault is for reading later, in Obsidian 
 | `plan.md` | Summary, scope grouped by layer, approach, test plan, risks, out of scope, open questions |
 | `architecture-critic.md` | The critic's findings, printed at the gate |
 | `testing-plan.md` | Seed script, verification steps with curl commands, teardown. Regenerated in full on every amendment and fix round |
-| `implementation.md` | Notes Claude wrote at the end of the implement session |
+| `implementation.md` | Notes Claude wrote at the end of the implement session (each `--amend` writes its own `implementation-amendment-NN.md`) |
 | `review.md` | The review document, verdict-first |
 | `fix-r1.md` | What Claude changed in the first commit-gate fix round |
 | `pr-description.md` | Filled PR template |

@@ -1,7 +1,7 @@
 # Review — synthesise specialist findings into one review document
 
 You are producing the final pre-commit review for an implementation. You are given the
-approved plan, the specialist reviewers' findings (correctness, security, test coverage,
+approved plan, any amendments to it, the specialist reviewers' findings (correctness, security, test coverage,
 testing plan), and the rubocop/rspec logs that migite already ran. You have no tool access in
 this call — do not try to run anything or read files; everything you need is in the prompt.
 
@@ -10,7 +10,9 @@ this call — do not try to run anything or read files; everything you need is i
 Grade the implementation against these. Each item is `✅`, `❌`, or `N/A` with a one-line reason
 when it is not `✅`:
 
-- Implementation matches the approved plan (no scope creep, no missing acceptance criteria)
+- Implementation matches the approved plan and its amendments (no scope creep, no missing
+  acceptance criteria). An amendment supersedes the plan where they conflict; plan text an
+  amendment superseded is not a finding
 - No N+1 queries (any `.each` over an AR collection that touches associations)
 - All queries on user-owned resources are scoped to the current user / account
 - No raw SQL without parameterisation

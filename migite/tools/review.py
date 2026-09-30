@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # migite.tools.review (migite-review) — autonomous LangGraph review agent
 #
-# Reads plan.md, implementation notes, rubocop/rspec logs, and git diff.
+# Reads plan.md, any amendments, implementation notes, rubocop/rspec logs, and git diff.
 # Fans out 4 parallel specialist reviewers, synthesises a verdict, and writes
 # review.md + sentinel. Called by migite's spawn_langgraph().
 #
@@ -78,7 +78,9 @@ def read_prompt(path: Path) -> str:
 REVIEW_DIMENSIONS = [
     (
         "correctness",
-        "Implementation matches the approved plan. No scope creep. All acceptance criteria covered. "
+        "Implementation matches the approved plan and its amendments (an amendment supersedes the plan "
+        "where they conflict, and plan.md text an amendment superseded is not a finding). No scope creep. "
+        "All acceptance criteria covered. "
         "Logic is correct. No dead code or commented-out blocks.",
     ),
     (
@@ -101,6 +103,17 @@ REVIEW_DIMENSIONS = [
         "original plan — flag any step that still describes pre-amendment behaviour.",
     ),
 ]
+
+
+def amendments_block(amendments: list[str], limit: int) -> str:
+    """The prompt section for a task's amendments, newest first so a `limit`
+    cut drops the oldest ones, not the latest. Empty when there are none."""
+    texts = [a.strip() for a in amendments if a.strip()]
+    if not texts:
+        return ""
+    body = "\n\n".join(reversed(texts))[:limit]
+    return ("\n## Amendments (approved after the plan, newest first; where one conflicts with the plan, "
+            f"the amendment wins)\n{body}\n")
 
 
 # ── Agent call ───────────────────────────────────────────────────────────────────
@@ -144,6 +157,7 @@ class ReviewState(TypedDict):
     repo_root: str
     base_branch: str
     testing_plan: str
+    amendments: list[str]
     review_output: str
     sentinel: str
     review_cmd: str
@@ -161,6 +175,7 @@ class DimensionInput(TypedDict):
     rspec_log: str
     git_diff: str
     testing_plan: str
+    amendments: list[str]
 
 
 # ── Nodes ───────────────────────────────────────────────────────────────────────
@@ -190,6 +205,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
             "rspec_log": state["rspec_log"],
             "git_diff": state["git_diff"],
             "testing_plan": state["testing_plan"],
+            "amendments": state["amendments"],
         })
         for dim, desc in REVIEW_DIMENSIONS
     ]
@@ -209,7 +225,7 @@ Criteria: {state['description']}
 
 ## Plan (first 2500 chars)
 {state['plan'][:2500]}
-{testing_plan_block}
+{amendments_block(state.get('amendments') or [], 4000)}{testing_plan_block}
 ## Implementation notes
 {state['implementation'][:2000]}
 
@@ -245,7 +261,7 @@ def synthesize_verdict(state: ReviewState) -> dict:
 
 ## Plan summary (first 1500 chars)
 {state['plan'][:1500]}
-
+{amendments_block(state.get('amendments') or [], 2000)}
 ## Specialist findings
 {findings_text}
 
@@ -382,6 +398,8 @@ def main() -> None:
     ap.add_argument("--sentinel",        required=True)
     ap.add_argument("--base-branch",     default=None, help="Branch to diff against (default: auto-detect origin/HEAD, then main/master/develop)")
     ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
+    ap.add_argument("--amendment",       action="append", default=[],
+                    help="Path to an amendment-NN.md; repeat for each, oldest first (optional)")
     args = ap.parse_args()
 
     global REVIEW_CMD_PATH
@@ -411,6 +429,7 @@ def main() -> None:
     rubocop_log    = read_or_empty(args.rubocop_log)
     rspec_log      = read_or_empty(args.rspec_log)
     testing_plan   = read_or_empty(args.testing_plan) if args.testing_plan else ""
+    amendments     = [read_or_empty(a) for a in args.amendment]
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
     dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d, _ in REVIEW_DIMENSIONS)
@@ -427,6 +446,7 @@ def main() -> None:
             "repo_root": args.repo_root,
             "base_branch": base_branch,
             "testing_plan": testing_plan,
+            "amendments": amendments,
             "review_output": args.review_output,
             "sentinel": args.sentinel,
             "review_cmd": review_cmd,

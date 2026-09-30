@@ -143,7 +143,7 @@ drops anything under `scratchpad/` so migite's own artifacts never show up as "y
 Note that `migite-plan`'s explorers and `migite-review`'s diff still use plain `git diff`, so a
 brand-new file is linted and tested but its *content* only reaches the reviewer once staged.
 
-Phase 3 also runs a separate, different check: any changed file (tracked or untracked) whose basename doesn't appear anywhere in `implementation.md` gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them.
+Phase 3 also runs a separate, different check: any changed file (tracked or untracked) whose basename doesn't appear anywhere in `implementation.md` or an `implementation-amendment-NN.md` gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them.
 
 Tooling failures — Ruby version unset, a git-sourced gem not checked out, rspec producing
 `0 examples` because of a DB connection or load error — are detected by one shared
