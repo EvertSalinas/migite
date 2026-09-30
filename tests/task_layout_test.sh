@@ -120,6 +120,47 @@ rm -f "$_tl_ms/fix-r0.md"
 check "migrate_task_layout: a second pass over a migrated task moves nothing" \
   test -z "$(migrate_task_layout "$_tl_ms" "$_tl_mv")"
 
+# ── Scratchpad/vault sync ────────────────────────────────────────────────────
+_tl_sync=$(mktemp -d); CLEANUP_DIRS+=("$_tl_sync")
+echo "vault copy" > "$_tl_sync/vault.md"
+touch -t 202601010000 "$_tl_sync/vault.md"
+resume_from_vault "$_tl_sync/scratch.md" "$_tl_sync/vault.md"
+check "resume_from_vault: the recovered copy keeps the vault's time, so doctor sees no drift" \
+  bash -c 'test -f "$1" && ! test "$1" -nt "$2"' _ "$_tl_sync/scratch.md" "$_tl_sync/vault.md"
+echo "scratch edit" > "$_tl_sync/scratch.md"
+resume_from_vault "$_tl_sync/scratch.md" "$_tl_sync/vault.md"
+check "resume_from_vault: an existing scratchpad copy is never replaced" \
+  test "$(cat "$_tl_sync/scratch.md")" = "scratch edit"
+
+# shellcheck disable=SC2034  # the globals below are read by snapshot_testing_plan
+(
+  SCRATCHPAD_DIR="$_tl_sync/s"; TASK_DIR="$_tl_sync/v"
+  set_run_paths "01-amend-x"
+  snapshot_testing_plan
+  check "snapshot_testing_plan: no testing plan yet, no copy" \
+    test ! -e "$RUN_SCRATCH_DIR/testing-plan.md"
+  echo "# Testing Plan after amendment 01" > "$TESTING_PLAN_FILE"
+  snapshot_testing_plan
+  echo "# Testing Plan after amendment 02" > "$TESTING_PLAN_FILE"
+  check "snapshot_testing_plan: the run folder keeps the testing plan as the run left it, both copies" \
+    bash -c 'grep -q "after amendment 01" "$1" && grep -q "after amendment 01" "$2"' _ "$RUN_SCRATCH_DIR/testing-plan.md" "$RUN_VAULT_DIR/testing-plan.md"
+)
+
+# ── merge_ledger ─────────────────────────────────────────────────────────────
+printf '{"ts": "1", "cost_usd": 1}\n{"ts": "2", "cost_usd": 2}\n' > "$_tl_sync/a.jsonl"
+printf '{"ts": "2", "cost_usd": 2}\n{"ts": "3", "cost_usd": 3}\n' > "$_tl_sync/b.jsonl"
+merge_ledger "$_tl_sync/a.jsonl" "$_tl_sync/run.jsonl"
+merge_ledger "$_tl_sync/b.jsonl" "$_tl_sync/run.jsonl"
+merge_ledger "$_tl_sync/a.jsonl" "$_tl_sync/run.jsonl"
+check "merge_ledger: every call once, however often a ledger is merged" \
+  test "$(cut -d'"' -f4 "$_tl_sync/run.jsonl" | tr '\n' ' ')" = "1 2 3 "
+check "merge_ledger: a first merge (no run ledger yet) survives migite's set -euo pipefail" \
+  bash -c 'set -euo pipefail; source "$1/lib/common.sh"; source "$1/lib/vault.sh"; merge_ledger "$2" "$3"; test -s "$3"' \
+    _ "$REPO_ROOT" "$_tl_sync/a.jsonl" "$_tl_sync/first-run.jsonl"
+merge_ledger "$_tl_sync/absent.jsonl" "$_tl_sync/run.jsonl"
+check "merge_ledger: a missing ledger changes nothing" \
+  test "$(wc -l < "$_tl_sync/run.jsonl" | tr -d ' ')" = "3"
+
 # ── index.md ─────────────────────────────────────────────────────────────────
 printf '# Review\n\n## Verdict: NEEDS FIXES\n' > "$_tl_mv/00-build/review.md"
 write_task_index "$_tl_mv"
@@ -135,4 +176,4 @@ check "write_task_index: an amend row says what the amendment asked for" \
 check "write_task_index: lists other files, not the current documents again" \
   bash -c '[[ "$1" == *"## Other files"*"[audit-20260901.md](audit-20260901.md)"* && "$1" != *"[plan.md]"* ]]' _ "$_tl_index"
 
-unset _tl_scratch _tl_vault _tl_expected _tl_root _tl_ms _tl_mv _tl_d _tl_out _tl_amend _tl_index
+unset _tl_sync _tl_scratch _tl_vault _tl_expected _tl_root _tl_ms _tl_mv _tl_d _tl_out _tl_amend _tl_index

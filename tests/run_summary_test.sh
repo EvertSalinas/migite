@@ -55,6 +55,12 @@ PATH="$rs_dir/bin:$PATH"
     bash -c '[[ "$1" == *"the fallback date was picked by product"* ]]' _ "$prompt"
 
   rm -f "$summary" "$RUN_VAULT_DIR/summary.md"
+  # migite runs under set -euo pipefail; no engineer note is the common case.
+  out=$( (set -euo pipefail; FAKE_CLAUDE_MODE=envelope write_run_summary "" >/dev/null 2>&1; echo completed) 2>&1 )
+  check "write_run_summary: completes under migite's set -euo pipefail with no note or overrides" \
+    bash -c '[[ "$1" == *completed* && -s "$2" ]]' _ "$out" "$summary"
+
+  rm -f "$summary" "$RUN_VAULT_DIR/summary.md"
   out=$(FAKE_CLAUDE_MODE=exit1 write_run_summary "" 2>&1); rc=$?
   check "write_run_summary: a failed call leaves no summary.md and doesn't fail the run" \
     bash -c '[[ "$1" == 0 && ! -e "$2" && "$3" == *"came back empty"* ]]' _ "$rc" "$summary" "$out"
@@ -74,6 +80,18 @@ PATH="$rs_dir/bin:$PATH"
     bash -c '[[ "$1" == *"Plan this run implemented"*"Export invoices as PDF."* ]]' _ "$prompt"
   check "write_run_summary: a build run records its plan-gate rounds" \
     grep -q "^- Plan gate rounds: 3$" "$RUN_SCRATCH_DIR/summary.md"
+  check "write_run_summary: records the Phase 3.8 plan update outcome" \
+    grep -q "^- Plan update: not run$" "$RUN_SCRATCH_DIR/summary.md"
+
+  # Phase 3.8 has already folded this run into plan.md; the summary must still
+  # compare the work against the plan as approved, or deviations vanish.
+  printf '# BB-2: Export\nAPPROVED-ORIGINAL\n' > "$RUN_SCRATCH_DIR/plan.md"
+  printf '# BB-2: Export\nFOLDED-CURRENT\n' > "$PLAN_FILE"
+  rm -f "$LOG_DIR"/*-prompt-Writing-run-summary.txt
+  FAKE_CLAUDE_MODE=envelope write_run_summary "" >/dev/null 2>&1
+  prompt=$(cat "$LOG_DIR"/*-prompt-Writing-run-summary.txt 2>/dev/null)
+  check "write_run_summary: a build run reads the approved plan, not the folded plan.md" \
+    bash -c '[[ "$1" == *APPROVED-ORIGINAL* && "$1" != *FOLDED-CURRENT* ]]' _ "$prompt"
 
   printf '# Run summary: 00-build\nDate: 2026-09-30\n\nSummary: Added PDF export for invoices.\n' > "$RUN_VAULT_DIR/summary.md"
   write_task_index "$TASK_DIR"

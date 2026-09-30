@@ -35,7 +35,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 
 | File | Contents |
 |------|----------|
-| `plan.md` | Implementation plan |
+| `plan.md` | The living plan: the design as it now stands, updated at the end of every run ([Phase 3.8](./phases.md#phase-3-8-plan-update)), with a `## Revision history` line per run |
 | `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Regenerated in full on every `--amend` and fix round, unlike `plan.md` |
 | `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
@@ -50,6 +50,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `intake.md` | Filled-in task intake |
 | `task.md` | Optional — supplementary details added via [Intake mode](./migite.md#intake-mode)'s prompt and/or `--attach`, kept separate from `intake.md` |
 | `jira-context.md` | Optional — fetched Jira ticket content when `--jira` is used and the fetch succeeds |
+| `plan.md` | The plan as approved at the gate, never changed afterwards |
 | `architecture-critic.md` | Pre-implementation risk findings |
 | `spec-implementation.md` | Optional: the spec files written in the TDD red phase |
 
@@ -57,14 +58,16 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 
 | File | Contents |
 |------|----------|
-| `amendment.md` | Amend runs only: the scoped delta; the original plan stays untouched |
+| `amendment.md` | Amend runs only: the scoped delta, folded into `plan.md` at the end of the run |
 | `implementation.md` | Notes from this run's implementation session |
 | `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
 | `review.md` | Code review verdict and findings |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
 | `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary); never fed back into a prompt |
-| `usage.json` | End-of-run summary of every headless model call in the run (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
+| `testing-plan.md` | The task's testing plan as this run left it. The top-level `testing-plan.md` is rewritten by every amend and fix round, so these copies are its history |
+| `usage.jsonl` | Every headless model call the run made, one JSON line each, across all of its invocations: a resumed or re-run build appends to it rather than starting over |
+| `usage.json` | Summary of `usage.jsonl` (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
 | `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
 
 If the scratchpad copy of any of the above is missing (cleaned, fresh clone, different
@@ -139,7 +142,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 <a id="testing-plan-requirement"></a>
 ## Testing Plan requirement
 
-The QA/dev verification steps — seed script, curls or browser actions, teardown — live in their own `testing-plan.md`, not inside `plan.md`. This is deliberate: `plan.md` is history (amendments accumulate beside it, never overwriting it), but the testing plan describes how to verify the code **as it exists right now**. If it lived inside `plan.md`, every amendment that changed behaviour would leave it silently describing the pre-amendment version.
+The QA/dev verification steps (seed script, curls or browser actions, teardown) live in their own `testing-plan.md`, not inside `plan.md`. This is deliberate: `plan.md` is only updated at the end of a run, through edits you approve, while the testing plan is regenerated whenever behaviour changes (every amendment and fix round) and describes how to verify the code **as it exists right now**. Kept inside `plan.md`, its steps would lag until the run's plan update, or be lost if you declined it.
 
 `migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan. Every `--amend` run regenerates it **in full** (not appended) from the current testing plan + the new amendment + the diff, so a step an amendment invalidates gets rewritten or dropped instead of lingering. `migite-review`'s `testing_plan` specialist reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
 

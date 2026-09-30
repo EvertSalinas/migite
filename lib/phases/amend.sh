@@ -114,6 +114,15 @@ $(cat "$_notes_f")
   done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" implementation.md)
   local LAST_REVIEW_FILE
   LAST_REVIEW_FILE=$(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" review.md | tail -1)
+  # Earlier amendments plan.md doesn't reflect yet (a skipped or failed fold, or a
+  # task from before the living plan). Folded ones are already in the plan.
+  local UNFOLDED_AMENDMENTS="" _amend_f
+  while IFS= read -r _amend_f; do
+    [[ -n "$_amend_f" ]] || continue
+    UNFOLDED_AMENDMENTS="${UNFOLDED_AMENDMENTS}
+$(cat "$_amend_f")
+"
+  done < <(unfolded_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md "$SCRATCHPAD_DIR/plan.md")
 
   set_run_paths "$(amend_run_slug "$AMEND_NUM" "$AMEND_FEEDBACK_TEXT")"
   AMENDMENT_FILE="$RUN_SCRATCH_DIR/amendment.md"
@@ -123,11 +132,11 @@ $(cat "$_notes_f")
   local AMEND_DIFF
   AMEND_DIFF=$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
 
-  local AMEND_PROMPT="You are scoping a post-implementation amendment for an already-planned and already-built task. Read the original plan, what was actually implemented, the last review, the current diff, and repo knowledge, then write a SCOPED DELTA — not a new plan.
+  local AMEND_PROMPT="You are scoping a post-implementation amendment for an already-planned and already-built task. Read the current plan, what was actually implemented, the last review, the current diff, and repo knowledge, then write a SCOPED DELTA, not a new plan.
 
-## Original plan
+## Current plan (updated at the end of every earlier run)
 $(cat "$PLAN_FILE")
-
+$( [[ -n "$UNFOLDED_AMENDMENTS" ]] && printf '\n## Earlier amendments not yet reflected in the plan above\n%s\n' "$UNFOLDED_AMENDMENTS" )
 ## Implementation notes (original build first, then each earlier amendment)
 ${PRIOR_NOTES:-(not yet implemented)}
 

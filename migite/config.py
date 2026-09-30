@@ -156,6 +156,7 @@ ROLE_TIERS: dict[str, str] = {
     # migite bash phases
     "knowledge": "standard", "improve": "standard", "amend": "standard",
     "summary": "fast",            # end-of-run summary.md: condenses files the run already wrote
+    "plan_fold": "standard",      # end-of-run exact edits that keep plan.md current
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
     "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
     # migite-explore

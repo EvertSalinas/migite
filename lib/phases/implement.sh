@@ -16,14 +16,14 @@ run_implement() {
     if [[ "$AMEND_MODE" == "true" ]]; then
       printf '%s' "${KNOWLEDGE_INJECT}$(cat "$IMPLEMENT_CMD_PATH" | sed "s|\\[PLAN_PATH\\]|$AMENDMENT_FILE|g")
 
-## Original plan (already built — for context only, do not re-implement)
+## Current plan (already built - for context only, do not re-implement)
 $(cat "$PLAN_FILE")
 
 ## Amendment $AMEND_NUM — implement ONLY this scoped delta
 $(cat "$AMENDMENT_FILE")
 
 ## Migite workflow context (overrides $(agent_field instruction_files) defaults for this session)
-- The original plan is already implemented — only implement the amendment's Scope section
+- The plan is already implemented - only implement the amendment's Scope section
 - Respect the amendment's Out of scope section — do not touch anything listed there
 - Do NOT run rubocop or rspec — migite runs them after this phase"
     else

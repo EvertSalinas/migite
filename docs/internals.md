@@ -251,8 +251,9 @@ A `review.json` example, including `findings[]`, is in
 [getting-started.md](./getting-started.md#outputs).
 
 **`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
-report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`) and summarises the ledger by
-model and by tool. Interactive sessions (`run_phase`:
+report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`). It summarises `usage.jsonl`
+beside it by model and by tool: this invocation's ledger lines appended to the run's earlier ones,
+exact repeats dropped, so a resumed or re-run build adds to the run's cost instead of replacing it. Interactive sessions (`run_phase`:
 implement, gate fixes, PR description) are not metered — the CLI only emits usage in `--print` mode.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

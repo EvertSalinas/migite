@@ -120,6 +120,81 @@ task_run_files() {
   done < <(task_run_slugs "$scratch" "$vault")
 }
 
+# run_fix_files <scratch-run-dir> <vault-run-dir> - a run's fix-rN.md files in
+# number order (a migrated 00-build/ can start at fix-r0), scratchpad copy first.
+run_fix_files() {
+  local last n f
+  last=$(( $(next_fix_round "$1" "$2") - 1 ))
+  for (( n = 0; n <= last; n++ )); do
+    f="$1/fix-r$n.md"
+    [[ -f "$f" ]] || f="$2/fix-r$n.md"
+    [[ -f "$f" ]] && echo "$f"
+  done
+  return 0
+}
+
+# snapshot_testing_plan - copy the task's current testing-plan.md into the run's
+# folder as it stands at the end of the run. testing-plan.md itself is rewritten in
+# full on every --amend and fix round, so these copies are its only history.
+# Expects the set_run_paths variables.
+snapshot_testing_plan() {
+  [[ -s "$TESTING_PLAN_FILE" ]] || return 0
+  cp "$TESTING_PLAN_FILE" "$RUN_SCRATCH_DIR/testing-plan.md"
+  sync_artifact "$RUN_SCRATCH_DIR/testing-plan.md" "$RUN_VAULT_DIR/testing-plan.md"
+}
+
+# merge_ledger <ledger.jsonl> <run-ledger.jsonl> - append the lines of the first
+# usage ledger to the second, skipping lines it already has. Each line is one
+# timestamped call, so an exact repeat is the same call: a ledger reused across
+# invocations (MIGITE_USAGE_LEDGER set in the environment) isn't counted twice.
+merge_ledger() {
+  local src="$1" dest="$2" tmp
+  [[ -s "$src" ]] || return 0
+  tmp=$(mktemp)
+  # No `cat "$dest" "$src"`: a first merge has no $dest yet, and cat's failure
+  # would end migite's EXIT trap under `set -euo pipefail`.
+  { if [[ -f "$dest" ]]; then cat "$dest"; fi; cat "$src"; } | awk 'NF && !seen[$0]++' > "$tmp"
+  mv "$tmp" "$dest"
+}
+
+# plan_folded_runs <plan.md> - the run slugs the plan's "## Revision history"
+# records as folded in (migite.plan_fold owns that format), one per line.
+plan_folded_runs() {
+  [[ -f "$1" ]] || return 0
+  "$MIGITE_PYTHON" -m migite.plan_fold folded --plan "$1" 2>/dev/null || true
+}
+
+# unfolded_run_files <scratch-dir> <vault-dir> <name> <plan.md> - task_run_files,
+# minus the runs plan.md already reflects. For amendment.md this is the scope a
+# prompt must still be told about on top of the plan: none on a task whose runs
+# were all folded, every amendment on a task from before the living plan.
+unfolded_run_files() {
+  local folded f run
+  folded=" $(plan_folded_runs "$4" | tr '\n' ' ') "
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    run=$(basename "$(dirname "$f")")
+    [[ "$folded" == *" $run "* ]] || echo "$f"
+  done < <(task_run_files "$1" "$2" "$3")
+}
+
+# snapshot_approved_plan - copy plan.md to the build run's folder as the plan
+# approved at the gate (00-build/plan.md). plan.md itself changes at the end of
+# every run (Phase 3.8), so this is the one copy of what was agreed before any
+# code. Refreshed on each approval, but only while plan.md is still unfolded:
+# once a run is folded in or an amendment exists, plan.md is no longer the
+# approved plan and the snapshot is left alone. Expects the set_run_paths
+# variables for 00-build.
+snapshot_approved_plan() {
+  [[ -s "$PLAN_FILE" ]] || return 0
+  [[ -z "$(plan_folded_runs "$PLAN_FILE")" ]] || return 0
+  if task_run_slugs "$SCRATCHPAD_DIR" "$TASK_DIR" | grep -q -- '-amend-'; then
+    return 0
+  fi
+  cp "$PLAN_FILE" "$RUN_SCRATCH_DIR/plan.md"
+  sync_artifact "$RUN_SCRATCH_DIR/plan.md" "$RUN_VAULT_DIR/plan.md"
+}
+
 # next_amend_num <scratch-dir> <vault-dir> - the two-digit number for the next
 # --amend run: one past the highest run folder (00-build is 00), so 01 first.
 next_amend_num() {
@@ -364,11 +439,13 @@ sync_json() {
 # If the scratchpad copy is missing but a vault copy exists (scratchpad was cleaned,
 # fresh clone, different machine), pulls the vault copy in so resuming a task doesn't
 # silently start over. No-op if the scratchpad copy already exists or there's nothing
-# in the vault to recover.
+# in the vault to recover. `cp -p` keeps the vault copy's modification time: a plain
+# copy made the scratchpad look newer than the vault, which `migite doctor` reported
+# as sync drift on every resumed or amended task.
 resume_from_vault() {
   local scratch="$1" vault="$2"
   [[ -f "$scratch" || ! -f "$vault" ]] && return 0
-  cp "$vault" "$scratch"
+  cp -p "$vault" "$scratch"
 }
 
 migrate_vault_usage() {

@@ -87,10 +87,13 @@ run_cost_so_far() {
   printf '%s calls, $%.2f' "$calls" "$cost"
 }
 
-# print_usage_summary — end-of-run table of every headless model call (by
-# model: calls, tokens, time, cost), written to usage.json in the run's folder
-# (the task's scratchpad dir before one is known) and mirrored to the vault. Runs from migite's EXIT trap
-# so an aborted run still reports what it spent. Guarded to run once.
+# print_usage_summary - end-of-run table of every headless model call in this
+# invocation (by model: calls, tokens, time, cost). The calls are also appended to
+# usage.jsonl in the run's folder (the task's scratchpad dir before one is known),
+# and usage.json there summarises that whole ledger, so a resumed or re-run build
+# adds to 00-build/usage.json instead of replacing it. Both are mirrored to the
+# vault. Runs from migite's EXIT trap so an aborted run still reports what it
+# spent. Guarded to run once.
 print_usage_summary() {
   [[ "${_USAGE_SUMMARY_PRINTED:-}" == "1" ]] && return 0
   _USAGE_SUMMARY_PRINTED=1
@@ -99,12 +102,16 @@ print_usage_summary() {
   echo -e "${BOLD}── Usage ───────────────────────────────────────${RESET}"
   local scratch_dir="${RUN_SCRATCH_DIR:-${SCRATCHPAD_DIR:-}}"
   local vault_dir="${RUN_VAULT_DIR:-${TASK_DIR:-}}"
+  "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" || true
   if [[ -n "$scratch_dir" && -d "$scratch_dir" ]]; then
-    local out="$scratch_dir/usage.json"
-    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
-    [[ -n "$vault_dir" ]] && sync_json "$out" "$vault_dir/usage.json"
-  else
-    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" || true
+    local out="$scratch_dir/usage.json" run_ledger="$scratch_dir/usage.jsonl"
+    [[ -n "$vault_dir" ]] && resume_from_vault "$run_ledger" "$vault_dir/usage.jsonl"
+    merge_ledger "$MIGITE_USAGE_LEDGER" "$run_ledger"
+    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$run_ledger" --json "$out" >/dev/null || true
+    if [[ -n "$vault_dir" ]]; then
+      sync_json "$out" "$vault_dir/usage.json"
+      sync_json "$run_ledger" "$vault_dir/usage.jsonl"
+    fi
   fi
   echo -e "  Ledger: ${CYAN}$MIGITE_USAGE_LEDGER${RESET}"
   echo -e "${BOLD}────────────────────────────────────────────────${RESET}"

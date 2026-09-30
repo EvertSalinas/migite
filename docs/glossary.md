@@ -20,7 +20,8 @@ Terms used across the docs, in the order you meet them in a run.
 | **Verdict** | `READY TO COMMIT` or `NEEDS FIXES`, returned as a typed enum from a schema-validated call and written to `review.json`. |
 | **Envelope** | The machine-readable JSON beside a document: `plan.json`, `review.json`, `usage.json`. Bash reads these instead of grepping prose. |
 | **Usage ledger** | `$MIGITE_USAGE_LEDGER`, one JSON line per headless model call with tokens, cost, duration, model, label. Summarised at exit. |
-| **Amendment** | `NN-amend-<slug>/amendment.md`: a scoped delta against an already-built task, produced by `--amend` in one call. `plan.md` is never rewritten; amendments accumulate beside it, one run folder each. |
+| **Amendment** | `NN-amend-<slug>/amendment.md`: a scoped delta against an already-built task, produced by `--amend` in one call. Amendments accumulate one run folder each, and each is folded into `plan.md` at the end of its run. |
+| **Living plan** | `plan.md`, kept current by [Phase 3.8](./phases.md#phase-3-8-plan-update): exact edits you approve at the end of every run, plus one line per run in its `## Revision history`, which is also how migite knows which amendments the plan already reflects. The approved original is `00-build/plan.md`. |
 | **Run folder** | `00-build/` (the original build) or `NN-amend-<slug>/` (one per `--amend`) inside a task folder: everything that run wrote, including its end-of-run `summary.md`, so no run overwrites another's notes, fix rounds, review or usage. The task's current `plan.md`, `testing-plan.md` and `pr-description.md` sit above them. |
 | **Knowledge** | `knowledge.md`, one per repo in the vault. Up to three domain-level bullets appended after every run, injected into every future plan and implement prompt. |
 | **Sentinel** | `.plan.done` / `.review.done`, touched by an agent on success. Bash treats a missing sentinel as failure rather than trusting exit codes through tmux. |

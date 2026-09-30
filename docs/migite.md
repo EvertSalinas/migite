@@ -131,11 +131,12 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 
 Key properties:
 
-- **`plan.md` is never overwritten.** Each amendment gets its own run folder, `01-amend-<slug>/`, `02-amend-<slug>/`, beside the original plan, so the record of what changed and why lives with the work. See [Run folders](./vault-structure.md#run-folders).
+- **Each amendment gets its own run folder**, `01-amend-<slug>/`, `02-amend-<slug>/`, so the record of what changed and why lives with the work. See [Run folders](./vault-structure.md#run-folders).
+- **`plan.md` stays current.** At the end of the run, [Phase 3.8](./phases.md#phase-3-8-plan-update) proposes exact edits that fold the amendment into it, shows you the diff, and adds a revision line. The approved original stays in `00-build/plan.md`.
 - **`testing-plan.md` is overwritten in full on approval**, unlike `plan.md` — it reflects current, post-amendment behaviour, not history. See [Testing Plan requirement](./outputs.md#testing-plan-requirement).
 - **Grounded in the diff, not a re-exploration.** The amendment prompt sees the actual built code, so it can say "this already handles that, only the retry path changes" instead of re-planning greenfield.
-- **Implementation is scoped to the amendment.** The implement prompt marks the original plan as already built and enforces the amendment's `Out of scope` section.
-- **The PR description absorbs every amendment**, so it reflects the final delivered scope rather than only the original plan.
+- **Implementation is scoped to the amendment.** The implement prompt marks the current plan as already built and enforces the amendment's `Out of scope` section.
+- **The PR description covers every amendment**: through the updated plan, plus any amendment the plan doesn't reflect yet, so it describes the final delivered scope.
 - If the feedback turns out to be already satisfied by the current code, the amendment says so and leaves `Scope` empty rather than inventing work.
 
 Note that migite never runs `git commit` itself — the commit gate is an approval step. Each amendment is therefore naturally its own commit, made by you after the gate.

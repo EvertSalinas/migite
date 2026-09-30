@@ -120,13 +120,14 @@ run_review() {
     --base-branch      "$BASE_BRANCH"
   )
   [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
-  # Every amendment is approved scope the plan doesn't describe. Without them the
-  # reviewer graded amended code against the original plan and reported the
-  # difference as drift.
+  # Amendments are approved scope; the reviewer needs the ones plan.md doesn't
+  # reflect yet (this run's, until Phase 3.8 folds it in, and any whose fold was
+  # skipped). Without them it graded amended code against the plan and reported
+  # the difference as drift. Folded ones are already in the plan.
   local _amend_f
   while IFS= read -r _amend_f; do
     [[ -n "$_amend_f" ]] && REVIEW_LANGGRAPH_ARGS+=(--amendment "$_amend_f")
-  done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md)
+  done < <(unfolded_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md "$PLAN_FILE")
 
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
@@ -271,17 +272,17 @@ run_review() {
         local FIX_TITLE="Fix round $FIX_NUM"
         [[ "${AMEND_MODE:-false}" == "true" ]] && FIX_TITLE="$FIX_TITLE (amendment $AMEND_NUM)"
         local FIX_IMPL_FILE="$RUN_SCRATCH_DIR/fix-r${FIX_NUM}.md"
-        # The amendments are approved scope too; without them the fixer only sees
-        # the original plan and can "fix" amended behaviour back to it.
+        # Amendments plan.md doesn't reflect yet are approved scope too; without
+        # them the fixer can "fix" amended behaviour back to the plan.
         local FIX_AMENDMENTS="" _fix_amend_f
         while IFS= read -r _fix_amend_f; do
           FIX_AMENDMENTS="${FIX_AMENDMENTS}
 $(cat "$_fix_amend_f")
 "
-        done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md)
+        done < <(unfolded_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md "$PLAN_FILE")
         local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
 
-## Original plan (for context)
+## Current plan (for context)
 $(cat "$PLAN_FILE" 2>/dev/null || echo "(plan not found)")
 $( [[ -n "$FIX_AMENDMENTS" ]] && printf '\n## Amendments (approved after the plan; where one conflicts with the plan, the amendment wins)\n%s\n' "$FIX_AMENDMENTS" )
 

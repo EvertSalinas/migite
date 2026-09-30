@@ -15,6 +15,7 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 - [Which files get linted and tested](#lint-test-selection)
 - [Phase 3 — Review](#phase-3-review)
 - [Phase 3.5 — Knowledge capture](#phase-3-5-knowledge)
+- [Phase 3.8: Plan update](#phase-3-8-plan-update)
 - [Phase 4 — PR description](#phase-4-pr-description)
 - [Phase 4.2: Run summary](#phase-4-2-run-summary)
 - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
@@ -183,7 +184,7 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 | Key | Action |
 |-----|--------|
 | `y` | Approve — continue to Phase 3.5 |
-| `f` | Claude fixes — opens an interactive session with the full review findings + original plan as context. Claude addresses every Critical and Warning. On `/exit`, migite re-runs rubocop + rspec + `migite-review` automatically and shows the gate again |
+| `f` | Claude fixes: opens an interactive session with the full review findings + the current plan (and any amendment it doesn't reflect yet) as context. Claude addresses every Critical and Warning. On `/exit`, migite re-runs rubocop + rspec + `migite-review` automatically and shows the gate again |
 | `e` | Edit — opens `review.md` directly in `$EDITOR` so you can annotate, dismiss, or restructure findings before deciding |
 | `n` | Manual fix — migite pauses and waits for you to press Enter when ready, then re-runs checks and re-review |
 | `q` | Abort the workflow |
@@ -203,6 +204,40 @@ appending the blockers to `gate-overrides.md` beside the review so the override 
 A background headless pass (the `knowledge` role) extracts 1–3 reusable bullets from the completed run (plan + implementation + review) and appends them to `knowledge.md`. Entries link back to the review via Obsidian wikilinks (harmless plain text if you're not using Obsidian).
 
 Only domain-level insights are captured: business logic clarifications, non-obvious constraints, architectural decisions. Rails conventions and testing patterns are excluded.
+
+<a id="phase-3-8-plan-update"></a>
+### Phase 3.8: Plan update
+
+`plan.md` is a living document: at the end of every run it is brought up to date with what the run
+decided and built, so the next run, reviewer, or person reads the design as it stands rather than
+as first planned plus a pile of amendments. The plan as approved at the gate is kept, unchanged, in
+`00-build/plan.md`.
+
+One headless call (the `plan_fold` role, standard tier, `migite/plan_fold.py`) reads this run's
+amendment (for an `--amend`), implementation notes, fix rounds and final review, and proposes exact
+edits: each one a passage copied from the plan and its corrected text. The model never rewrites
+the plan. An edit lands only when its passage appears exactly once in the plan; the rest are
+dropped and listed. You see the diff, then:
+
+| Key | Action |
+|---|---|
+| `y` | Apply the edits (the previous `plan.md` goes to `.plan-history/`) |
+| `e` | Apply them, then open `plan.md` in `$EDITOR` |
+| `n` | Keep the plan as it is |
+
+Every applied fold, even one that needed no edits (applied without asking), adds one line to a
+`## Revision history` section at the bottom of `plan.md`:
+
+```text
+- 2026-09-30 `01-amend-reduce-the-delay-before-chat-recordmessa`: Enqueue delay is 15 seconds, not 1 minute.
+```
+
+That section is also how migite knows which runs the plan reflects. The amend, implement, review,
+fix and PR-description prompts get the current plan plus only the amendments it doesn't reflect
+yet: normally none, or the current run's before its own fold. So prompt size stays flat however
+many times a task is amended. A declined or failed fold leaves `plan.md` alone, and that run's
+amendment keeps going into later prompts beside it. A task from before the living plan has no
+revision history, so every one of its amendments is still included, as before.
 
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)

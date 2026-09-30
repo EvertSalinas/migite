@@ -402,6 +402,7 @@ run_plan() {
     read_gate_choice "REVIEW GATE: plan" "Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort): "
     case "$GATE_CHOICE" in
       y|Y)
+        snapshot_approved_plan
         success "Plan approved — continuing"
         break
         ;;

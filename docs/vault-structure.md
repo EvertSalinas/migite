@@ -16,10 +16,11 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │       │   └── intake-NN-<slug>.md               ← only with --intakes
 │       └── <ticket>/                             ← grouped by --jira, shared across tools
 │           ├── index.md                          ← generated after every run: current docs + one row per run (its summary line)
-│           ├── plan.md  +  plan.json             ← the current plan; never rewritten by --amend
+│           ├── plan.md  +  plan.json             ← the living plan, updated at the end of every run
 │           ├── testing-plan.md                   ← current; regenerated in full on every --amend and fix round
 │           ├── pr-description.md                 ← current; regenerated at the end of every run
 │           ├── 00-build/                         ← the original build
+│           │   ├── plan.md                       ← the plan as approved at the gate, never changed
 │           │   ├── intake.md
 │           │   ├── task.md                       ← optional, from the --intake supplementary prompt
 │           │   ├── jira-context.md               ← optional, the fetched ticket
@@ -31,11 +32,13 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │           │   ├── review.md  +  review.json
 │           │   ├── gate-overrides.md             ← only with gates.commit.policy: strict, on a `Y`
 │           │   ├── summary.md                    ← what the run did and why, written at its end
-│           │   └── usage.json                    ← every headless model call in the run, by model
+│           │   ├── testing-plan.md               ← the testing plan as the run left it
+│           │   └── usage.json  +  usage.jsonl    ← every headless model call in the run, across resumes
 │           ├── 01-amend-<slug>/                  ← one per --amend; <slug> is the feedback's first words
 │           │   ├── amendment.md                  ← the scoped delta
 │           │   ├── implementation.md
-│           │   ├── fix-rN.md, review.md + review.json, gate-overrides.md, summary.md, usage.json
+│           │   ├── fix-rN.md, review.md + review.json, gate-overrides.md, summary.md,
+│           │   ├── testing-plan.md, usage.json + usage.jsonl
 │           │   └── implementation-stage-N.md     ← --staged only
 │           ├── 02-amend-<slug>/
 │           ├── audit-<timestamp>.md              ← migite-audit --jira <ticket>

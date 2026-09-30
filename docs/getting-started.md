@@ -455,6 +455,11 @@ description is an interactive session; the self-improvement pass is silent.
   Claude is thinking: Extracting knowledge
 ✔ Knowledge appended to /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/knowledge.md
 
+▶ Phase 3.8/4 - Updating the plan
+▶ Asking Claude Code for the plan edits this run implies (one headless call)...
+  ✔ 0 plan edit(s) proposed that apply cleanly, 0 dropped
+✔ Plan needed no changes; recorded 00-build in its revision history
+
 ▶ Phase 4/4 — Generating PR description
   Starting interactive session: PR description
 
@@ -575,9 +580,10 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 ```
 
 One model call scoped a delta against the built code instead of ten calls re-planning from
-scratch. `plan.md` is untouched; the amendment and everything its run writes go in
-`01-amend-the-export-must-be-idempotent-on/`; `testing-plan.md` is regenerated in full; then Phases 2 to 4 run as before and the PR description absorbs the
-amendment.
+scratch. The amendment and everything its run writes go in
+`01-amend-the-export-must-be-idempotent-on/`; `testing-plan.md` is regenerated in full; then Phases 2 to 4 run as before. At the end,
+Phase 3.8 proposes the edits that fold the amendment into `plan.md` and shows you the diff, and the
+PR description covers the amended scope.
 
 <a id="next"></a>
 ## Where to go next
