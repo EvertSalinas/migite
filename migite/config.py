@@ -155,6 +155,7 @@ ROLE_TIERS: dict[str, str] = {
     "verdict": "strong",          # structured verdict synthesis: decides the gate
     # migite bash phases
     "knowledge": "standard", "improve": "standard", "amend": "standard",
+    "summary": "fast",            # end-of-run summary.md: condenses files the run already wrote
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
     "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
     # migite-explore

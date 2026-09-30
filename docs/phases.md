@@ -16,6 +16,7 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 - [Phase 3 — Review](#phase-3-review)
 - [Phase 3.5 — Knowledge capture](#phase-3-5-knowledge)
 - [Phase 4 — PR description](#phase-4-pr-description)
+- [Phase 4.2: Run summary](#phase-4-2-run-summary)
 - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
 - [Active memory injection](#active-memory-injection)
 - [tmux integration](#tmux-integration)
@@ -209,6 +210,24 @@ Only domain-level insights are captured: business logic clarifications, non-obvi
 The agent generates a PR description from the plan and review, following the prompt/template in
 this repo's [`templates/commit.md`](../templates/commit.md) (`deliver.sh` reads it via
 `$MIGITE_HOME`). Output goes to `pr-description.md` — ready to paste into GitHub.
+
+<a id="phase-4-2-run-summary"></a>
+### Phase 4.2: Run summary
+
+A headless pass (the `summary` role, fast tier) writes `summary.md` in the run's folder: a record
+for people of what this run did and why. It reads only this run's own files: the plan (or, for an
+`--amend`, the amendment), the implementation notes, every fix round, the final review, any
+commit-gate overrides, the note you typed at Phase 3.5, and `git diff --stat`. From those it writes:
+
+- a one-line `Summary:`, which `index.md` shows in the run's row
+- **What changed**, **Why**, **Decisions made during the run**, **Deviations from the plan**,
+  **Fix rounds** and **Follow-ups**
+
+The title, the date, and a **Run facts** section (review verdict, fix rounds, commit-gate
+re-reviews, auto-heal attempts, plan-gate rounds, headless model cost) are written by bash, not the
+model, so they can't be misreported. Nothing reads `summary.md` back into a later prompt, so
+summaries never grow the context of future runs. If the call fails or comes back empty, the run
+goes on without one.
 
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement

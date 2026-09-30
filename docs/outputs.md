@@ -63,6 +63,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `review.md` | Code review verdict and findings |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
+| `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary); never fed back into a prompt |
 | `usage.json` | End-of-run summary of every headless model call in the run (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
 | `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
 
@@ -79,8 +80,8 @@ delete the scratchpad copy after merging; the vault mirror keeps the durable rec
 `knowledge.md` (one file per repo, not per-ticket), each task's `index.md`, and
 `docs/improvements.md` (in the migite tool's own repo) are the exceptions: they live in the vault
 only, with no scratchpad copy. `index.md` is regenerated at the end of every run, aborted ones
-included: the task's current documents, then one row per run with what it was for, its review
-verdict, and links to its files.
+included: the task's current documents, then one row per run with its summary's `Summary:` line
+(or, without one, what the run was for), its review verdict, and links to its files.
 
 See [Vault structure](./vault-structure.md) for the full directory tree.
 

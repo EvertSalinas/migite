@@ -278,7 +278,12 @@ write_task_index() {
     echo "|---|---|---|---|"
     while IFS= read -r run; do
       [[ -n "$run" ]] || continue
-      if [[ "$run" == "$BUILD_RUN_SLUG" ]]; then
+      # The run summary's one-line "Summary:" says what the run delivered; a run
+      # without one (aborted, or from before summaries) says what it was for.
+      what=$(grep -m1 '^Summary: ' "$dir/$run/summary.md" 2>/dev/null | sed 's/^Summary: //' || true)
+      if [[ -n "$what" ]]; then
+        :
+      elif [[ "$run" == "$BUILD_RUN_SLUG" ]]; then
         what="Original build"
       else
         what=$(amendment_feedback "$dir/$run/amendment.md")

@@ -6,6 +6,8 @@
 # DEV_LOG_BASE, PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE, SCRATCHPAD_DIR, RUN_SLUG,
 # TASK_SLUG, JIRA_TICKET, MIGITE_HOME, BRANCH, TASK_TYPE, PLAN_GATE_ATTEMPTS,
 # COMMIT_GATE_ATTEMPTS, RUBOCOP_LOG, RSPEC_LOG to be set.
+# write_run_summary expects the set_run_paths variables, PLAN_FILE, AMEND_MODE,
+# AMENDMENT_FILE, BASE_BRANCH, DATE, and the gate/heal counters.
 
 run_deliver() {
   echo ""
@@ -133,6 +135,11 @@ $(cat "$(template_path commit)" | sed "s|\\[PR_FILE\\]|$PR_FILE|g")"
   sync_artifact "$PR_FILE" "$TASK_DIR/pr-description.md"
   notify "Phase 4 — PR description ready" "Check pr-description.md in Obsidian"
 
+  # ── Phase 4.2: Run summary ────────────────────────────────────────────────────
+  echo ""
+  log "Phase 4.2/4 - Writing run summary"
+  write_run_summary "$USER_KNOWLEDGE_FEEDBACK"
+
   # ── Phase 4.5: Self-improvement ───────────────────────────────────────────────
   echo ""
   log "Phase 4.5/4 — Capturing improvement notes"
@@ -226,4 +233,117 @@ Output ONLY the bullet points, no preamble. Each bullet starts with '- '."
   else
     log "No improvement notes for this run"
   fi
+}
+
+# write_run_summary [engineer-note] - Phase 4.2: summary.md in the run's folder,
+# a record for people of what this run did and why: what changed, decisions made
+# mid-run, deviations from the plan, fix rounds, outcome, follow-ups. The model
+# (the `summary` role, fast tier) writes only that narrative, from this run's own
+# files; the title, date and a "Run facts" section (verdict, fix rounds, heal
+# attempts, cost) come from bash, so they can't be misreported. Nothing reads
+# summary.md back into a later prompt. A failed or empty call leaves no file.
+write_run_summary() {
+  local engineer_note="${1:-}"
+  local summary_file="$RUN_SCRATCH_DIR/summary.md"
+  local purpose purpose_label
+  if [[ "${AMEND_MODE:-false}" == "true" ]]; then
+    purpose_label="Amendment this run implemented"
+    purpose=$(cat "$AMENDMENT_FILE" 2>/dev/null || true)
+  else
+    purpose_label="Plan this run implemented (first 6000 characters)"
+    purpose=$(cat "$PLAN_FILE" 2>/dev/null || true)
+    purpose="${purpose:0:6000}"
+  fi
+
+  # Fix rounds in number order (a migrated 00-build/ can start at fix-r0).
+  local fix_rounds="" fix_count=0 n f last
+  last=$(( $(next_fix_round "$RUN_SCRATCH_DIR" "$RUN_VAULT_DIR") - 1 ))
+  for (( n = 0; n <= last; n++ )); do
+    f="$RUN_SCRATCH_DIR/fix-r$n.md"
+    [[ -f "$f" ]] || f="$RUN_VAULT_DIR/fix-r$n.md"
+    [[ -f "$f" ]] || continue
+    fix_count=$((fix_count + 1))
+    local body
+    body=$(cat "$f")
+    fix_rounds="${fix_rounds}
+### fix-r$n.md
+${body:0:3000}
+"
+  done
+
+  local notes review overrides changed
+  notes=$(cat "$IMPLEMENTATION_FILE" 2>/dev/null || true)
+  review=$(cat "$REVIEW_FILE" 2>/dev/null || true)
+  overrides=$(cat "$RUN_SCRATCH_DIR/gate-overrides.md" 2>/dev/null || true)
+  changed=$(git diff --stat "$BASE_BRANCH" 2>/dev/null | tail -40 || true)
+
+  local SUMMARY_PROMPT
+  SUMMARY_PROMPT="You are writing the end-of-run summary for one migite run ($RUN_SLUG) of a software task. It is a record for the engineer and their team of what this run did and why, read later in their notes. Use ONLY the material below; never invent a change, a reason, or a decision. Be concise: short bullets, file paths in backticks.
+
+## ${purpose_label}
+${purpose:-(none)}
+
+## Implementation notes from this run (first 6000 characters)
+${notes:0:6000}
+
+## Fix rounds in this run
+${fix_rounds:-(none)}
+
+## Final review (first 5000 characters)
+${review:0:5000}
+$( [[ -n "$overrides" ]] && printf '\n## Commit-gate overrides\n%s\n' "$overrides" )
+$( [[ -n "$engineer_note" ]] && printf '\n## Note from the engineer at the end of the run\n%s\n' "$engineer_note" )
+## Files changed on the branch (git diff --stat against $BASE_BRANCH)
+${changed:-(no diff available)}
+
+## Output
+Output ONLY the lines below, starting with the Summary line, with no preamble:
+
+Summary: <one sentence: what this run delivered>
+
+## What changed
+<bullets, by file or behaviour>
+
+## Why
+<the problem or feedback this run answered>
+
+## Decisions made during the run
+<choices the plan or amendment left open, and what was chosen; say who chose when the notes say so. \"None.\" if none>
+
+## Deviations from the plan
+<where the result differs from the plan or amendment, and why. \"None.\" if none>
+
+## Fix rounds
+<one bullet per round: what the review found, what was changed. \"None.\" if none>
+
+## Follow-ups
+<open warnings, unanswered questions, and deferred work the review or notes leave. \"None.\" if none>"
+
+  local summary_body
+  summary_body=$(mktemp)
+  agent_think --quiet "Writing run summary" summary "$summary_body" "$SUMMARY_PROMPT"
+  if ! grep -q '[^[:space:]]' "$summary_body" 2>/dev/null; then
+    rm -f "$summary_body"
+    warn "Run summary came back empty; no summary.md for $RUN_SLUG"
+    return 0
+  fi
+
+  local verdict cost
+  verdict=$(review_verdict "$REVIEW_FILE")
+  cost=$(run_cost_so_far || echo "not recorded")
+  {
+    printf '# Run summary: %s\n' "$RUN_SLUG"
+    printf 'Date: %s\n\n' "$DATE"
+    cat "$summary_body"
+    printf '\n\n## Run facts\n\n'
+    printf -- '- Review verdict: %s\n' "$verdict"
+    printf -- '- Fix rounds: %s\n' "$fix_count"
+    printf -- '- Re-reviews at the commit gate: %s\n' "${COMMIT_GATE_ATTEMPTS:-0}"
+    printf -- '- Auto-heal attempts: %s\n' "${HEAL_ATTEMPT:-0}"
+    [[ "${AMEND_MODE:-false}" != "true" ]] && printf -- '- Plan gate rounds: %s\n' "${PLAN_GATE_ATTEMPTS:-1}"
+    printf -- '- Model cost (headless calls, up to this summary): %s\n' "$cost"
+  } > "$summary_file"
+  rm -f "$summary_body"
+  sync_artifact "$summary_file" "$RUN_VAULT_DIR/summary.md"
+  success "Run summary written to $summary_file"
 }

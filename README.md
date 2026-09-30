@@ -128,6 +128,7 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 
 ▶ Phase 3.5/4 — Capturing knowledge
 ▶ Phase 4/4 — Generating PR description           ← interactive, writes pr-description.md
+▶ Phase 4.2/4 - Writing run summary                ← 00-build/summary.md: what changed and why
 ▶ Phase 4.5/4 — Capturing improvement notes
 ✔ Workflow complete.
 

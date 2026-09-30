@@ -15,7 +15,7 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │       │   ├── challenges.md
 │       │   └── intake-NN-<slug>.md               ← only with --intakes
 │       └── <ticket>/                             ← grouped by --jira, shared across tools
-│           ├── index.md                          ← generated after every run: current docs + one row per run
+│           ├── index.md                          ← generated after every run: current docs + one row per run (its summary line)
 │           ├── plan.md  +  plan.json             ← the current plan; never rewritten by --amend
 │           ├── testing-plan.md                   ← current; regenerated in full on every --amend and fix round
 │           ├── pr-description.md                 ← current; regenerated at the end of every run
@@ -30,11 +30,12 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │           │   ├── fix-rN.md                     ← one per commit-gate `f` round, from 1
 │           │   ├── review.md  +  review.json
 │           │   ├── gate-overrides.md             ← only with gates.commit.policy: strict, on a `Y`
+│           │   ├── summary.md                    ← what the run did and why, written at its end
 │           │   └── usage.json                    ← every headless model call in the run, by model
 │           ├── 01-amend-<slug>/                  ← one per --amend; <slug> is the feedback's first words
 │           │   ├── amendment.md                  ← the scoped delta
 │           │   ├── implementation.md
-│           │   ├── fix-rN.md, review.md + review.json, gate-overrides.md, usage.json
+│           │   ├── fix-rN.md, review.md + review.json, gate-overrides.md, summary.md, usage.json
 │           │   └── implementation-stage-N.md     ← --staged only
 │           ├── 02-amend-<slug>/
 │           ├── audit-<timestamp>.md              ← migite-audit --jira <ticket>

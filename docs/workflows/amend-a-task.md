@@ -124,6 +124,7 @@ In the amendment's run folder, `NN-amend-<slug>/`:
 | `implementation.md` | notes from this amendment's implementation session; `00-build/implementation.md` keeps the original build's |
 | `fix-r<N>.md` | one per commit-gate `f` round, numbered from 1 within this run |
 | `review.md`, `review.json` | the new review of the whole diff, graded against the plan and every amendment |
+| `summary.md` | what this amendment did and why, decisions made along the way, fix rounds, follow-ups |
 | `usage.json` | this run's model calls and cost |
 
 At the task's top level:

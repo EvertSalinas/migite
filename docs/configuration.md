@@ -267,6 +267,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `review_test_coverage`, `review_testing_plan` | standard | `migite-review` — checklist dimensions |
 | `verdict` | strong | `migite-review` — structured verdict synthesis (decides the gate) |
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
+| `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
 | `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
 | `lens` | standard | `migite-explore` lenses |

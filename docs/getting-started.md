@@ -458,6 +458,9 @@ description is an interactive session; the self-improvement pass is silent.
 ▶ Phase 4/4 — Generating PR description
   Starting interactive session: PR description
 
+▶ Phase 4.2/4 - Writing run summary
+✔ Run summary written to /Users/you/Code/invoices-api/scratchpad/bb-1234/00-build/summary.md
+
 ▶ Phase 4.5/4 — Capturing improvement notes
   Claude is thinking: Self-improvement
 ▶ No improvement notes for this run
@@ -510,6 +513,7 @@ all of it.
 | `00-build/implementation.md` | Notes Claude wrote at the end of the implement session |
 | `00-build/review.md` | The review document, verdict-first |
 | `00-build/fix-r1.md` | What Claude changed in the first commit-gate fix round |
+| `00-build/summary.md` | The run in one page: what changed and why, decisions made along the way, fix rounds, follow-ups |
 | `00-build/review.json`, `00-build/usage.json` | The run's machine-readable envelopes, see below |
 
 Two files are per repo, not per task: `knowledge.md` in the vault, injected into every future
