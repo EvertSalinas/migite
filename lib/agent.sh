@@ -108,6 +108,19 @@ print_usage_summary() {
   echo -e "${BOLD}────────────────────────────────────────────────${RESET}"
 }
 
+# migite_pane - the tmux pane migite itself runs in. Panes are split from it, not
+# from whatever window has focus: an untargeted split-window lands in the focused
+# window, which may be another project by the time a phase starts. tmux sets
+# TMUX_PANE in every pane's environment; a stale or missing one falls back to
+# the focused pane (the old behaviour). tmux prints nothing, and still exits 0,
+# for a pane that no longer exists, so the fallback tests the output.
+migite_pane() {
+  local pane
+  pane=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_id}' 2>/dev/null) || pane=""
+  [[ -n "$pane" ]] || pane=$(tmux display-message -p '#{pane_id}')
+  printf '%s\n' "$pane"
+}
+
 # write_prompt <label> <prompt> → writes to $LOG_DIR and prints the path
 write_prompt() {
   local label="$1"
@@ -160,7 +173,7 @@ run_phase() {
     local channel="migite-${TIMESTAMP}-${safe_label}"
     local wrapper="$LOG_DIR/$TIMESTAMP-wrapper-${safe_label}.sh"
     local orig_pane
-    orig_pane=$(tmux display-message -p '#{pane_id}')
+    orig_pane=$(migite_pane)
     {
       echo "#!/usr/bin/env bash"
       printf '%s\n' "$session_cmd"
@@ -178,7 +191,7 @@ run_phase() {
     tmux wait-for "$channel" &
     local _wait_pid=$!
     local session_pane
-    session_pane=$(tmux split-window -P -F '#{pane_id}' -v "bash '$wrapper'")
+    session_pane=$(tmux split-window -P -F '#{pane_id}' -v -t "$orig_pane" "bash '$wrapper'")
     while kill -0 "$_wait_pid" 2>/dev/null; do
       if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -q "^${session_pane}$"; then
         kill "$_wait_pid" 2>/dev/null || true
@@ -240,7 +253,8 @@ agent_think() {
 # Runs a LangGraph tool (a module under migite/tools/, e.g. migite.tools.plan)
 # and blocks until it exits.
 # All output (stdout + stderr) is teed to a timestamped log file.
-# In tmux: opens a new pane (split below); keeps it open on failure so you can read the error.
+# In tmux: opens a new pane (split below migite's own pane, in migite's window);
+# keeps it open on failure so you can read the error.
 # Outside tmux: runs inline, output streams to the terminal.
 spawn_langgraph() {
   local label="$1"
@@ -262,7 +276,7 @@ spawn_langgraph() {
     local channel="migite-${TIMESTAMP}-${suffix}"
     local wrapper="$LOG_DIR/$TIMESTAMP-wrapper-${suffix}.sh"
     local orig_pane
-    orig_pane=$(tmux display-message -p '#{pane_id}')
+    orig_pane=$(migite_pane)
     {
       echo "#!/usr/bin/env bash"
       # tmux panes inherit the tmux SERVER's environment, not this shell's —
@@ -291,7 +305,7 @@ spawn_langgraph() {
     tmux wait-for "$channel" &
     local _wait_pid=$!
     local agent_pane
-    agent_pane=$(tmux split-window -P -F '#{pane_id}' -v "bash '$wrapper'")
+    agent_pane=$(tmux split-window -P -F '#{pane_id}' -v -t "$orig_pane" "bash '$wrapper'")
     while kill -0 "$_wait_pid" 2>/dev/null; do
       if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -q "^${agent_pane}$"; then
         kill "$_wait_pid" 2>/dev/null || true

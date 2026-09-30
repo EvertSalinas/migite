@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# tests/fake-tmux - stand-in for `tmux` in tests. Put its directory first on PATH
+# under the name `tmux`. Appends each call's argv to $FAKE_TMUX_LOG and answers
+# the few commands run_phase / spawn_langgraph / migite_pane use:
+#   display-message -p -t %N  → %N, except a pane listed in $FAKE_TMUX_GONE, which
+#                              prints nothing and exits 0 (what tmux 3.x does)
+#   display-message -p        → $FAKE_TMUX_FOCUSED (the pane with focus)
+#   split-window -P ...       → %50, the new pane
+#   list-panes                → %50, so the new pane counts as open
+#   wait-for, select-pane     → succeed at once
+set -u
+[[ -n "${FAKE_TMUX_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  display-message)
+    target=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in -t) target="$2"; shift 2 ;; *) shift ;; esac
+    done
+    if [[ -z "$target" ]]; then echo "${FAKE_TMUX_FOCUSED:-%1}"
+    elif [[ " ${FAKE_TMUX_GONE:-} " == *" $target "* ]]; then :
+    else echo "$target"
+    fi ;;
+  split-window) echo "%50" ;;
+  list-panes)   echo "%50" ;;
+  *) : ;;
+esac
+exit 0

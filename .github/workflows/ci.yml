@@ -44,8 +44,8 @@ jobs:
       # until the existing style findings have been triaged.
       - name: shellcheck (errors)
         run: |
-          shellcheck -S error -s bash bin/* lib/*.sh lib/phases/*.sh tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode tests/fake-kimi
+          shellcheck -S error -s bash bin/* lib/*.sh lib/phases/*.sh tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode tests/fake-kimi tests/fake-tmux
       - name: shellcheck (warnings, informational)
         continue-on-error: true
         run: |
-          shellcheck -S warning -s bash bin/* lib/*.sh lib/phases/*.sh tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode tests/fake-kimi
+          shellcheck -S warning -s bash bin/* lib/*.sh lib/phases/*.sh tests/run.sh tests/*_test.sh tests/fake-claude tests/fake-cursor-agent tests/fake-opencode tests/fake-kimi tests/fake-tmux
