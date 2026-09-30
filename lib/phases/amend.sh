@@ -103,13 +103,20 @@ run_amend_mode() {
   AMEND_NUM=$(next_amend_num "$SCRATCHPAD_DIR" "$TASK_DIR")
 
   # Every earlier run's implementation notes, oldest first, and the latest
-  # review. Read before set_run_paths creates this run's (empty) folder.
-  local PRIOR_NOTES="" _notes_f _run
+  # review. Read before set_run_paths creates this run's (empty) folder. A run
+  # plan.md already reflects contributes its summary.md instead of its full notes:
+  # its design is in the plan, and the summary keeps what changed and why.
+  local PRIOR_NOTES="" _notes_f _run _folded _notes_src
+  _folded=" $(plan_folded_runs "$SCRATCHPAD_DIR/plan.md" | tr '\n' ' ') "
   while IFS= read -r _notes_f; do
     _run=$(basename "$(dirname "$_notes_f")")
+    _notes_src="$_notes_f"
+    if [[ "$_folded" == *" $_run "* ]]; then
+      _notes_src=$(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" summary.md | grep -F "/$_run/" || echo "$_notes_f")
+    fi
     PRIOR_NOTES="${PRIOR_NOTES}
-### ${_run}/implementation.md
-$(cat "$_notes_f")
+### ${_run}/$(basename "$_notes_src")
+$(cat "$_notes_src")
 "
   done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" implementation.md)
   local LAST_REVIEW_FILE
@@ -129,8 +136,9 @@ $(cat "$_amend_f")
   local AMENDMENT_VAULT="$RUN_VAULT_DIR/amendment.md"
   log "Run folder: $RUN_SLUG"
 
+  # --stat plus the diff capped at ui.prompt_diff_max_bytes (prompt_diff, lib/stack.sh).
   local AMEND_DIFF
-  AMEND_DIFF=$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
+  AMEND_DIFF=$(prompt_diff "$BASE_BRANCH")
 
   local AMEND_PROMPT="You are scoping a post-implementation amendment for an already-planned and already-built task. Read the current plan, what was actually implemented, the last review, the current diff, and repo knowledge, then write a SCOPED DELTA, not a new plan.
 
@@ -177,11 +185,28 @@ Output ONLY this document — no preamble, no meta-commentary."
   sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
   success "Amendment written to $AMENDMENT_FILE"
 
-  # Regenerates testing-plan.md in full (not appended) so it always reflects current,
-  # post-amendment behaviour instead of drifting from what plan.md originally described.
-  # Written to a tmp file first — a failed/empty call must never truncate the last-good copy.
+  # Brings testing-plan.md in line with the post-amendment behaviour. Exact edits
+  # first (edit_document): a few hundred output tokens instead of re-emitting a
+  # 35-60 KB document. When no usable edit comes back, or there's no testing plan
+  # yet, it is regenerated in full as before. Written to a tmp file first: a
+  # failed/empty call must never truncate the last-good copy.
   _regen_testing_plan() {
     log "Updating testing plan for amendment $AMEND_NUM..."
+    if [[ -s "$TESTING_PLAN_FILE" ]]; then
+      local amend_diff_file
+      amend_diff_file=$(mktemp)
+      printf '%s\n' "$AMEND_DIFF" > "$amend_diff_file"
+      if edit_document "$TESTING_PLAN_FILE" testing_plan "Editing testing plan for amendment $AMEND_NUM" \
+           "testing-plan.md" "The engineer just approved the amendment below. Edit the testing plan so its seed data, verification steps, expected results and teardown test the behaviour as it will be after this amendment, and nothing the code no longer does. Keep its structure: Prerequisites, Verification steps, Teardown." \
+           "Amendment just approved=$AMENDMENT_FILE" "Current diff against $BASE_BRANCH=$amend_diff_file"; then
+        rm -f "$amend_diff_file"
+        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        success "Testing plan updated for amendment $AMEND_NUM"
+        return 0
+      fi
+      rm -f "$amend_diff_file"
+      warn "No usable testing-plan edits; regenerating it in full"
+    fi
     local testing_plan_prompt
     testing_plan_prompt="You are updating the QA/dev testing plan for a task after a post-implementation amendment. The testing plan must describe how to verify the CURRENT, post-amendment behaviour — not the original plan.
 

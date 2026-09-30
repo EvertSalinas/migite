@@ -27,37 +27,21 @@ to apply --out.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
 from pathlib import Path
 
 from migite import config
+from migite import doc_edits
 from migite import gateway
 
 HISTORY_HEADING = "## Revision history"
 RUN_SLUG_RE = re.compile(r"^[0-9][0-9]+-(build|amend-[a-z0-9-]+)$")
 
-FOLD_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "revision": {"type": "string", "description": "one sentence: what changed in the plan"},
-        "edits": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "find": {"type": "string", "description": "a passage copied verbatim from the plan, unique in it"},
-                    "replace": {"type": "string", "description": "the corrected passage"},
-                    "why": {"type": "string"},
-                },
-                "required": ["find", "replace"],
-            },
-        },
-    },
-    "required": ["revision", "edits"],
-}
+# The edit contract is shared with every other exact-edit update (migite.doc_edits).
+FOLD_SCHEMA = doc_edits.EDIT_SCHEMA
+parse_reply = doc_edits.parse_reply
 
 
 # ── Pure helpers ─────────────────────────────────────────────────────────────
@@ -93,47 +77,11 @@ def add_revision(plan: str, line: str) -> str:
 
 
 def apply_edits(plan: str, edits: list[dict]) -> tuple[str, list[dict], list[dict]]:
-    """Apply each edit to the plan body (never the revision history), in order.
-    An edit applies only when its `find` text appears exactly once in the body
-    as it stands at that point. Returns (plan, applied, rejected)."""
+    """doc_edits.apply_edits on the plan body only: the revision history, the record
+    of which runs the plan reflects, is never editable by the model."""
     body, history = split_history(plan)
-    applied, rejected = [], []
-    for e in edits:
-        find = e.get("find") if isinstance(e, dict) else None
-        replace = e.get("replace") if isinstance(e, dict) else None
-        entry = {"find": (find or "")[:120], "why": (e.get("why") or "") if isinstance(e, dict) else ""}
-        if not isinstance(find, str) or not isinstance(replace, str) or not find.strip():
-            rejected.append({**entry, "reason": "malformed edit"})
-            continue
-        count = body.count(find)
-        if count == 0:
-            rejected.append({**entry, "reason": "text not found in the plan"})
-        elif count > 1:
-            rejected.append({**entry, "reason": f"text appears {count} times in the plan"})
-        elif find == replace:
-            rejected.append({**entry, "reason": "no change"})
-        else:
-            body = body.replace(find, replace, 1)
-            applied.append(entry)
+    body, applied, rejected = doc_edits.apply_edits(body, edits)
     return body + history, applied, rejected
-
-
-def parse_reply(text: str, structured: object = None) -> dict | None:
-    """The fold reply as {"revision": str, "edits": list}, from structured output
-    when the backend honoured the schema, else the first JSON object in the text
-    (code fences allowed). None when there is nothing usable."""
-    obj = structured if isinstance(structured, dict) else None
-    if obj is None and text:
-        stripped = re.sub(r"^```(?:json)?\s*|\s*```\s*$", "", text.strip())
-        start, end = stripped.find("{"), stripped.rfind("}")
-        if start != -1 and end > start:
-            try:
-                obj = json.loads(stripped[start:end + 1])
-            except json.JSONDecodeError:
-                obj = None
-    if not isinstance(obj, dict) or not isinstance(obj.get("edits", []), list):
-        return None
-    return {"revision": str(obj.get("revision") or ""), "edits": obj.get("edits") or []}
 
 
 def build_prompt(plan: str, run_slug: str, *, amendment: str = "", implementation: str = "",

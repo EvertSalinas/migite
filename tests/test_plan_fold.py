@@ -54,14 +54,14 @@ class EditsTest(unittest.TestCase):
         self.assertEqual(new, plan)
         self.assertEqual(applied, [])
         self.assertEqual([r["reason"] for r in rejected],
-                         ["text not found in the plan", "text appears 2 times in the plan",
+                         ["text not found in the document", "text appears 2 times in the document",
                           "malformed edit", "no change", "malformed edit"])
 
     def test_the_revision_history_can_never_be_edited(self):
         plan = plan_fold.add_revision(PLAN, "- 2026-09-02 `01-amend-x`: Delay is 15 seconds.")
         new, applied, rejected = plan_fold.apply_edits(plan, [{"find": "Delay is 15 seconds.", "replace": "gone"}])
         self.assertEqual(new, plan)
-        self.assertEqual(rejected[0]["reason"], "text not found in the plan")
+        self.assertEqual(rejected[0]["reason"], "text not found in the document")
 
     def test_edits_apply_in_order_against_the_updated_text(self):
         new, applied, _ = plan_fold.apply_edits(PLAN, [

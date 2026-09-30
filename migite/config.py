@@ -114,11 +114,18 @@ DEFAULTS: dict[str, Any] = {
         "interactive": "auto",               # run_phase sessions (implement, fix, PR description)
         "heal": "auto",                      # the auto-heal loop's headless fixes
         "headless": "none",                  # plan/review/knowledge/... (MIGITE_PERMISSION_MODE); none = no flag
+        # isolated = each headless role gets only the tools ROLE_TOOLS names and none of the
+        # CLI's MCP servers, plugins, hooks or skills (CLAUDE.md is passed explicitly);
+        # default = every headless call runs with the CLI's full toolset and context.
+        "headless_tools": "isolated",
     },
     "heal": {
         "max_attempts": 3,                   # MAX_HEAL_ATTEMPTS
         "full_suite_fallback": True,         # Phase 3: run the full rspec suite when no spec files changed
         "prompt_log_max_bytes": 60000,       # per-log cap on the rubocop/rspec excerpts in a heal prompt
+    },
+    "knowledge": {
+        "inject_max_bytes": 8000,            # newest knowledge.md entries put into plan/implement/fix/amend prompts
     },
     "prompts": {
         "dir": None,                         # per-project overrides for prompts/<name>.md (relative to repo root)
@@ -128,6 +135,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "budget": {
         "max_usd_per_run": None,             # soft cap: warn at every gate once the ledger passes it
+        "review_call_max_usd": 2.0,          # hard cap on one read-only reviewer call (--max-budget-usd)
         "print_summary": True,               # print the usage table at exit
     },
     "ui": {
@@ -135,6 +143,7 @@ DEFAULTS: dict[str, Any] = {
         "notify": "auto",                    # auto | off
         "editor": None,                      # EDITOR; None = vim
         "prompt_inline_max": 100000,         # MIGITE_PROMPT_INLINE_MAX
+        "prompt_diff_max_bytes": 30000,      # cap on a branch diff embedded in a prompt (amend, testing plan)
     },
 }
 
@@ -175,6 +184,22 @@ ROLE_TIERS: dict[str, str] = {
     "pr_verdict": "strong",
 }
 
+# What each headless role may use when permissions.headless_tools is `isolated`:
+#   none    - no tools; the prompt carries everything (the default for every role not listed)
+#   read    - Read, Grep and Glob only, capped at budget.review_call_max_usd per call
+#   default - the CLI's normal toolset and context: heal edits files, and jira's
+#             scoped MCP tools need the CLI's MCP servers
+ROLE_TOOLS: dict[str, str] = {
+    "review_correctness": "read", "review_security": "read",
+    "review_test_coverage": "read", "review_testing_plan": "read",
+    "pr_review_correctness": "read", "pr_review_security": "read",
+    "pr_review_test_coverage": "read", "pr_review_conventions_and_migrations": "read",
+    "audit_area": "read",
+    "heal": "default",
+    "jira": "default",
+}
+READ_TOOLS = ("Read", "Grep", "Glob")
+
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "none")
 
 
@@ -212,6 +237,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "permissions.interactive": PERMISSION_WORDS,
     "permissions.heal": PERMISSION_WORDS,
     "permissions.headless": PERMISSION_WORDS,
+    "permissions.headless_tools": ("isolated", "default"),
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
 }
@@ -219,10 +245,11 @@ ENUMS: dict[str, tuple[str, ...]] = {
 INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds",
             "models.timeouts.fast", "models.timeouts.standard", "models.timeouts.strong",
             "gates.plan.warn_after_rejections",
-            "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max")
+            "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max",
+            "ui.prompt_diff_max_bytes", "knowledge.inject_max_bytes")
 BOOL_KEYS = ("gates.commit.require_clean_lint", "gates.commit.require_green_specs",
              "heal.full_suite_fallback", "budget.print_summary")
-FLOAT_KEYS = ("budget.max_usd_per_run",)
+FLOAT_KEYS = ("budget.max_usd_per_run", "budget.review_call_max_usd")
 
 STARTER_TEMPLATE = """\
 # .migite.yml — per-repo migite configuration.
@@ -285,11 +312,16 @@ permissions:                 # auto | edits | plan | ask | none  (Claude Code's 
   interactive: auto          # implement / fix / PR-description sessions
   heal: auto                 # auto-heal loop
   headless: none             # plan, review, knowledge, ... (none = pass no permission flag)
+  headless_tools: isolated   # isolated: each headless role gets only the tools it needs, no MCP/plugins/hooks;
+                             # default: every headless call gets the CLI's full toolset and context
 
 heal:
   max_attempts: 3
   full_suite_fallback: true  # Phase 3 runs the whole rspec suite when no spec files changed; false = skip
   prompt_log_max_bytes: 60000  # per-log cap on the rubocop/rspec excerpts embedded in a heal prompt
+
+knowledge:
+  inject_max_bytes: 8000     # newest knowledge.md entries put into plan/implement/fix/amend prompts
 
 # prompts:
 #   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md
@@ -300,6 +332,7 @@ heal:
 
 budget:
   # max_usd_per_run: 5.00    # soft cap: every gate banner warns once the run's headless spend passes it
+  review_call_max_usd: 2.0   # hard cap on one read-only reviewer call
   print_summary: true
 
 ui:
@@ -307,6 +340,7 @@ ui:
   notify: auto               # auto | off
   # editor: nvim             # EDITOR
   prompt_inline_max: 100000  # MIGITE_PROMPT_INLINE_MAX
+  prompt_diff_max_bytes: 30000  # cap on a branch diff embedded in a prompt; the full diff goes to the logs dir
 """
 # The example model ids in the template come from the default agent's own table.
 for _tier in agents.TIERS:

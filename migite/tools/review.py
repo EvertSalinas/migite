@@ -11,6 +11,8 @@
 #                 --repo-root <dir> --review-output <file> --sentinel <file>
 
 import argparse
+import hashlib
+import json
 import operator
 import os
 import re
@@ -116,6 +118,43 @@ def amendments_block(amendments: list[str], limit: int) -> str:
             f"the amendment wins)\n{body}\n")
 
 
+CARRIED_NOTE = "(not re-run: clean in the previous review, and nothing it checks was flagged)"
+
+
+def has_findings(body: str) -> bool:
+    """A dimension's output reports something (any severity) or its reviewer failed."""
+    return any(mark in body for mark in ("🔴", "🟡", "🟢")) or "reviewer failed" in body
+
+
+def dims_to_rerun(previous: dict, testing_plan: str) -> list[str]:
+    """After a fix round, the dimensions worth re-running: correctness always, every
+    dimension whose last output had findings (or failed, or is missing), and the
+    testing-plan dimension when the testing plan changed since. The rest carry their
+    clean result over. `previous` is review-dimensions.json from the last review."""
+    last = previous.get("dimensions") or {}
+    rerun = []
+    for dim, _ in REVIEW_DIMENSIONS:
+        body = last.get(dim)
+        if dim == "correctness" or body is None or has_findings(body):
+            rerun.append(dim)
+        elif dim == "testing_plan" and previous.get("testing_plan_sha") != _sha(testing_plan):
+            rerun.append(dim)
+    return rerun
+
+
+def carried_findings(previous: dict, rerun: list[str]) -> list[str]:
+    """The findings blocks for the dimensions not re-run, from the last review,
+    marked as carried over. The note goes on once, however many rounds a
+    dimension is carried."""
+    last = previous.get("dimensions") or {}
+    return [f"### {d}\n{CARRIED_NOTE}\n{last[d].replace(CARRIED_NOTE, '').strip()}"
+            for d, _ in REVIEW_DIMENSIONS if d not in rerun and d in last]
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha1(text.encode()).hexdigest()
+
+
 # ── Agent call ───────────────────────────────────────────────────────────────────
 
 def call_agent(prompt: str, role: str, label: str = "", schema: dict | None = None) -> gateway.CallResult:
@@ -164,6 +203,7 @@ class ReviewState(TypedDict):
     findings: Annotated[list[str], operator.add]
     verdict: str
     review_meta: dict   # structured fields for review.json, set by synthesize_verdict
+    rerun: list[str]    # dimensions to review this pass; the others were carried over
 
 
 class DimensionInput(TypedDict):
@@ -187,14 +227,17 @@ def load_inputs(state: ReviewState) -> dict:
             f"git diff {shlex.quote(state['base_branch'])}",
             shell=True, capture_output=True, text=True,
             cwd=state["repo_root"], timeout=30,
-        ).stdout[:14000]
+        ).stdout[:10000]   # what review_dimension uses; reviewers can open files for more
     except Exception:
         diff = "(could not get git diff)"
     return {"git_diff": diff}
 
 
 def route_to_reviewers(state: ReviewState) -> list[Send]:
-    print(f"  ▶ Fanning out {len(REVIEW_DIMENSIONS)} specialist reviewers in parallel", flush=True)
+    rerun = state.get("rerun") or [d for d, _ in REVIEW_DIMENSIONS]
+    carried = [d for d, _ in REVIEW_DIMENSIONS if d not in rerun]
+    print(f"  ▶ Fanning out {len(rerun)} specialist reviewer(s) in parallel"
+          + (f" ({', '.join(carried)} clean last time, carried over)" if carried else ""), flush=True)
     return [
         Send("review_dimension", {
             "dimension": dim,
@@ -207,7 +250,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
             "testing_plan": state["testing_plan"],
             "amendments": state["amendments"],
         })
-        for dim, desc in REVIEW_DIMENSIONS
+        for dim, desc in REVIEW_DIMENSIONS if dim in rerun
     ]
 
 
@@ -244,12 +287,21 @@ Review for **{dim}** only. List each finding with severity:
 - 🟢 **Note** — low severity, worth being aware of
 
 If nothing found, output exactly: ✅ No issues in this dimension.
-Do not repeat findings that other dimensions would cover."""
+Do not repeat findings that other dimensions would cover.
+
+You have read-only tools (Read, Grep, Glob) on the repository, and nothing else. Everything above is
+usually enough: open a file only to check what the diff can't show, such as a caller, a model's
+validations, or a spec the diff doesn't include. Each file you open costs time and tokens."""
 
     try:
         result = call_agent(prompt, f"review_{dim}", label=f"review:{dim}").text
     except Exception as e:
-        result = f"🔴 **Critical** — reviewer failed: {e}"
+        if "max-budget-usd" in str(e):
+            # A runaway reviewer, not a defect in the code: say so, without blocking the gate.
+            result = (f"🟡 **Warning**: the {dim} reviewer stopped at its budget cap "
+                      f"(budget.review_call_max_usd) before finishing; re-run the review, or raise the cap: {e}")
+        else:
+            result = f"🔴 **Critical** — reviewer failed: {e}"
     return {"findings": [f"### {dim}\n{result}"]}
 
 
@@ -360,6 +412,12 @@ def write_review(state: ReviewState) -> dict:
     }
     json_path = review_path.with_name("review.json")
     gateway.write_json(json_path, envelope)
+    # Each dimension's own output, for a later re-review to carry clean ones over.
+    gateway.write_json(review_path.with_name("review-dimensions.json"), {
+        "dimensions": {head.lstrip("# ").strip(): body.strip() for head, _, body in
+                       (block.partition("\n") for block in state["findings"])},
+        "testing_plan_sha": _sha(state["testing_plan"]),
+    })
     print(f"    ✔ review.json → {json_path}  (verdict={envelope['verdict']}, "
           f"{counts['critical']}🔴 {counts['warning']}🟡 {counts['note']}🟢, source={envelope['source']})", flush=True)
 
@@ -400,6 +458,8 @@ def main() -> None:
     ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
     ap.add_argument("--amendment",       action="append", default=[],
                     help="Path to an amendment-NN.md; repeat for each, oldest first (optional)")
+    ap.add_argument("--previous",        default="",
+                    help="review-dimensions.json from the last review: re-run only what dims_to_rerun picks (optional)")
     args = ap.parse_args()
 
     global REVIEW_CMD_PATH
@@ -432,6 +492,17 @@ def main() -> None:
     amendments     = [read_or_empty(a) for a in args.amendment]
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
+    rerun = [d for d, _ in REVIEW_DIMENSIONS]
+    carried: list[str] = []
+    previous_path = Path(args.previous) if args.previous else None
+    if previous_path and previous_path.is_file():
+        try:
+            previous = json.loads(previous_path.read_text())
+        except ValueError:
+            previous = {}
+        rerun = dims_to_rerun(previous, testing_plan)
+        carried = carried_findings(previous, rerun)
+
     dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d, _ in REVIEW_DIMENSIONS)
     print(f"\n  migite-review | {dims}  verdict={gateway.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
 
@@ -450,9 +521,10 @@ def main() -> None:
             "review_output": args.review_output,
             "sentinel": args.sentinel,
             "review_cmd": review_cmd,
-            "findings": [],
+            "findings": carried,
             "verdict": "",
             "review_meta": {},
+            "rerun": rerun,
         })
         print("\n  ✔ migite-review complete", flush=True)
     except Exception as e:

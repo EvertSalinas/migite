@@ -65,7 +65,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 | Key | Action |
 |-----|--------|
 | `y` | Approve the plan and continue |
-| `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier), shows a colored diff of what changed, then re-opens the gate |
+| `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier) that returns exact edits rather than a rewritten plan (`migite/doc_edits.py`; a full rewrite is the fallback when no usable edit comes back), shows a colored diff of what changed, then re-opens the gate |
 | `e` | Edit — opens `plan.md` directly in `$EDITOR` (default: vim) with zero latency |
 | `n` | Reject — re-runs the full `migite-plan` agent from scratch (fresh exploration + synthesis + critic), shows a colored diff after |
 | `q` | Abort the workflow |
@@ -152,6 +152,11 @@ Tooling failures — Ruby version unset, a git-sourced gem not checked out, rspe
 `tooling_failed <log>` helper wherever a rubocop/rspec log is inspected (Phase 3, the commit-gate
 re-checks, and the banner). When it fires, `TOOLING_ERROR` carries the message into the banner.
 
+**Specs aren't run twice on the same code.** Auto-heal records a fingerprint of the tree each time
+it runs rspec (`tree_fingerprint`: the diff plus every untracked file, minus `scratchpad/`). When
+Phase 3's rubocop sweep changes nothing and the fingerprint still matches, Phase 3 reuses heal's
+rspec results instead of running the same specs again.
+
 **Phase 3's full-suite fallback is configurable.** By default (`heal.full_suite_fallback: true`)
 Phase 3 and the commit-gate re-checks still run the whole rspec suite when no spec files changed —
 the pre-config behaviour. Set it to `false` in `.migite.yml` to make Phase 3 consistent with Phase
@@ -189,7 +194,11 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 | `n` | Manual fix — migite pauses and waits for you to press Enter when ready, then re-runs checks and re-review |
 | `q` | Abort the workflow |
 
-Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-run the full review afterwards through the same helper — there's no cap on how many times you can loop through this.
+Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-review afterwards through the same helper, and there's no cap on how many times you can loop through this.
+
+A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs all four. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
+
+The reviewers run with read-only tools (`Read`, `Grep`, `Glob`), no MCP servers or plugins, and a per-call cost cap (`budget.review_call_max_usd`); see [`permissions.headless_tools`](./configuration.md#permissions).
 
 **What `y` may approve over is a config choice** (`gates.commit.policy`, see
 [docs/configuration.md](./configuration.md#gates)). With the default `lenient`, `y` approves on
@@ -267,7 +276,7 @@ goes on without one.
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement
 
-A background headless pass (the `improve` role, standard tier) reviews the full run and appends 0–3 actionable observations to `docs/improvements.md` in this repo. Observations must be grounded in what happened during the run - no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs - a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt - since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to the standard tier as well.
+A background headless pass (the `improve` role, standard tier) reviews the full run and appends 0–3 actionable observations to `docs/improvements.md` in this repo. Observations must be grounded in what happened during the run - no generic suggestions. It gets a function index of the migite script (file, line and name of every function), never the full source, and the rubocop and rspec logs capped at 8 KB each. The full source used to go in on every run with a gate rejection, commit-gate loop or heal attempt, which was most runs: about 180 KB of prompt for 0–3 bullets. Phase 3.5's knowledge extraction is pinned to the standard tier as well.
 
 ---
 

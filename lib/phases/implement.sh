@@ -171,9 +171,24 @@ run_auto_heal_loop() {
     return 0
   }
 
+  # HEAL_RSPEC_FINGERPRINT / HEAL_RSPEC_LOG_PATH: the tree heal's latest rspec run
+  # saw, and its log. run_review reuses that log instead of running the same specs
+  # on the same code again. Only set when there were specs to run.
+  # SC2034: read by run_review in lib/phases/review.sh; shellcheck lints one file at a time.
+  # shellcheck disable=SC2034
+  HEAL_RSPEC_FINGERPRINT=""
+  HEAL_RSPEC_LOG_PATH=""
+  # shellcheck disable=SC2034  # globals read by run_review (lib/phases/review.sh)
+  _heal_record_rspec_run() {
+    [[ -n "$HEAL_CHANGED_SPECS" ]] || return 0
+    HEAL_RSPEC_FINGERPRINT=$(tree_fingerprint "$BASE_BRANCH")
+    HEAL_RSPEC_LOG_PATH="$HEAL_RSPEC_LOG"
+  }
+
   local RUBOCOP_REMAINING=false
   _heal_autofix_rubocop
   run_rspec_check "$HEAL_CHANGED_SPECS" "$HEAL_RSPEC_LOG" || true
+  _heal_record_rspec_run
 
   while [[ $HEAL_ATTEMPT -lt $MAX_HEAL_ATTEMPTS ]]; do
     local RSPEC_STILL_FAILING=false
@@ -222,6 +237,7 @@ Fix all failures above. Do not run rubocop yourself — migite already runs \`ru
     _heal_autofix_rubocop
     HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
     run_rspec_check "$HEAL_CHANGED_SPECS" "$HEAL_RSPEC_LOG" || true
+    _heal_record_rspec_run
   done
 
   if [[ $HEAL_ATTEMPT -eq 0 ]]; then

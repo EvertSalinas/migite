@@ -168,24 +168,12 @@ EOF
     success "Created improvements file: $IMPROVEMENTS_FILE"
   fi
 
-  # The full bash source (~110 KB) is only worth sending when the run was
-  # eventful — a plan rejected, a commit-gate loop, or a heal attempt — because
-  # that's when there's a concrete script behaviour to point at. A quiet run
-  # gets a function index instead, which is enough to name the right helper.
-  local RUN_EVENTFUL=false
-  if [[ "${PLAN_GATE_ATTEMPTS:-1}" -gt 1 || "${COMMIT_GATE_ATTEMPTS:-0}" -gt 0 || "${HEAL_ATTEMPT:-0}" -gt 0 ]]; then
-    RUN_EVENTFUL=true
-  fi
+  # A function index, never the full source: the source (~180 KB) went in on every
+  # "eventful" run, which is most runs, for 0-3 bullets back. The index is enough
+  # to name the right helper; the logs are capped the same way.
   local SCRIPT_BLOCK
-  if [[ "$RUN_EVENTFUL" == "true" ]]; then
-    SCRIPT_BLOCK="## Current migite script (entrypoint + sourced files under lib/ and lib/phases/)
-$(cat "$MIGITE_HOME/bin/migite")
-
-$(for f in "$MIGITE_HOME"/lib/*.sh "$MIGITE_HOME"/lib/phases/*.sh; do echo "### ${f#"$MIGITE_HOME"/}"; cat "$f"; echo; done)"
-  else
-    SCRIPT_BLOCK="## migite script — function index (full source omitted: this run had no gate rejections or heal attempts)
+  SCRIPT_BLOCK="## migite script: function index (file, line number and function name)
 $(for f in "$MIGITE_HOME"/bin/migite "$MIGITE_HOME"/lib/*.sh "$MIGITE_HOME"/lib/phases/*.sh; do echo "### ${f#"$MIGITE_HOME"/}"; grep -nE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) *\{' "$f" | sed 's/() *{.*//'; echo; done)"
-  fi
 
   local IMPROVEMENTS_PROMPT="You are reviewing a completed migite workflow run to identify specific, actionable improvements to the migite script itself.
 
@@ -198,11 +186,11 @@ $(for f in "$MIGITE_HOME"/bin/migite "$MIGITE_HOME"/lib/*.sh "$MIGITE_HOME"/lib/
 - Commit gate attempts: $COMMIT_GATE_ATTEMPTS
 - Auto-heal attempts: ${HEAL_ATTEMPT:-0}
 
-## Rubocop results
-$(cat "$RUBOCOP_LOG")
+## Rubocop results (first and last parts when long)
+$(truncate_log "$RUBOCOP_LOG" 8000 2>/dev/null || true)
 
-## Rspec results
-$(cat "$RSPEC_LOG")
+## Rspec results (first and last parts when long)
+$(truncate_log "$RSPEC_LOG" 8000 2>/dev/null || true)
 
 ## Implementation notes
 $(cat "$IMPLEMENTATION_FILE")

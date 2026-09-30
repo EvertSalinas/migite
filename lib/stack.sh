@@ -293,6 +293,38 @@ truncate_log() {
   tail -c "$tail_bytes" "$file"
 }
 
+# tree_fingerprint <base> - one hash of everything a check run sees: the diff
+# against <base> plus the name and content of every untracked file, leaving out
+# migite's own scratchpad/. Equal fingerprints mean the same code, so a check
+# that already ran on it (heal's last rspec) needn't run again.
+tree_fingerprint() {
+  local base="$1" f
+  {
+    git diff "$base" -- . ':(exclude)scratchpad' 2>/dev/null || true
+    while IFS= read -r -d '' f; do
+      printf '%s %s\n' "$f" "$(git hash-object -- "$f" 2>/dev/null)"
+    done < <(git ls-files --others --exclude-standard -z -- . ':(exclude)scratchpad' 2>/dev/null)
+  } | git hash-object --stdin
+}
+
+# prompt_diff <base> - the branch's diff for a prompt: `git diff --stat` for the
+# whole change, then the diff itself, cut to ui.prompt_diff_max_bytes by
+# truncate_log. The full diff is saved under $LOG_DIR, where the cut's marker
+# points. Untracked files are left out, as in `git diff <base>`. An uncapped diff
+# made the amend and testing-plan prompts grow with every change on the branch.
+prompt_diff() {
+  local base="$1" full
+  full=$(mktemp "${LOG_DIR:-/tmp}/${TIMESTAMP:-diff}-diff-XXXXXX")
+  git diff "$base" > "$full" 2>/dev/null || true
+  if [[ ! -s "$full" ]]; then
+    echo "(no diff available)"
+    return 0
+  fi
+  git diff --stat "$base" 2>/dev/null | tail -60 || true
+  echo ""
+  truncate_log "$full" "$(cfg ui.prompt_diff_max_bytes 30000)"
+}
+
 # compact_rspec_log <file> <max_bytes> — truncate_log's rspec-aware sibling:
 # over budget, identical failures merge into one block each (a mass failure is
 # a handful of distinct errors repeated) and backtraces are trimmed to the

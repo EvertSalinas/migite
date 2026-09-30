@@ -76,6 +76,18 @@ class ReviewPromptsIncludeAmendmentsTest(unittest.TestCase):
         self.tool.review_dimension(self.dimension_state([]))
         self.assertNotIn("## Amendments", self.prompts[0])
 
+    def test_a_reviewer_stopped_by_its_budget_is_a_warning_not_a_blocker(self):
+        def over_budget(prompt, role, label="", schema=None):
+            raise self.tool.gateway.AgentError("claude failed (exit 0, 90.0s): stopped at the --max-budget-usd cap ($2.01 spent)")
+        self.tool.call_agent = over_budget
+        finding = self.tool.review_dimension(self.dimension_state([]))["findings"][0]
+        self.assertIn("🟡 **Warning**", finding)
+        self.assertNotIn("🔴", finding)
+
+    def test_the_reviewer_is_told_its_tools_are_read_only(self):
+        self.tool.review_dimension(self.dimension_state([]))
+        self.assertIn("read-only tools (Read, Grep, Glob)", self.prompts[0])
+
     def test_correctness_criteria_do_not_count_superseded_plan_text_as_a_finding(self):
         criteria = dict(self.tool.REVIEW_DIMENSIONS)["correctness"]
         self.assertIn("amendment supersedes the plan", criteria)

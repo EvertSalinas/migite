@@ -62,6 +62,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `implementation.md` | Notes from this run's implementation session |
 | `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
 | `review.md` | Code review verdict and findings |
+| `review-dimensions.json` | Each review dimension's own findings, so a re-review can carry clean dimensions over instead of running them again |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
 | `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary); never fed back into a prompt |
@@ -144,7 +145,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 
 The QA/dev verification steps (seed script, curls or browser actions, teardown) live in their own `testing-plan.md`, not inside `plan.md`. This is deliberate: `plan.md` is only updated at the end of a run, through edits you approve, while the testing plan is regenerated whenever behaviour changes (every amendment and fix round) and describes how to verify the code **as it exists right now**. Kept inside `plan.md`, its steps would lag until the run's plan update, or be lost if you declined it.
 
-`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan. Every `--amend` run regenerates it **in full** (not appended) from the current testing plan + the new amendment + the diff, so a step an amendment invalidates gets rewritten or dropped instead of lingering. `migite-review`'s `testing_plan` specialist reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
+`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan. Every `--amend` run and every commit-gate fix round then updates it with exact edits (`migite/doc_edits.py`): steps the change invalidates are rewritten or dropped, new behaviour gets new steps, and everything else stays as it was. That costs a few thousand output tokens instead of re-emitting the whole document. When no usable edit comes back, it is regenerated in full from the current testing plan, the change and the diff, as before. `migite-review`'s `testing_plan` specialist reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
 
 Required shape:
 

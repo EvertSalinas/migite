@@ -245,6 +245,34 @@ agent_think() {
   return $exit_code
 }
 
+# edit_document <file> <role> <label> <name> <task> [<Heading>=<path>...] - change
+# <file> in place with exact find/replace edits (migite.doc_edits) instead of a full
+# rewrite: a few hundred output tokens instead of the whole document. Each
+# Heading=path adds that file to the prompt as context. Returns 0 when <file> is up
+# to date (edited, or nothing needed to change), and non-zero, leaving <file> as it
+# was, when no usable edit came back or the call failed: the caller falls back to
+# its full rewrite. Expects MIGITE_PYTHON and REPO_ROOT.
+edit_document() {
+  local file="$1" role="$2" label="$3" name="$4" task="$5"
+  shift 5
+  local out report ctx rc=0
+  out=$(mktemp)
+  report=$(mktemp)
+  local -a doc_args=(--doc "$file" --out "$out" --report "$report" --role "$role"
+                     --label "$label" --name "$name" --task "$task")
+  for ctx in "$@"; do
+    doc_args+=(--context "$ctx")
+  done
+  "$MIGITE_PYTHON" -m migite.doc_edits update --repo-root "${REPO_ROOT:-$PWD}" "${doc_args[@]}" || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    mv "$out" "$file"
+  else
+    rm -f "$out"
+  fi
+  rm -f "$report"
+  return "$rc"
+}
+
 # spawn_langgraph <label> <channel-suffix> <module> [args...]
 # Runs a LangGraph tool (a module under migite/tools/, e.g. migite.tools.plan)
 # and blocks until it exits.

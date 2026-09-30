@@ -422,22 +422,34 @@ run_plan() {
         cp "$PLAN_FILE" "$_refine_prev"
         local _refine_tmp
         _refine_tmp=$(mktemp)
-        printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
-          "$(cat "$PLAN_FILE")" "$_plan_feedback" \
-          | agent_ask "plan-refine" plan_refine \
-          > "$_refine_tmp" 2>/dev/null || true
-        if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
+        cp "$PLAN_FILE" "$_refine_tmp"
+        # Exact edits first (edit_document): feedback usually touches a few passages,
+        # and re-emitting the whole plan to change them is the slowest call in the gate.
+        if edit_document "$_refine_tmp" plan_refine "plan-refine:edits" "plan.md" \
+             "The engineer reviewed this plan at the approval gate and asked for this change: ${_plan_feedback}. Edit the plan to make it."; then
           mv "$_refine_tmp" "$PLAN_FILE"
           sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
           _show_plan_diff "$_refine_prev"
           success "Plan refined — review again"
         else
-          if [[ -s "$_refine_tmp" ]]; then
-            warn "Refinement didn't look like a revised plan (structure changed too much) — plan unchanged"
+          warn "No usable plan edits; revising the whole plan instead"
+          printf 'Here is the current development plan:\n\n%s\n\nThe engineer has this feedback:\n%s\n\nRevise the plan to address the feedback. Keep the same structure and format. Output only the revised plan document — no preamble.' \
+            "$(cat "$PLAN_FILE")" "$_plan_feedback" \
+            | agent_ask "plan-refine" plan_refine \
+            > "$_refine_tmp" 2>/dev/null || true
+          if [[ -s "$_refine_tmp" ]] && _plan_heading_overlap_ok "$_refine_prev" "$_refine_tmp"; then
+            mv "$_refine_tmp" "$PLAN_FILE"
+            sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
+            _show_plan_diff "$_refine_prev"
+            success "Plan refined — review again"
           else
-            warn "Refinement returned empty — plan unchanged"
+            if [[ -s "$_refine_tmp" ]]; then
+              warn "Refinement didn't look like a revised plan (structure changed too much) — plan unchanged"
+            else
+              warn "Refinement returned empty — plan unchanged"
+            fi
+            rm -f "$_refine_tmp" "$_refine_prev"
           fi
-          rm -f "$_refine_tmp" "$_refine_prev"
         fi
         show_critic
         ;;
