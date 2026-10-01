@@ -4,13 +4,15 @@
 #
 # Sourced by migite. run_amend_mode expects BRANCH, ORG, REPO_NAME, DEV_LOG_BASE,
 # REPO_ROOT, JIRA_TICKET, AMEND_FEEDBACK, AMEND_FEEDBACK_FILE, DATE to be set,
-# and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, PLAN_FILE, PLAN_VAULT,
-# IMPLEMENTATION_FILE, IMPLEMENTATION_VAULT, REVIEW_FILE, REVIEW_VAULT,
-# TESTING_PLAN_FILE, TESTING_PLAN_VAULT, AMEND_NUM, AMENDMENT_FILE,
-# PLAN_GATE_ATTEMPTS for the phases that run after it. PLAN_FILE/IMPLEMENTATION_FILE/
-# REVIEW_FILE/TESTING_PLAN_FILE live in the scratchpad; resume_from_vault pulls them
-# back in from the vault mirror if the scratchpad copy is missing (e.g. amending an
-# older task on a fresh clone or after the branch's scratchpad was cleaned).
+# and sets TASK_SLUG, TASK_DIR, SCRATCHPAD_DIR, INTAKE_FILE, AMEND_NUM,
+# AMENDMENT_FILE, PLAN_GATE_ATTEMPTS and the set_run_paths variables for this
+# amendment's own run folder, NN-amend-<slug>/ (RUN_SLUG, RUN_SCRATCH_DIR,
+# RUN_VAULT_DIR, PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE, TESTING_PLAN_FILE
+# and their _VAULT siblings) for the phases that run after it. The scratchpad is
+# the source of truth; plan.md and testing-plan.md are pulled back from the vault
+# mirror if the scratchpad copy is missing (e.g. amending an older task on a fresh
+# clone or after the branch's scratchpad was cleaned), and earlier runs are read
+# from whichever of the two still has them.
 
 run_amend_mode() {
   log "Amend mode — locating task to amend"
@@ -61,23 +63,16 @@ run_amend_mode() {
   TASK_DIR="$REPO_VAULT_DIR/$TASK_SLUG"
   SCRATCHPAD_DIR="$REPO_ROOT/scratchpad/$TASK_SLUG"
   mkdir -p "$SCRATCHPAD_DIR"
-  INTAKE_FILE="$SCRATCHPAD_DIR/intake.md"
-  PLAN_FILE="$SCRATCHPAD_DIR/plan.md"
-  PLAN_VAULT="$TASK_DIR/plan.md"
-  IMPLEMENTATION_FILE="$SCRATCHPAD_DIR/implementation.md"
-  IMPLEMENTATION_VAULT="$TASK_DIR/implementation.md"
-  REVIEW_FILE="$SCRATCHPAD_DIR/review.md"
-  REVIEW_VAULT="$TASK_DIR/review.md"
-  TESTING_PLAN_FILE="$SCRATCHPAD_DIR/testing-plan.md"
-  TESTING_PLAN_VAULT="$TASK_DIR/testing-plan.md"
+  migrate_task_if_flat "$SCRATCHPAD_DIR" "$TASK_DIR"
+  INTAKE_FILE="$SCRATCHPAD_DIR/$BUILD_RUN_SLUG/intake.md"
+  mkdir -p "$(dirname "$INTAKE_FILE")"
+  resume_from_vault "$INTAKE_FILE" "$TASK_DIR/$BUILD_RUN_SLUG/intake.md"
+  # The current-state documents; the run folder itself is created once the
+  # feedback, which names it, is in.
+  resume_from_vault "$SCRATCHPAD_DIR/plan.md" "$TASK_DIR/plan.md"
+  resume_from_vault "$SCRATCHPAD_DIR/testing-plan.md" "$TASK_DIR/testing-plan.md"
 
-  resume_from_vault "$INTAKE_FILE" "$TASK_DIR/intake.md"
-  resume_from_vault "$PLAN_FILE" "$PLAN_VAULT"
-  resume_from_vault "$IMPLEMENTATION_FILE" "$IMPLEMENTATION_VAULT"
-  resume_from_vault "$REVIEW_FILE" "$REVIEW_VAULT"
-  resume_from_vault "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
-
-  [[ -f "$PLAN_FILE" ]] || error "No plan.md found in $TASK_DIR — amend requires an already-planned task"
+  [[ -f "$SCRATCHPAD_DIR/plan.md" ]] || error "No plan.md found in $TASK_DIR — amend requires an already-planned task"
 
   log "Amending: $TASK_DIR"
   log "Scratchpad: $SCRATCHPAD_DIR"
@@ -102,28 +97,59 @@ run_amend_mode() {
   fi
   [[ -n "$(echo "$AMEND_FEEDBACK_TEXT" | tr -d '[:space:]')" ]] || error "No amendment feedback provided"
 
-  # Next amendment number — plan.md is never overwritten, amendments accumulate beside it
-  # Checks both scratchpad and vault so a scratchpad that's missing older amendments
-  # (cleaned, fresh clone) can't reuse a number already taken in vault history.
-  local AMEND_LAST
-  AMEND_LAST=$(find "$TASK_DIR" "$SCRATCHPAD_DIR" -maxdepth 1 -name 'amendment-*.md' 2>/dev/null | sed -E 's/.*amendment-([0-9]+)\.md/\1/' | sort -n | tail -1)
-  AMEND_NUM=$(printf '%02d' "$(( ${AMEND_LAST:-0} + 1 ))")
-  AMENDMENT_FILE="$SCRATCHPAD_DIR/amendment-${AMEND_NUM}.md"
-  local AMENDMENT_VAULT="$TASK_DIR/amendment-${AMEND_NUM}.md"
+  # Next amendment number: one past the highest run folder in the scratchpad or
+  # the vault, so a scratchpad missing older runs (cleaned, fresh clone) can't
+  # reuse a number already taken in vault history. plan.md is never overwritten.
+  AMEND_NUM=$(next_amend_num "$SCRATCHPAD_DIR" "$TASK_DIR")
 
+  # Every earlier run's implementation notes, oldest first, and the latest
+  # review. Read before set_run_paths creates this run's (empty) folder. A run
+  # plan.md already reflects contributes its summary.md instead of its full notes:
+  # its design is in the plan, and the summary keeps what changed and why.
+  local PRIOR_NOTES="" _notes_f _run _folded _notes_src
+  _folded=" $(plan_folded_runs "$SCRATCHPAD_DIR/plan.md" | tr '\n' ' ') "
+  while IFS= read -r _notes_f; do
+    _run=$(basename "$(dirname "$_notes_f")")
+    _notes_src="$_notes_f"
+    if [[ "$_folded" == *" $_run "* ]]; then
+      _notes_src=$(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" summary.md | grep -F "/$_run/" || echo "$_notes_f")
+    fi
+    PRIOR_NOTES="${PRIOR_NOTES}
+### ${_run}/$(basename "$_notes_src")
+$(cat "$_notes_src")
+"
+  done < <(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" implementation.md)
+  local LAST_REVIEW_FILE
+  LAST_REVIEW_FILE=$(task_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" review.md | tail -1)
+  # Earlier amendments plan.md doesn't reflect yet (a skipped or failed fold, or a
+  # task from before the living plan). Folded ones are already in the plan.
+  local UNFOLDED_AMENDMENTS="" _amend_f
+  while IFS= read -r _amend_f; do
+    [[ -n "$_amend_f" ]] || continue
+    UNFOLDED_AMENDMENTS="${UNFOLDED_AMENDMENTS}
+$(cat "$_amend_f")
+"
+  done < <(unfolded_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md "$SCRATCHPAD_DIR/plan.md")
+
+  set_run_paths "$(amend_run_slug "$AMEND_NUM" "$AMEND_FEEDBACK_TEXT")"
+  AMENDMENT_FILE="$RUN_SCRATCH_DIR/amendment.md"
+  local AMENDMENT_VAULT="$RUN_VAULT_DIR/amendment.md"
+  log "Run folder: $RUN_SLUG"
+
+  # --stat plus the diff capped at ui.prompt_diff_max_bytes (prompt_diff, lib/stack.sh).
   local AMEND_DIFF
-  AMEND_DIFF=$(git diff "$BASE_BRANCH" 2>/dev/null || echo "(no diff available)")
+  AMEND_DIFF=$(prompt_diff "$BASE_BRANCH")
 
-  local AMEND_PROMPT="You are scoping a post-implementation amendment for an already-planned and already-built task. Read the original plan, what was actually implemented, the last review, the current diff, and repo knowledge, then write a SCOPED DELTA — not a new plan.
+  local AMEND_PROMPT="You are scoping a post-implementation amendment for an already-planned and already-built task. Read the current plan, what was actually implemented, the last review, the current diff, and repo knowledge, then write a SCOPED DELTA, not a new plan.
 
-## Original plan
+## Current plan (updated at the end of every earlier run)
 $(cat "$PLAN_FILE")
-
-## Implementation notes
-$(cat "$IMPLEMENTATION_FILE" 2>/dev/null || echo '(not yet implemented)')
+$( [[ -n "$UNFOLDED_AMENDMENTS" ]] && printf '\n## Earlier amendments not yet reflected in the plan above\n%s\n' "$UNFOLDED_AMENDMENTS" )
+## Implementation notes (original build first, then each earlier amendment)
+${PRIOR_NOTES:-(not yet implemented)}
 
 ## Last review
-$(cat "$REVIEW_FILE" 2>/dev/null || echo '(no review yet)')
+$( [[ -n "$LAST_REVIEW_FILE" ]] && cat "$LAST_REVIEW_FILE" || echo '(no review yet)')
 
 ## Current diff against $BASE_BRANCH
 $AMEND_DIFF
@@ -159,11 +185,28 @@ Output ONLY this document — no preamble, no meta-commentary."
   sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
   success "Amendment written to $AMENDMENT_FILE"
 
-  # Regenerates testing-plan.md in full (not appended) so it always reflects current,
-  # post-amendment behaviour instead of drifting from what plan.md originally described.
-  # Written to a tmp file first — a failed/empty call must never truncate the last-good copy.
+  # Brings testing-plan.md in line with the post-amendment behaviour. Exact edits
+  # first (edit_document): a few hundred output tokens instead of re-emitting a
+  # 35-60 KB document. When no usable edit comes back, or there's no testing plan
+  # yet, it is regenerated in full as before. Written to a tmp file first: a
+  # failed/empty call must never truncate the last-good copy.
   _regen_testing_plan() {
     log "Updating testing plan for amendment $AMEND_NUM..."
+    if [[ -s "$TESTING_PLAN_FILE" ]]; then
+      local amend_diff_file
+      amend_diff_file=$(mktemp)
+      printf '%s\n' "$AMEND_DIFF" > "$amend_diff_file"
+      if edit_document "$TESTING_PLAN_FILE" testing_plan "Editing testing plan for amendment $AMEND_NUM" \
+           "testing-plan.md" "The engineer just approved the amendment below. Edit the testing plan so its seed data, verification steps, expected results and teardown test the behaviour as it will be after this amendment, and nothing the code no longer does. Keep its structure: Prerequisites, Verification steps, Teardown." \
+           "Amendment just approved=$AMENDMENT_FILE" "Current diff against $BASE_BRANCH=$amend_diff_file"; then
+        rm -f "$amend_diff_file"
+        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        success "Testing plan updated for amendment $AMEND_NUM"
+        return 0
+      fi
+      rm -f "$amend_diff_file"
+      warn "No usable testing-plan edits; regenerating it in full"
+    fi
     local testing_plan_prompt
     testing_plan_prompt="You are updating the QA/dev testing plan for a task after a post-implementation amendment. The testing plan must describe how to verify the CURRENT, post-amendment behaviour — not the original plan.
 

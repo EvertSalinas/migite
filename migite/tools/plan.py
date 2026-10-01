@@ -25,6 +25,8 @@ from langgraph.types import Send
 
 from migite import gateway
 from migite import config
+from migite import doc_edits
+from migite import knowledge as knowledge_lib
 from migite import paths
 
 # ── Models ─────────────────────────────────────────────────────────────────────
@@ -576,6 +578,22 @@ def refine_plan(state: PlanState) -> dict:
         print("  ▶ Refine: no concerns — plan unchanged", flush=True)
         return {"plan_final": state["plan_draft"], "refine_status": "no_concerns"}
     print("  ▶ Refining plan with critic findings", flush=True)
+    # Exact edits first: the findings usually touch a few passages, and re-emitting a
+    # 40-70 KB plan to change them cost ~55k output tokens and ~7 minutes. The full
+    # rewrite below stays as the fallback when no usable edit comes back.
+    try:
+        edited, report = doc_edits.update(
+            state["plan_draft"], name="plan.md", role="think", label="refine_plan:edits", tool="migite-plan",
+            task=("An architecture critic reviewed this plan. Edit the plan so it addresses every finding "
+                  "below, keeping its structure and formatting conventions (### subheadings, tables, `---` "
+                  "between top-level sections)."),
+            context=[("Architecture critic findings", findings)])
+    except gateway.AgentError as e:
+        edited, report = None, {"reason": str(e)[:200]}
+    if edited is not None:
+        doc_edits.print_report(report)
+        return {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed"}
+    print(f"  ⚠ Refine by edits didn't work ({report.get('reason', 'unknown')}); rewriting the plan in full", flush=True)
     prompt = f"""Original plan:
 {state['plan_draft']}
 
@@ -802,7 +820,10 @@ def main() -> None:
     CRITIC_CMD_PATH = cfg.prompt_path("architecture_critic", MIGITE_HOME, args.repo_root)
 
     intake     = Path(args.intake).read_text()
-    knowledge  = Path(args.knowledge).read_text()   if args.knowledge  and Path(args.knowledge).exists()  else ""
+    # Newest entries first, capped: the whole file grows every run (migite/knowledge.py).
+    knowledge  = (knowledge_lib.recent(Path(args.knowledge).read_text(), int(cfg.get("knowledge.inject_max_bytes") or 8000),
+                                       source=args.knowledge)
+                  if args.knowledge and Path(args.knowledge).exists() else "")
     audit      = Path(args.audit).read_text()       if args.audit      and Path(args.audit).exists()      else ""
     blueprint  = Path(args.blueprint).read_text()   if args.blueprint  and Path(args.blueprint).exists()  else ""
     task_file  = Path(args.task_file).read_text()   if args.task_file  and Path(args.task_file).exists()  else ""

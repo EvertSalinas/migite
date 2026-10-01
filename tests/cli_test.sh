@@ -20,6 +20,7 @@ help_ok "migite -h"                 "Task options:"                       bash "
 help_ok "migite help"               "Amend options:"                      bash "$MIGITE_HOME/bin/migite" help
 help_ok "migite config --help"      "migite config --edit --user"         bash "$MIGITE_HOME/bin/migite" config --help
 help_ok "migite doctor --help"      "migite doctor [--repo <path>]"       bash "$MIGITE_HOME/bin/migite" doctor --help
+help_ok "migite migrate-vault --help" "migite migrate-vault [--dry-run]"  bash "$MIGITE_HOME/bin/migite" migrate-vault --help
 help_ok "migite-ticket --help"      "migite-ticket sources"               bash "$MIGITE_HOME/bin/migite-ticket" --help
 help_ok "migite-explore --help"     "--from-exploration <file>"           bash "$MIGITE_HOME/bin/migite-explore" --help
 help_ok "migite-blueprint --help"   "--from-blueprint <file>"             bash "$MIGITE_HOME/bin/migite-blueprint" --help
@@ -85,4 +86,28 @@ out=$(cfg_run "$cli_dir/editor-ok" --edit --bogus 2>&1); rc=$?
 check "migite config --edit: an unknown option is refused" \
   bash -c '[[ "$1" == 1 && "$2" == *"Unknown option for --edit: --bogus"* ]]' _ "$rc" "$out"
 
-unset -f help_ok cfg_run
+# ── migite migrate-vault ─────────────────────────────────────────────────────
+# Outside any repo, isolated HOME, vault.base from DEV_LOG_BASE.
+mv_vault="$cli_dir/vault"
+mkdir -p "$mv_vault/Acme/api/bb-1"
+printf '# BB-1: Export\n' > "$mv_vault/Acme/api/bb-1/plan.md"
+echo "review" > "$mv_vault/Acme/api/bb-1/review.md"
+mv_run() {
+  ( cd "$cli_dir/outside" && HOME="$cli_dir/home-mv" XDG_CONFIG_HOME="$cli_dir/home-mv/.config" \
+      DEV_LOG_BASE="$mv_vault" bash "$MIGITE_HOME/bin/migite" migrate-vault "$@" 2>&1 )
+}
+out=$(mv_run --bogus); rc=$?
+check "migite migrate-vault: an unknown option points at --help" \
+  bash -c '[[ "$1" != 0 && "$2" == *"migite migrate-vault --help"* ]]' _ "$rc" "$out"
+out=$(mv_run --dry-run); rc=$?
+check "migite migrate-vault --dry-run: lists the move and leaves the file in place" \
+  bash -c '[[ "$1" == 0 && "$2" == *"would move review.md -> 00-build/review.md"* ]] && test -f "$3/review.md"' _ "$rc" "$out" "$mv_vault/Acme/api/bb-1"
+out=$(mv_run); rc=$?
+check "migite migrate-vault: moves the task into run folders and writes its index" \
+  bash -c '[[ "$1" == 0 ]] && test -f "$2/00-build/review.md" -a -f "$2/index.md"' _ "$rc" "$mv_vault/Acme/api/bb-1"
+out=$(mv_run); rc=$?
+check "migite migrate-vault: a second run finds nothing to migrate" \
+  bash -c '[[ "$1" == 0 && "$2" == *"Nothing to migrate"* ]]' _ "$rc" "$out"
+
+unset -f help_ok cfg_run mv_run
+unset mv_vault

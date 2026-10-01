@@ -337,7 +337,7 @@ your editor with the title and ticket pre-filled; fill in acceptance criteria an
   ▶ Generating testing plan
   ▶ Writing outputs
     ✔ plan.md → .../scratchpad/bb-1234/plan.md
-    ✔ architecture-critic.md → .../scratchpad/bb-1234/architecture-critic.md
+    ✔ architecture-critic.md → .../scratchpad/bb-1234/00-build/architecture-critic.md
     ✔ testing-plan.md → .../scratchpad/bb-1234/testing-plan.md
     ✔ plan.json → .../scratchpad/bb-1234/plan.json
     ✔ sentinel written
@@ -385,7 +385,7 @@ Phase 1.5 (TDD): Write spec files before implementation? [y/N]: n
 ▶ Phase 2/4 — Implementing
 
   Starting interactive Claude Code session: Implementing
-  Output file: .../scratchpad/bb-1234/implementation.md
+  Output file: .../scratchpad/bb-1234/00-build/implementation.md
   Permission mode: auto
   Type /exit when done to return here
 ```
@@ -418,8 +418,8 @@ structured verdict.
     ◦ test_coverage  (claude-sonnet-5)
     ◦ testing_plan  (claude-sonnet-5)
   ▶ Synthesising verdict from 4 reviews
-    ✔ review.md → .../scratchpad/bb-1234/review.md
-    ✔ review.json → .../scratchpad/bb-1234/review.json  (verdict=needs_fixes, 1🔴 1🟡 2🟢, source=structured)
+    ✔ review.md → .../scratchpad/bb-1234/00-build/review.md
+    ✔ review.json → .../scratchpad/bb-1234/00-build/review.json  (verdict=needs_fixes, 1🔴 1🟡 2🟢, source=structured)
 ```
 
 **The commit gate.** The banner is built from `review.json`, the test logs, and the usage ledger.
@@ -455,8 +455,16 @@ description is an interactive session; the self-improvement pass is silent.
   Claude is thinking: Extracting knowledge
 ✔ Knowledge appended to /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/knowledge.md
 
+▶ Phase 3.8/4 - Updating the plan
+▶ Asking Claude Code for the plan edits this run implies (one headless call)...
+  ✔ 0 plan edit(s) proposed that apply cleanly, 0 dropped
+✔ Plan needed no changes; recorded 00-build in its revision history
+
 ▶ Phase 4/4 — Generating PR description
   Starting interactive session: PR description
+
+▶ Phase 4.2/4 - Writing run summary
+✔ Run summary written to /Users/you/Code/invoices-api/scratchpad/bb-1234/00-build/summary.md
 
 ▶ Phase 4.5/4 — Capturing improvement notes
   Claude is thinking: Self-improvement
@@ -465,13 +473,11 @@ description is an interactive session; the self-improvement pass is silent.
 ✔ Workflow complete.
 
   Scratchpad: /Users/you/Code/invoices-api/scratchpad/bb-1234
-    intake.md          → task intake
-    plan.md            → planning output
-    implementation.md  → implementation notes
-    review.md          → review verdict
-    pr-description.md  → ready to paste into GitHub
-    plan.json / review.json / usage.json → machine-readable envelopes
-  Vault (read-only mirror): /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234
+    plan.md                        → planning output
+    pr-description.md              → ready to paste into GitHub
+    00-build/implementation.md → implementation notes
+    00-build/review.md         → review verdict
+  Vault index: /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234/index.md
 
 ── Usage ───────────────────────────────────────
   Model calls (headless only — interactive sessions not metered)
@@ -494,21 +500,26 @@ Now commit. Migite never ran `git commit`; `pr-description.md` is ready to paste
 ## What it produced
 
 Everything lives in `<repo>/scratchpad/bb-1234/` and is mirrored to the vault after every write.
-The scratchpad is the working copy; the vault is for reading later, in Obsidian or anywhere.
+The scratchpad is the working copy; the vault is for reading later, in Obsidian or anywhere. The
+top level holds the task as it stands now; this run's own files are in `00-build/`, and each later
+`--amend` gets its own `NN-amend-<slug>/` beside it. The vault copy also has an `index.md` linking
+all of it.
 
 | File | What is in it |
 |------|---------------|
-| `intake.md` | The filled-in template. Reused, not re-opened, if you run the same ticket again |
-| `jira-context.md` | The fetched ticket. Cached so redos do not refetch |
 | `plan.md` | Summary, scope grouped by layer, approach, test plan, risks, out of scope, open questions |
-| `architecture-critic.md` | The critic's findings, printed at the gate |
 | `testing-plan.md` | Seed script, verification steps with curl commands, teardown. Regenerated in full on every amendment and fix round |
-| `implementation.md` | Notes Claude wrote at the end of the implement session |
-| `review.md` | The review document, verdict-first |
-| `fix-r1.md` | What Claude changed in the first commit-gate fix round |
 | `pr-description.md` | Filled PR template |
-| `plan.json`, `review.json`, `usage.json` | The machine-readable envelopes, see below |
+| `plan.json` | The plan's machine-readable envelope, see below |
 | `.plan-history/` | A snapshot of `plan.md` before every refine, edit, or redo |
+| `00-build/intake.md` | The filled-in template. Reused, not re-opened, if you run the same ticket again |
+| `00-build/jira-context.md` | The fetched ticket. Cached so redos do not refetch |
+| `00-build/architecture-critic.md` | The critic's findings, printed at the gate |
+| `00-build/implementation.md` | Notes Claude wrote at the end of the implement session |
+| `00-build/review.md` | The review document, verdict-first |
+| `00-build/fix-r1.md` | What Claude changed in the first commit-gate fix round |
+| `00-build/summary.md` | The run in one page: what changed and why, decisions made along the way, fix rounds, follow-ups |
+| `00-build/review.json`, `00-build/usage.json` | The run's machine-readable envelopes, see below |
 
 Two files are per repo, not per task: `knowledge.md` in the vault, injected into every future
 plan, and `docs/improvements.md` in the migite checkout.
@@ -557,8 +568,9 @@ migite --amend "the export must be idempotent on retry — a second call returns
 ▶ Amend mode — locating task to amend
 ▶ Amend target from branch name: bb-1234
 ▶ Amending: /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234
+▶ Run folder: 01-amend-the-export-must-be-idempotent-on
   Claude is thinking: Generating amendment 01
-✔ Amendment written to .../scratchpad/bb-1234/amendment-01.md
+✔ Amendment written to .../scratchpad/bb-1234/01-amend-the-export-must-be-idempotent-on/amendment.md
 ────────────────────────────────────────
   REVIEW GATE: amendment 01
 ────────────────────────────────────────
@@ -568,9 +580,10 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 ```
 
 One model call scoped a delta against the built code instead of ten calls re-planning from
-scratch. `plan.md` is untouched; `amendment-01.md` sits beside it; `testing-plan.md` is
-regenerated in full; then Phases 2 to 4 run as before and the PR description absorbs the
-amendment.
+scratch. The amendment and everything its run writes go in
+`01-amend-the-export-must-be-idempotent-on/`; `testing-plan.md` is regenerated in full; then Phases 2 to 4 run as before. At the end,
+Phase 3.8 proposes the edits that fold the amendment into `plan.md` and shows you the diff, and the
+PR description covers the amended scope.
 
 <a id="next"></a>
 ## Where to go next

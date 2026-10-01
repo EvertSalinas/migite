@@ -18,6 +18,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [permissions](#permissions)
   - [heal](#heal)
   - [frontend](#frontend)
+  - [knowledge](#knowledge)
   - [prompts, templates](#prompts)
   - [budget](#budget)
   - [ui](#ui)
@@ -269,6 +270,8 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `review_frontend` | standard | `migite-review` - Hotwire/Stimulus checklist, only when the diff touches views or JavaScript |
 | `verdict` | strong | `migite-review` — structured verdict synthesis (decides the gate) |
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
+| `plan_fold` | standard | `migite` Phase 3.8, the exact edits that keep `plan.md` current after each run |
+| `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
 | `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
 | `lens` | standard | `migite-explore` lenses |
@@ -339,6 +342,7 @@ permissions:
   interactive: auto          # implement / fix / PR-description sessions (run_phase)
   heal: auto                 # the auto-heal loop's headless fixes
   headless: none             # plan, review, knowledge, amendments, standalone tools
+  headless_tools: isolated   # isolated | default
 ```
 
 Values are migite's own words, which each agent adapter maps onto its CLI's flags:
@@ -356,6 +360,25 @@ neutral words keep working. `headless` applies uniformly to every headless call 
 the `MIGITE_PERMISSION_MODE` env var still works and maps onto it. The Jira fetch always runs
 with `auto` inside the `jira.read` tool scope when it goes through the agent. See [agents.md](./agents.md) for what
 each word becomes on each CLI.
+
+**`headless_tools`** decides what a headless call can use besides its prompt. With `isolated` (the
+default) each role gets only what it needs, from `ROLE_TOOLS` in `migite/config.py`, and none of
+the agent CLI's MCP servers, plugins, hooks or skills:
+
+| Roles | Tools |
+|---|---|
+| `review_*`, `pr_review_*`, `audit_area` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
+| `heal` | the CLI's full toolset (it edits files) |
+| `jira` | the CLI's full context (its scoped tools are MCP tools) |
+| every other role | no tools: the prompt carries everything |
+
+Your `~/.claude/CLAUDE.md` and the repo's `CLAUDE.md` files are still passed to every isolated
+call, so their rules keep applying. Without isolation every call started by writing about 24k
+tokens of CLI context into the cache, and prompts that said "you have no tools" still browsed the
+repo turn after turn: one correctness review read up to 1.4M cached tokens. The usage summary's
+`turns` column shows how many turns each call took. `default` gives every headless call the CLI's
+full toolset and context again. Agents that can't restrict a call (Cursor, Kimi, OpenCode) print a
+one-time notice and run as `default`.
 
 <a id="heal"></a>
 ### `heal`
@@ -390,6 +413,19 @@ Every key here applies only when the diff touches views or JavaScript, so a back
 behaves exactly as before. A bare `on` / `off` is fine in YAML: these keys (and `ui.tmux` /
 `ui.notify`) read the YAML booleans back as the words. How the frontend is detected, and what
 each check does, is in [docs/phases.md](./phases.md#frontend).
+
+<a id="knowledge"></a>
+### `knowledge`
+
+```yaml
+knowledge:
+  inject_max_bytes: 8000      # newest knowledge.md entries put into prompts
+```
+
+`knowledge.md` gains an entry every run. The plan, implement, fix and amend prompts get its
+newest entries first, up to this many bytes, with a note naming the file for the rest. They used
+to get the whole file, and the planner's explorers got its first 800 characters, which were the
+header and the oldest lessons.
 
 <a id="prompts"></a>
 ### `prompts`, `templates`
@@ -433,10 +469,16 @@ team's own PR template belongs in an override like the one above.
 budget:
   max_usd_per_run: 5.00       # soft cap; unset = no cap
   print_summary: true         # print the usage table at exit
+  review_call_max_usd: 2.0    # hard cap on one read-only reviewer call
 ```
 
-The cap is **soft**: once the run's usage ledger passes it, every gate banner shows a red
+The run cap is **soft**: once the run's usage ledger passes it, every gate banner shows a red
 over-budget line. Nothing is aborted mid-graph. Interactive sessions aren't metered.
+
+`review_call_max_usd` is a **hard** cap on each read-only reviewer call (`--max-budget-usd`), a
+guard against a reviewer that keeps opening files. A reviewer that hits it is reported as a
+warning in the review, not a critical finding, so it doesn't block the gate; re-run the review or
+raise the cap.
 
 <a id="ui"></a>
 ### `ui`
@@ -447,7 +489,12 @@ ui:
   notify: auto                # auto | off
   editor: nvim                # EDITOR
   prompt_inline_max: 100000   # MIGITE_PROMPT_INLINE_MAX
+  prompt_diff_max_bytes: 30000  # cap on a branch diff embedded in a prompt
 ```
+
+`prompt_diff_max_bytes` bounds the branch diff in the amend and testing-plan prompts. They get
+`git diff --stat` for the whole change, then the diff cut to this size (its start and end), with
+the full diff saved under `logs.dir` for reference.
 
 ---
 

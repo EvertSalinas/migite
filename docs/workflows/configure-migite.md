@@ -173,10 +173,10 @@ migite config --path [--user]         # which file --edit would open
 
 ## Read what a run cost
 
-Every run ends with a usage table and writes `usage.json` beside the task:
+Every run ends with a usage table and writes `usage.json` in the run's folder:
 
 ```bash
-cat scratchpad/bb-1234/usage.json
+cat scratchpad/bb-1234/00-build/usage.json      # an --amend run: scratchpad/bb-1234/01-amend-<slug>/usage.json
 ```
 
 Compare a few runs before and after a model or effort change; the cost of each role is in the

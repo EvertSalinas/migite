@@ -89,7 +89,7 @@ agent:
 
 ```bash
 migite --jira BB-1234                             # Claude Code
-cp scratchpad/bb-1234/usage.json /tmp/usage-claude.json
+cp scratchpad/bb-1234/00-build/usage.json /tmp/usage-claude.json
 MIGITE_AGENT=opencode migite --jira BB-1234       # answer r at "Use existing plan or redo?"
 ```
 
