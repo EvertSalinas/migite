@@ -51,6 +51,10 @@
 <!-- Which files, models, or services do you think are involved?
      Even a rough guess helps. Leave blank if unknown. -->
 
+**Frontend:** <!-- yes | no | unknown -->
+<!-- Does the bug show in the browser (a view, Turbo Frame/Stream or Stimulus controller)?
+     no = backend only, views and JavaScript aren't explored; unknown = migite decides from the repo -->
+
 **Research needed:** <!-- yes | no -->
 <!-- If yes: what do you need to understand before you can fix it? -->
 

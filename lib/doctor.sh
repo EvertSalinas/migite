@@ -22,7 +22,8 @@ Usage:
   migite doctor [--repo <path>]
 
 Checks the stack detection, the agent CLI and its version, where --jira gets tickets,
-git and Python, bundle (rails stack), the configuration, the four phase prompts,
+git and Python, bundle (rails stack), the frontend linters and system-spec driver
+(rails stack), the configuration, the four phase prompts,
 scratchpad and vault drift, orphaned sentinels, and duplicate knowledge entries.
 It changes nothing, and exits 1 when it finds an issue.
 
@@ -97,6 +98,33 @@ run_doctor() {
     else
       echo "✘ Tool does not resolve: bundle (required for the rails stack)"
       issues=$((issues + 1))
+    fi
+  fi
+
+  # ── Frontend tooling (rails stack) ─────────────────────────────────────────
+  # What Phase 2.5/3 will do with a diff that touches views or JavaScript: which
+  # linters run (frontend_lint_tools), and whether system specs have a driver.
+  # Informational, except an eslint config with no installed eslint, which makes
+  # every frontend lint a tooling error.
+  if [[ "$STACK" == "rails" ]]; then
+    local doc_fe_tools
+    doc_fe_tools="$(frontend_lint_tools)"
+    if [[ -n "$doc_fe_tools" ]]; then
+      echo "ℹ Frontend linters: $doc_fe_tools"
+    else
+      echo "ℹ Frontend linters: none configured (erb_lint, eslint) - changed views and JavaScript are reviewed, not linted"
+    fi
+    if [[ " $doc_fe_tools " == *" eslint "* && ! -x "$APP_ROOT/node_modules/.bin/eslint" ]]; then
+      echo "✘ eslint is configured but not installed (node_modules/.bin/eslint is missing) - run npm/yarn/pnpm install"
+      issues=$((issues + 1))
+    fi
+    if [[ -d "$APP_ROOT/spec/system" ]]; then
+      local doc_driver="" doc_gem doc_system_specs
+      for doc_gem in cuprite selenium-webdriver capybara-playwright-driver; do
+        grep -qE "^    $doc_gem \(" "$APP_ROOT/Gemfile.lock" 2>/dev/null && doc_driver="${doc_driver:+$doc_driver, }$doc_gem"
+      done
+      doc_system_specs="$("$MIGITE_PYTHON" -m migite.config --repo-root "$REPO_ROOT" get frontend.system_specs 2>/dev/null || echo on)"
+      echo "ℹ System specs: spec/system present (driver: ${doc_driver:-none found in Gemfile.lock}; frontend.system_specs: $doc_system_specs)"
     fi
   fi
 

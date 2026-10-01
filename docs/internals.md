@@ -3,6 +3,11 @@
 Repository layout, the two agent scripts `migite` calls directly, and the machine-readable
 envelopes. For the phase-by-phase behaviour see [migite.md](./migite.md).
 
+For the same material with diagrams (call paths, one headless call as a sequence, the planner and
+reviewer graphs, the commit gate as a loop, and a full-run trace), see the
+[illustrated overview](https://claude.ai/artifact/C99RWj4ChoUqzLMKYh3Lfo). It is hosted on claude.ai and needs shared access; it was current
+as of 2026-09-24, and this file wins where the two differ.
+
 ## Contents
 
 - [Repository layout](#layout)

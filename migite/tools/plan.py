@@ -71,6 +71,21 @@ GENERIC_EXPLORE_AREAS = [
     ("source", [f"**/*.{ext}" for ext in _GENERIC_SOURCE_EXTENSIONS]),
 ]
 
+# The Hotwire half of a Rails app: views, ViewComponents, helpers, Stimulus
+# controllers and the importmap. An eighth explorer, added only when the task
+# may touch the frontend (frontend_decision below), so a backend-only task, or
+# an API-only repo, doesn't pay for it.
+FRONTEND_EXPLORE_AREA = ("views_frontend", [
+    "app/views/**/*.erb", "app/components/**/*.rb", "app/components/**/*.erb",
+    "app/helpers/**/*.rb", "app/javascript/**/*.js", "app/javascript/**/*.ts",
+    "config/importmap.rb",
+])
+# Gems that mean the app renders its own UI, not just JSON.
+FRONTEND_GEMS = ("turbo-rails", "stimulus-rails", "view_component")
+
+# Code-fence language per file extension for the excerpts explorers read.
+FENCE_LANG = {".rb": "ruby", ".erb": "erb", ".js": "javascript", ".ts": "typescript", ".py": "python"}
+
 # Directory components excluded from every glob's file listing — vendored/
 # build-artifact trees that would otherwise dominate a generic repo's
 # unscoped "**/*.<ext>" glob (Rails' EXPLORE_AREAS patterns are already
@@ -166,6 +181,41 @@ def discover_vendored_gems(repo_root: str) -> list[str]:
         return []
     text = gemfile.read_text(errors="replace")
     return re.findall(r'^\s*gem\s+["\']([\w-]+)["\']', text, re.MULTILINE)
+
+
+def intake_frontend(intake: str) -> str:
+    """The intake's `**Frontend:**` answer: "yes", "no", or "" when the line is
+    absent, blank, still the template's comment, or "unknown"."""
+    m = re.search(r"^\*\*Frontend:\*\*(.*)$", intake, re.MULTILINE)
+    if not m:
+        return ""
+    answer = re.sub(r"<!--.*?-->", "", m.group(1)).strip().lower()
+    word = answer.split()[0].strip(".,;:-") if answer else ""
+    return word if word in ("yes", "no") else ""
+
+
+def repo_has_frontend(repo_root: str) -> bool:
+    """True when the Rails app renders a UI worth exploring: an app/javascript
+    dir, an importmap, or a frontend gem (FRONTEND_GEMS) in the Gemfile.
+    app/views alone isn't enough - API-only apps still have mailer templates."""
+    root = Path(repo_root)
+    if (root / "app" / "javascript").is_dir() or (root / "config" / "importmap.rb").is_file():
+        return True
+    return any(gem in FRONTEND_GEMS for gem in discover_vendored_gems(repo_root))
+
+
+def frontend_decision(intake: str, repo_root: str, stack: str) -> tuple[bool, str]:
+    """(explore the frontend?, why). The intake's `**Frontend:**` answer wins
+    both ways; with no answer, the repo decides (repo_has_frontend). The
+    generic stack already globs every source file, JavaScript included."""
+    if stack == "generic":
+        return False, "generic stack"
+    answer = intake_frontend(intake)
+    if answer:
+        return answer == "yes", f"intake says {answer}"
+    if repo_has_frontend(repo_root):
+        return True, "detected in repo"
+    return False, "no frontend detected"
 
 
 def read_vendored_gem_methods(repo_root: str, gem_name: str) -> str:
@@ -286,7 +336,7 @@ def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: 
             except Exception:
                 continue
         rel = f.replace(f"{repo_root}/", "")
-        chunk = f"\n### {rel}\n```ruby\n{content}\n```"
+        chunk = f"\n### {rel}\n```{FENCE_LANG.get(Path(rel).suffix, '')}\n{content}\n```"
         if total + len(chunk) > 14000:
             break
         parts.append(chunk)
@@ -310,6 +360,8 @@ class PlanState(TypedDict):
     base_branch: str
     task_type: str
     stack: str
+    frontend: bool          # explore views/JS and plan for them (frontend_decision)
+    frontend_source: str    # why: "intake says yes", "detected in repo", ...
     plan_output: str
     critic_output: str
     testing_plan_output: str
@@ -343,7 +395,9 @@ def load_context(state: PlanState) -> dict:
 
 
 def route_to_explorers(state: PlanState) -> list[Send]:
-    areas = GENERIC_EXPLORE_AREAS if state.get("stack") == "generic" else EXPLORE_AREAS
+    areas = GENERIC_EXPLORE_AREAS if state.get("stack") == "generic" else list(EXPLORE_AREAS)
+    if state.get("frontend"):
+        areas.append(FRONTEND_EXPLORE_AREA)
     print(f"  ▶ Fanning out {len(areas)} explorers in parallel (stack={state.get('stack', 'rails')})", flush=True)
     return [
         Send("explore", {
@@ -423,7 +477,7 @@ def synthesize_plan(state: PlanState) -> dict:
     prompt = f"""## Task intake
 {state['intake']}
 
-{task_file_block}{jira_block}## Repository knowledge
+{task_file_block}{jira_block}{frontend_block(state)}## Repository knowledge
 {state['knowledge'] or '(none)'}
 
 {blueprint_block}{audit_block}## Codebase exploration
@@ -472,6 +526,30 @@ Write the complete development plan. Output only the plan document — no preamb
             )
 
     return {"plan_draft": draft, "synth_retries": retries}
+
+
+def frontend_block(state: PlanState) -> str:
+    """Planning guidance for the frontend half, from frontend_decision: plan the
+    Hotwire layers when they're in play, and flag a backend-only intake whose
+    acceptance criteria turn out to need UI work rather than silently adding it."""
+    if state.get("frontend"):
+        return (
+            f"## Frontend ({state.get('frontend_source', '')})\n"
+            "This task may touch the frontend; the views_frontend exploration covers views, "
+            "components, helpers and Stimulus/Turbo code. If the task changes UI, list those files "
+            "in Scope under their own `###` subsection, and in the Test plan include request specs "
+            "that assert on turbo_stream responses and a system spec for each new interactive flow "
+            "when the repo already has spec/system. If it turns out to be backend-only, say so and "
+            "plan no view or JavaScript changes.\n\n"
+        )
+    if state.get("frontend_source") == "intake says no":
+        return (
+            "## Frontend (intake says no)\n"
+            "The intake marks this task backend-only, so views and JavaScript were not explored. "
+            "Plan no view or JavaScript changes; if the acceptance criteria can't be met without "
+            "them, raise that under Open questions instead of planning them blind.\n\n"
+        )
+    return ""
 
 
 def run_architecture_critic(state: PlanState) -> dict:
@@ -550,6 +628,14 @@ Output only the revised plan document."""
 
 def generate_testing_plan(state: PlanState) -> dict:
     print("  ▶ Generating testing plan", flush=True)
+    frontend_steps = (
+        "\n<This plan touches the frontend: for every UI step give the page path on the local dev "
+        "server, the exact action (click, fill, submit), and what should change on the page, "
+        "including whether Turbo should update it in place without a full page reload. Add a step "
+        "to check the browser console for JavaScript errors. These steps are written so a person, "
+        "or an agent driving a browser, can follow them literally.>"
+        if state.get("frontend") else ""
+    )
     prompt = f"""You are writing a standalone QA/dev verification document for the implementation
 plan below — the concrete steps a human runs by hand, after the code is built, to confirm it
 actually works. This document lives on its own (not inside the plan) precisely so it can be
@@ -572,7 +658,7 @@ Use only generic emails (test.user@example.com, admin.qa@example.com) — never 
 ### Verification steps
 <numbered steps — curl commands or browser/UI actions that exercise this plan's scope. Cover the
 happy path and the key error/edge cases called out in the plan. Include at least one step naming
-a log line to `grep` for as evidence the code path actually ran.>
+a log line to `grep` for as evidence the code path actually ran.>{frontend_steps}
 
 ### Teardown
 ```ruby
@@ -622,6 +708,10 @@ def write_outputs(state: PlanState) -> dict:
         "base_branch": state["base_branch"],
         "stack": state.get("stack", ""),
         "task_type": state.get("task_type", ""),
+        "frontend": {
+            "explored": bool(state.get("frontend")),
+            "source": state.get("frontend_source", ""),
+        },
         "critic": {
             "clean": "No architectural concerns" in critic,
             **critic_counts,
@@ -720,8 +810,11 @@ def main() -> None:
     plan_cmd   = read_prompt(PLAN_CMD_PATH)
     critic_cmd = read_prompt(CRITIC_CMD_PATH)
     base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
+    frontend, frontend_source = frontend_decision(intake, args.repo_root, args.stack)
 
     print(f"  migite-plan | base branch: {base_branch}", flush=True)
+    if args.stack != "generic":
+        print(f"  migite-plan | frontend: {'explored' if frontend else 'skipped'} ({frontend_source})", flush=True)
     if audit:
         print(f"  migite-plan | audit context loaded ({len(audit)} chars)", flush=True)
     if blueprint:
@@ -747,6 +840,8 @@ def main() -> None:
             "base_branch": base_branch,
             "task_type":  args.task_type,
             "stack":      args.stack,
+            "frontend":   frontend,
+            "frontend_source": frontend_source,
             "plan_output":   args.plan_output,
             "critic_output": args.critic_output,
             "testing_plan_output": args.testing_plan_output,

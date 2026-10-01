@@ -53,3 +53,47 @@ check "changed_all_files: excludes migite's own scratchpad/" \
   not bash -c "printf '%s' \"\$1\" | grep -q '^scratchpad/'" _ "$got_all"
 check "changed_all_files: excludes a working-tree delete" \
   not bash -c "printf '%s' \"\$1\" | grep -qx 'lib/baz.rb'" _ "$got_all"
+
+# ── Frontend files, and a diff with no Ruby at all ──────────────────────────
+# A frontend-only diff (views + Stimulus, no .rb, no specs) used to abort the
+# whole run: grep found nothing, exited 1, and set -euo pipefail killed
+# `X=$(changed_spec_files ...)` in the heal loop.
+fe_repo=$(make_fixture_repo)
+mkdir -p "$fe_repo/app/views/items" "$fe_repo/app/javascript/controllers" "$fe_repo/vendor/javascript" \
+  "$fe_repo/app/assets/builds" "$fe_repo/spec/system" "$fe_repo/spec/models"
+echo '# readme' > "$fe_repo/README.md"
+git -C "$fe_repo" add README.md
+git -C "$fe_repo" commit -q -m init
+echo '<%= turbo_frame_tag "items" %>' > "$fe_repo/app/views/items/index.html.erb"
+echo 'export default class extends Controller {}' > "$fe_repo/app/javascript/controllers/modal_controller.js"
+echo '// pinned' > "$fe_repo/vendor/javascript/stimulus.js"
+echo '// built' > "$fe_repo/app/assets/builds/application.js"
+echo 'export default []' > "$fe_repo/eslint.config.js"
+
+got_fe=$(cd "$fe_repo" && changed_frontend_files main)
+check "changed_frontend_files: includes a changed view template" \
+  bash -c "printf '%s' \"\$1\" | grep -qx 'app/views/items/index.html.erb'" _ "$got_fe"
+check "changed_frontend_files: includes a new Stimulus controller" \
+  bash -c "printf '%s' \"\$1\" | grep -qx 'app/javascript/controllers/modal_controller.js'" _ "$got_fe"
+check "changed_frontend_files: excludes vendored and built JavaScript" \
+  not bash -c "printf '%s' \"\$1\" | grep -qE 'vendor/|assets/builds/'" _ "$got_fe"
+check "changed_frontend_files: a root JS config file is tooling, not frontend" \
+  not bash -c "printf '%s' \"\$1\" | grep -qx 'eslint.config.js'" _ "$got_fe"
+
+check "changed_ruby_files: a diff with no .rb files survives set -euo pipefail" \
+  bash -c 'set -euo pipefail; source "$1/lib/config.sh"; source "$1/lib/stack.sh"; cd "$2"; x=$(changed_ruby_files main); y=$(changed_spec_files main); test -z "$x$y"' \
+  _ "$REPO_ROOT" "$fe_repo"
+check "changed_frontend_files: a backend-only diff survives set -euo pipefail" \
+  bash -c 'set -euo pipefail; source "$1/lib/config.sh"; source "$1/lib/stack.sh"; cd "$2"; x=$(changed_frontend_files main); test -z "$x"' \
+  _ "$REPO_ROOT" "$repo"
+
+echo 'describe "items", type: :system do; end' > "$fe_repo/spec/system/items_spec.rb"
+echo 'describe Item do; end' > "$fe_repo/spec/models/item_spec.rb"
+got_specs_on=$(cd "$fe_repo" && changed_spec_files main)
+got_specs_off=$(cd "$fe_repo" && MIGITE_CFG_FRONTEND_SYSTEM_SPECS=off changed_spec_files main)
+check "changed_spec_files: system specs run by default (frontend.system_specs: on)" \
+  bash -c "printf '%s' \"\$1\" | grep -qx 'spec/system/items_spec.rb'" _ "$got_specs_on"
+check "changed_spec_files: frontend.system_specs: off drops spec/system" \
+  not bash -c "printf '%s' \"\$1\" | grep -q 'spec/system/'" _ "$got_specs_off"
+check "changed_spec_files: frontend.system_specs: off keeps every other spec" \
+  bash -c "printf '%s' \"\$1\" | grep -qx 'spec/models/item_spec.rb'" _ "$got_specs_off"

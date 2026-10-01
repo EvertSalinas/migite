@@ -6,7 +6,11 @@
 # REVIEW_FILE, REVIEW_VAULT, REPO_ROOT, SCRATCHPAD_DIR, TASK_SLUG, MIGITE_HOME, STACK to be
 # set, and sets CHANGED_RUBY, RUBOCOP_LOG, RSPEC_LOG, RUBOCOP_FINAL_OFFENSES,
 # TOOLING_ERROR, COMMIT_GATE_ATTEMPTS — all read later by Phase 4.5's
-# self-improvement prompt and by show_commit_context.
+# self-improvement prompt and by show_commit_context. Also sets
+# CHANGED_FRONTEND, FRONTEND_LINT_LOG and FRONTEND_LINT_DIRTY: when the diff
+# touches views or JavaScript (changed_frontend_files), the frontend linters
+# run, migite-review adds its frontend reviewer, and the optional browser check
+# (frontend.browser_check, run_browser_check below) can run before the review.
 #
 # Changed-file lists come from lib/stack.sh's changed_*_files (tracked union
 # untracked) — never an inline `git diff | grep`, which is how untracked new
@@ -18,6 +22,79 @@
 # and in the commit-gate re-run loop; the LangGraph review still runs against
 # the plan + diff, just without tooling logs.
 
+# run_browser_check - Phase 3.1, opt-in via frontend.browser_check (off | ask |
+# on). Only when the diff touches the frontend and a testing plan exists: an
+# interactive session in which the agent walks the testing plan's browser steps
+# with whatever browser tool it has (a Playwright MCP server, a Chrome
+# extension) and writes a PASS / FAIL / SKIPPED report that migite-review's
+# frontend reviewer reads. Nothing here is committed; it's evidence for the
+# review. An agent with no browser tool reports SKIPPED rather than guessing.
+# A report left by an earlier run of this task is reused - delete
+# browser-check.md to run it again.
+run_browser_check() {
+  local mode
+  mode="$(cfg frontend.browser_check off)"
+  [[ "$mode" == "off" || -z "${CHANGED_FRONTEND:-}" ]] && return 0
+  if [[ ! -f "$TESTING_PLAN_FILE" ]]; then
+    warn "frontend.browser_check is $mode but there is no testing-plan.md to follow - skipping the browser check"
+    return 0
+  fi
+  local vault_file="$TASK_DIR/browser-check.md"
+  resume_from_vault "$BROWSER_CHECK_FILE" "$vault_file"
+  if [[ -s "$BROWSER_CHECK_FILE" ]]; then
+    log "Reusing $BROWSER_CHECK_FILE (delete it to run the browser check again)"
+    return 0
+  fi
+  if [[ "$mode" == "ask" ]]; then
+    read_gate_choice "BROWSER CHECK" "Views or JavaScript changed. Walk the testing plan in a browser before the review? [y/N]: "
+    if [[ ! "${GATE_CHOICE:-}" =~ ^[yY]$ ]]; then
+      log "Browser check skipped"
+      return 0
+    fi
+  fi
+
+  echo ""
+  log "Phase 3.1 - Browser check"
+  local BROWSER_PROMPT
+  BROWSER_PROMPT="You are checking a Rails change in a real browser before it goes to code review. Report only: do not change any application code, specs or config in this session.
+
+## Testing plan (follow its browser steps)
+$(cat "$TESTING_PLAN_FILE")
+
+## Views and JavaScript changed in this diff
+$CHANGED_FRONTEND
+
+## Instructions
+- Use the browser automation tool you have in this session (for example a Playwright MCP server or a Chrome extension). If you have none, do not substitute curl or guess: write the report below with \`Result: SKIPPED - no browser tool available\` and stop.
+- The app must be running locally. If it isn't, start it the way this repo does (bin/dev, or bin/rails server) in the background, and note the URL you used.
+- Run the testing plan's seed script only against the local development database, never against staging or production.
+- Walk every verification step that happens in the browser. For each one, record what you did, what you saw, and PASS or FAIL. Where the plan expects Turbo to update the page in place, say whether it did or whether the whole page reloaded.
+- Record JavaScript console errors and failed network requests (4xx/5xx) you saw, even on steps that passed.
+- When done, run the testing plan's teardown script and stop any server you started.
+- Write the report to $BROWSER_CHECK_FILE in exactly this shape:
+
+# Browser check
+Result: PASS | FAIL | SKIPPED - <one line why>
+URL: <the base URL you used>
+
+## Steps
+1. <step> - PASS | FAIL - <what you saw>
+
+## Console and network errors
+<each error, or \"none\">
+
+## Notes
+<anything a reviewer should know, e.g. a step you could not run and why>"
+
+  run_phase "Browser check" "$BROWSER_CHECK_FILE" "$BROWSER_PROMPT"
+  if [[ -s "$BROWSER_CHECK_FILE" ]]; then
+    sync_artifact "$BROWSER_CHECK_FILE" "$vault_file"
+    success "Browser check written to $BROWSER_CHECK_FILE"
+  else
+    warn "The browser check session wrote no report - reviewing without it"
+  fi
+}
+
 run_review() {
   echo ""
   log "Phase 3/4 — Reviewing"
@@ -26,7 +103,31 @@ run_review() {
 
   RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rubocop.txt"
   RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-rspec.txt"
+  FRONTEND_LINT_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-frontend-lint.txt"
+  BROWSER_CHECK_FILE="$SCRATCHPAD_DIR/browser-check.md"
+  CHANGED_FRONTEND=""
+  FRONTEND_LINT_DIRTY=false
   local RUBOCOP_FINAL_LOG=""
+
+  # One frontend lint sweep over $CHANGED_FRONTEND (autofix and check in the
+  # same run, like rubocop above), then what it found: sets FRONTEND_LINT_DIRTY,
+  # and TOOLING_ERROR when a linter couldn't run at all.
+  _run_frontend_lint_and_report() {
+    run_frontend_lint_check "$CHANGED_FRONTEND" "$FRONTEND_LINT_LOG" true || FRONTEND_LINT_DIRTY=true
+    local fe_tooling_msg
+    if fe_tooling_msg=$(tooling_failed "$FRONTEND_LINT_LOG"); then
+      warn "$fe_tooling_msg - the frontend lint did not actually run"
+      TOOLING_ERROR="${TOOLING_ERROR:-$fe_tooling_msg}"
+      FRONTEND_LINT_DIRTY=false
+    elif [[ "$FRONTEND_LINT_DIRTY" == "true" ]]; then
+      warn "Frontend lint problems remain after autofix; the review will address them"
+    elif grep -q '^== ' "$FRONTEND_LINT_LOG"; then
+      success "Frontend lint clean"
+    else
+      warn "$(head -1 "$FRONTEND_LINT_LOG")"
+    fi
+    return 0
+  }
   RUBOCOP_FINAL_OFFENSES=0
   TOOLING_ERROR=""
   local CHANGED_SPECS
@@ -60,6 +161,13 @@ run_review() {
       echo "No Ruby files changed." > "$RUBOCOP_LOG"
     fi
 
+    CHANGED_FRONTEND=$(changed_frontend_files "$BASE_BRANCH")
+    if [[ -n "$CHANGED_FRONTEND" ]]; then
+      echo ""
+      log "Running frontend linters on changed views and JavaScript..."
+      _run_frontend_lint_and_report
+    fi
+
     echo ""
     log "Running specs on changed files..."
     CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
@@ -68,7 +176,7 @@ run_review() {
       bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
     elif [[ "$(cfg heal.full_suite_fallback true)" == "true" ]]; then
       warn "No spec files changed — running full suite (heal.full_suite_fallback: true)"
-      bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+      run_rspec_full_suite "$RSPEC_LOG" || warn "Spec failures found"
     else
       warn "No spec files changed — skipping rspec (heal.full_suite_fallback: false)"
       echo "No spec files changed." > "$RSPEC_LOG"
@@ -99,6 +207,8 @@ run_review() {
     fi
   fi
 
+  run_browser_check
+
   local REVIEW_SENTINEL="$SCRATCHPAD_DIR/.review.done"
   local REVIEW_MODULE="migite.tools.review"
   local REVIEW_LANGGRAPH_ARGS=(
@@ -113,11 +223,27 @@ run_review() {
   )
   [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
 
+  # Frontend inputs for migite-review, rebuilt before every review run: a fix
+  # round can add or remove view/JavaScript changes. Empty on a backend-only
+  # diff, which is what keeps the frontend reviewer from running.
+  local -a FRONTEND_REVIEW_ARGS=()
+  _frontend_review_args() {
+    FRONTEND_REVIEW_ARGS=()
+    [[ -n "$CHANGED_FRONTEND" ]] || return 0
+    FRONTEND_REVIEW_ARGS+=(--frontend-files "$(printf '%s' "$CHANGED_FRONTEND" | tr '\n' ' ')"
+                           --frontend-lint-log "$FRONTEND_LINT_LOG")
+    [[ -d "$APP_ROOT/spec/system" ]] && FRONTEND_REVIEW_ARGS+=(--system-specs)
+    [[ -s "$BROWSER_CHECK_FILE" ]] && FRONTEND_REVIEW_ARGS+=(--browser-check "$BROWSER_CHECK_FILE")
+    return 0
+  }
+  _frontend_review_args
+
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
   local REVIEW_JSON="${REVIEW_FILE%.md}.json"
   rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
-  spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}"
+  spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+    ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
   [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
   sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
   sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
@@ -148,11 +274,18 @@ run_review() {
         # One autocorrect sweep — no separate check-then-fix-then-recheck round trip.
         run_rubocop_check "$CHANGED_RUBY" "$RUBOCOP_LOG" true || true
       fi
+      CHANGED_FRONTEND=$(changed_frontend_files "$BASE_BRANCH")
+      FRONTEND_LINT_DIRTY=false
+      if [[ -n "$CHANGED_FRONTEND" ]]; then
+        _run_frontend_lint_and_report
+      else
+        rm -f "$FRONTEND_LINT_LOG"
+      fi
       if [[ -n "$CHANGED_SPECS" ]]; then
         # shellcheck disable=SC2086
         bundle_exec rspec $(strip_app_prefix "$CHANGED_SPECS") 2>&1 | tee "$RSPEC_LOG" || warn "Some specs failed"
       elif [[ "$(cfg heal.full_suite_fallback true)" == "true" ]]; then
-        bundle_exec rspec 2>&1 | tee "$RSPEC_LOG" || warn "Spec failures found"
+        run_rspec_full_suite "$RSPEC_LOG" || warn "Spec failures found"
       else
         echo "No spec files changed." > "$RSPEC_LOG"
       fi
@@ -160,14 +293,17 @@ run_review() {
       # one sets it) instead of the first pass's verdict sticking forever.
       TOOLING_ERROR=""
       local rerun_msg
-      if rerun_msg=$(tooling_failed "$RUBOCOP_LOG") || rerun_msg=$(tooling_failed "$RSPEC_LOG"); then
+      if rerun_msg=$(tooling_failed "$RUBOCOP_LOG") || rerun_msg=$(tooling_failed "$RSPEC_LOG") \
+         || rerun_msg=$(tooling_failed "$FRONTEND_LINT_LOG"); then
         TOOLING_ERROR="$rerun_msg"
         warn "$rerun_msg"
       fi
     fi
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
-    spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}"
+    _frontend_review_args
+    spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+      ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
     sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
     sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
@@ -194,6 +330,9 @@ run_review() {
     fi
     if [[ "$(cfg gates.commit.require_clean_lint true)" == "true" && -n "${RUBOCOP_FINAL_OFFENSES:-}" && "$RUBOCOP_FINAL_OFFENSES" != "0" ]]; then
       b+=("$RUBOCOP_FINAL_OFFENSES rubocop offense(s) remain")
+    fi
+    if [[ "$(cfg gates.commit.require_clean_lint true)" == "true" && "${FRONTEND_LINT_DIRTY:-false}" == "true" ]]; then
+      b+=("frontend lint problems remain (erb_lint / eslint)")
     fi
     [[ ${#b[@]} -gt 0 ]] && printf '%s\n' "${b[@]}"
     return 0

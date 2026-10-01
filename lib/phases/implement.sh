@@ -24,7 +24,7 @@ $(cat "$AMENDMENT_FILE")
 ## Migite workflow context (overrides $(agent_field instruction_files) defaults for this session)
 - The original plan is already implemented — only implement the amendment's Scope section
 - Respect the amendment's Out of scope section — do not touch anything listed there
-- Do NOT run rubocop or rspec — migite runs them after this phase"
+- Do NOT run rubocop, rspec or the frontend linters — migite runs them after this phase"
     else
       printf '%s' "${KNOWLEDGE_INJECT}$(cat "$IMPLEMENT_CMD_PATH" | sed "s|\\[PLAN_PATH\\]|$PLAN_FILE|g")
 
@@ -32,7 +32,7 @@ $(cat "$PLAN_FILE")
 
 ## Migite workflow context (overrides $(agent_field instruction_files) defaults for this session)
 - Planning is already complete and gate-approved — begin implementation directly
-- Do NOT run rubocop or rspec — migite runs them after this phase"
+- Do NOT run rubocop, rspec or the frontend linters — migite runs them after this phase"
     fi
   }
 
@@ -140,18 +140,25 @@ $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
 # time checks run. The agent is only invoked for what autocorrect can't fix: real
 # rubocop offenses and rspec failures. The fix prompt only includes whichever
 # of those two is actually still failing. Bounded to MAX_HEAL_ATTEMPTS.
+# The frontend linters (erb_lint, eslint - see run_frontend_lint_check) follow
+# the same rule: autofix locally first, hand only what's left to the agent.
+# Spec failures that tooling_failed attributes to the toolchain (no browser for
+# system specs, DB down) are never handed to the agent: editing application
+# code can't fix a missing Chrome.
 run_auto_heal_loop() {
   echo ""
   log "Phase 2.5 — Running checks (auto-heal enabled, max $MAX_HEAL_ATTEMPTS attempts)"
 
   local HEAL_RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rubocop.txt"
   local HEAL_RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rspec.txt"
+  local HEAL_FRONTEND_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-frontend-lint.txt"
   # Per-log cap on the excerpts embedded in a heal prompt — an unbounded rspec
   # log (mass failures print a backtrace per failure) overflows the model's
   # context window and the CLI rejects the call.
   local HEAL_LOG_MAX
   HEAL_LOG_MAX=$(cfg heal.prompt_log_max_bytes 60000)
   local HEAL_CHANGED_RUBY
+  local HEAL_CHANGED_FRONTEND
   local HEAL_CHANGED_SPECS
   HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
   HEAL_ATTEMPT=0
@@ -167,17 +174,35 @@ run_auto_heal_loop() {
     return 0
   }
 
+  # Frontend lint: the same autofix-first sweep. A linter that couldn't start
+  # (tooling_failed) isn't left for the agent either; Phase 3 reports it.
+  _heal_autofix_frontend() {
+    FRONTEND_REMAINING=false
+    [[ "$STACK" == "rails" ]] || return 0
+    HEAL_CHANGED_FRONTEND=$(changed_frontend_files "$BASE_BRANCH")
+    run_frontend_lint_check "$HEAL_CHANGED_FRONTEND" "$HEAL_FRONTEND_LOG" true || FRONTEND_REMAINING=true
+    tooling_failed "$HEAL_FRONTEND_LOG" >/dev/null && FRONTEND_REMAINING=false
+    return 0
+  }
+
   local RUBOCOP_REMAINING=false
+  local FRONTEND_REMAINING=false
   _heal_autofix_rubocop
+  _heal_autofix_frontend
   run_rspec_check "$HEAL_CHANGED_SPECS" "$HEAL_RSPEC_LOG" || true
 
   while [[ $HEAL_ATTEMPT -lt $MAX_HEAL_ATTEMPTS ]]; do
     local RSPEC_STILL_FAILING=false
     if grep -qE '[1-9][0-9]* failure' "$HEAL_RSPEC_LOG" 2>/dev/null; then
-      RSPEC_STILL_FAILING=true
+      local heal_tooling_msg
+      if heal_tooling_msg=$(tooling_failed "$HEAL_RSPEC_LOG"); then
+        warn "$heal_tooling_msg - not asking $(agent_field display_name) to fix failures the toolchain caused"
+      else
+        RSPEC_STILL_FAILING=true
+      fi
     fi
 
-    [[ "$RUBOCOP_REMAINING" == "false" && "$RSPEC_STILL_FAILING" == "false" ]] && break
+    [[ "$RUBOCOP_REMAINING" == "false" && "$FRONTEND_REMAINING" == "false" && "$RSPEC_STILL_FAILING" == "false" ]] && break
 
     HEAL_ATTEMPT=$((HEAL_ATTEMPT + 1))
     warn "Auto-heal attempt $HEAL_ATTEMPT/$MAX_HEAL_ATTEMPTS..."
@@ -187,6 +212,12 @@ run_auto_heal_loop() {
     if [[ "$RUBOCOP_REMAINING" == "true" ]]; then
       FAILURE_SECTIONS="${FAILURE_SECTIONS}## Rubocop output (autocorrect already applied — these remain and need a manual fix)
 $(truncate_log "$HEAL_RUBOCOP_LOG" "$HEAL_LOG_MAX")
+
+"
+    fi
+    if [[ "$FRONTEND_REMAINING" == "true" ]]; then
+      FAILURE_SECTIONS="${FAILURE_SECTIONS}## Frontend lint output (erb_lint -a / eslint --fix already applied - these remain and need a manual fix)
+$(truncate_log "$HEAL_FRONTEND_LOG" "$HEAL_LOG_MAX")
 
 "
     fi
@@ -205,7 +236,7 @@ $(cat "$PLAN_FILE")
 ## Implementation notes
 $(cat "$IMPLEMENTATION_FILE")
 
-Fix all failures above. Do not run rubocop yourself — migite already runs \`rubocop -A\` after every attempt, so only genuinely unfixable-by-autocorrect offenses are shown here. Long logs above are excerpts; the full output is at $HEAL_RUBOCOP_LOG and $HEAL_RSPEC_LOG if you need more of it. When done, update: $IMPLEMENTATION_FILE"
+Fix all failures above. Do not run rubocop or the frontend linters yourself — migite already runs \`rubocop -A\` (and erb_lint/eslint autofix, when the repo has them) after every attempt, so only genuinely unfixable-by-autocorrect offenses are shown here. Long logs above are excerpts; the full output is at $HEAL_RUBOCOP_LOG, $HEAL_FRONTEND_LOG and $HEAL_RSPEC_LOG if you need more of it. When done, update: $IMPLEMENTATION_FILE"
 
     # A failed call (e.g. a CLI error) must not kill the run — degrade to the
     # review phase seeing the remaining failures, as if heal were exhausted.
@@ -216,13 +247,18 @@ Fix all failures above. Do not run rubocop yourself — migite already runs \`ru
 
     log "Re-running checks after heal attempt $HEAL_ATTEMPT..."
     _heal_autofix_rubocop
+    _heal_autofix_frontend
     HEAL_CHANGED_SPECS=$(changed_spec_files "$BASE_BRANCH")
     run_rspec_check "$HEAL_CHANGED_SPECS" "$HEAL_RSPEC_LOG" || true
   done
 
-  if [[ $HEAL_ATTEMPT -eq 0 ]]; then
+  local heal_final_tooling
+  if heal_final_tooling=$(tooling_failed "$HEAL_RSPEC_LOG"); then
+    # Not "resolved" or "passed": the specs never ran, so nothing was verified.
+    warn "Specs did not run: $heal_final_tooling - Phase 3 reports this as a tooling error"
+  elif [[ $HEAL_ATTEMPT -eq 0 ]]; then
     success "All checks passed — no healing needed"
-  elif grep -qE '[1-9][0-9]* failure' "$HEAL_RSPEC_LOG" 2>/dev/null || [[ "$RUBOCOP_REMAINING" == "true" ]]; then
+  elif grep -qE '[1-9][0-9]* failure' "$HEAL_RSPEC_LOG" 2>/dev/null || [[ "$RUBOCOP_REMAINING" == "true" || "$FRONTEND_REMAINING" == "true" ]]; then
     warn "Auto-heal stopped with failures remaining ($HEAL_ATTEMPT/$MAX_HEAL_ATTEMPTS attempts) — review phase will see them"
   else
     success "Auto-heal resolved failures after $HEAL_ATTEMPT attempt(s)"

@@ -47,6 +47,10 @@ Response (error):
 
 **Background jobs involved:** <!-- yes | no | unknown -->
 
+**Frontend:** <!-- yes | no | unknown -->
+<!-- Does this change views, Turbo Frames/Streams or Stimulus controllers?
+     no = backend only, views and JavaScript aren't explored; unknown = migite decides from the repo -->
+
 **Auth / permissions:**
 <!-- Who can do this action? Any role/policy changes needed? -->
 
