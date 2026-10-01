@@ -87,22 +87,31 @@ run_cost_so_far() {
   printf '%s calls, $%.2f' "$calls" "$cost"
 }
 
-# print_usage_summary — end-of-run table of every headless model call (by
-# model: calls, tokens, time, cost), written to <scratchpad>/usage.json and
-# mirrored to the vault when a task dir is known. Runs from migite's EXIT trap
-# so an aborted run still reports what it spent. Guarded to run once.
+# print_usage_summary - end-of-run table of every headless model call in this
+# invocation (by model: calls, tokens, time, cost). The calls are also appended to
+# usage.jsonl in the run's folder (the task's scratchpad dir before one is known),
+# and usage.json there summarises that whole ledger, so a resumed or re-run build
+# adds to 00-build/usage.json instead of replacing it. Both are mirrored to the
+# vault. Runs from migite's EXIT trap so an aborted run still reports what it
+# spent. Guarded to run once.
 print_usage_summary() {
   [[ "${_USAGE_SUMMARY_PRINTED:-}" == "1" ]] && return 0
   _USAGE_SUMMARY_PRINTED=1
   [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 0
   echo ""
   echo -e "${BOLD}── Usage ───────────────────────────────────────${RESET}"
-  if [[ -n "${SCRATCHPAD_DIR:-}" && -d "$SCRATCHPAD_DIR" ]]; then
-    local out="$SCRATCHPAD_DIR/usage.json"
-    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" --json "$out" || true
-    [[ -n "${TASK_DIR:-}" ]] && sync_json "$out" "$TASK_DIR/usage.json"
-  else
-    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" || true
+  local scratch_dir="${RUN_SCRATCH_DIR:-${SCRATCHPAD_DIR:-}}"
+  local vault_dir="${RUN_VAULT_DIR:-${TASK_DIR:-}}"
+  "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$MIGITE_USAGE_LEDGER" || true
+  if [[ -n "$scratch_dir" && -d "$scratch_dir" ]]; then
+    local out="$scratch_dir/usage.json" run_ledger="$scratch_dir/usage.jsonl"
+    [[ -n "$vault_dir" ]] && resume_from_vault "$run_ledger" "$vault_dir/usage.jsonl"
+    merge_ledger "$MIGITE_USAGE_LEDGER" "$run_ledger"
+    "$MIGITE_PYTHON" -m migite.gateway summary --ledger "$run_ledger" --json "$out" >/dev/null || true
+    if [[ -n "$vault_dir" ]]; then
+      sync_json "$out" "$vault_dir/usage.json"
+      sync_json "$run_ledger" "$vault_dir/usage.jsonl"
+    fi
   fi
   echo -e "  Ledger: ${CYAN}$MIGITE_USAGE_LEDGER${RESET}"
   echo -e "${BOLD}────────────────────────────────────────────────${RESET}"
@@ -234,6 +243,34 @@ agent_think() {
 
   [[ "$quiet" == "true" ]] || cat "$outfile"
   return $exit_code
+}
+
+# edit_document <file> <role> <label> <name> <task> [<Heading>=<path>...] - change
+# <file> in place with exact find/replace edits (migite.doc_edits) instead of a full
+# rewrite: a few hundred output tokens instead of the whole document. Each
+# Heading=path adds that file to the prompt as context. Returns 0 when <file> is up
+# to date (edited, or nothing needed to change), and non-zero, leaving <file> as it
+# was, when no usable edit came back or the call failed: the caller falls back to
+# its full rewrite. Expects MIGITE_PYTHON and REPO_ROOT.
+edit_document() {
+  local file="$1" role="$2" label="$3" name="$4" task="$5"
+  shift 5
+  local out report ctx rc=0
+  out=$(mktemp)
+  report=$(mktemp)
+  local -a doc_args=(--doc "$file" --out "$out" --report "$report" --role "$role"
+                     --label "$label" --name "$name" --task "$task")
+  for ctx in "$@"; do
+    doc_args+=(--context "$ctx")
+  done
+  "$MIGITE_PYTHON" -m migite.doc_edits update --repo-root "${REPO_ROOT:-$PWD}" "${doc_args[@]}" || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    mv "$out" "$file"
+  else
+    rm -f "$out"
+  fi
+  rm -f "$report"
+  return "$rc"
 }
 
 # spawn_langgraph <label> <channel-suffix> <module> [args...]

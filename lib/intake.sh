@@ -31,12 +31,17 @@ build_attachments_block() {
 }
 
 # build_knowledge_injection <knowledge-file>
-# Renders the "repository conventions" block injected into Plan/Implement/Amend prompts.
-# Echoes nothing if the file doesn't exist yet.
+# Renders the "repository conventions" block injected into Plan/Implement/Amend prompts:
+# the newest entries first, up to knowledge.inject_max_bytes (migite/knowledge.py).
+# The whole file grew by an entry every run and went into every one of those prompts.
+# Echoes nothing if the file doesn't exist yet or has no entries.
 build_knowledge_injection() {
-  local file="$1"
+  local file="$1" lessons
   [[ -f "$file" ]] || return 0
-  printf '## Repository conventions and past lessons\n\nThe following lessons were captured from previous tasks in this repo. Adhere to them strictly before planning or implementing anything.\n\n%s\n\n---\n\n' "$(cat "$file")"
+  lessons=$("$MIGITE_PYTHON" -m migite.knowledge recent --file "$file" \
+              --max-bytes "$(cfg knowledge.inject_max_bytes 8000)" 2>/dev/null || true)
+  [[ -n "$lessons" ]] || return 0
+  printf '## Repository conventions and past lessons\n\nThe following lessons were captured from previous tasks in this repo, newest first. Adhere to them strictly before planning or implementing anything.\n\n%s\n\n---\n\n' "$lessons"
 }
 
 # fill_intake_field <file> <regex> <value> — replaces the first match of

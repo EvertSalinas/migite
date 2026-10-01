@@ -70,6 +70,7 @@ class CallClaudeTest(_FakeClaude):
         self.assertEqual(len(recs), 2)
         self.assertEqual([r["label"] for r in recs], ["explore:models", "synthesize_plan"])
         self.assertEqual(recs[0]["tool"], "migite-plan")
+        self.assertEqual(recs[0]["turns"], 1)                     # fake-claude reports num_turns 1
 
     def test_ledger_env_var_is_honoured(self):
         self.mode("envelope")
@@ -252,9 +253,11 @@ class HelpersTest(unittest.TestCase):
     def test_summarize_and_format(self):
         recs = [
             {"tool": "migite-plan", "label": "explore", "model": "haiku", "input_tokens": 100, "output_tokens": 10,
-             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 1000, "cost_usd": 0.01, "duration_ms": 1000, "ok": True},
+             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 1000, "cost_usd": 0.01, "duration_ms": 1000, "ok": True,
+             "turns": 1},
             {"tool": "migite-plan", "label": "synth", "model": "sonnet", "input_tokens": 200, "output_tokens": 20,
-             "cache_read_input_tokens": 50, "cache_creation_input_tokens": 0, "cost_usd": 0.20, "duration_ms": 2000, "ok": True},
+             "cache_read_input_tokens": 50, "cache_creation_input_tokens": 0, "cost_usd": 0.20, "duration_ms": 2000, "ok": True,
+             "turns": 5},
             {"tool": "migite", "label": "knowledge", "model": "sonnet", "input_tokens": 300, "output_tokens": 30,
              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cost_usd": 0.30, "duration_ms": 3000, "ok": False},
         ]
@@ -265,7 +268,10 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(s["total"]["input_tokens"], 600)
         self.assertEqual(s["by_model"]["sonnet"]["calls"], 2)
         self.assertEqual(s["by_tool"]["migite"]["calls"], 1)
+        # turns sum per model and in total; the third record predates turn counts.
+        self.assertEqual((s["total"]["turns"], s["by_model"]["sonnet"]["turns"]), (6, 5))
         table = gateway.format_summary(s)
+        self.assertRegex(table, r"total\s+3\s+6\s")
         self.assertIn("sonnet", table)
         self.assertIn("$0.51", table)
         self.assertIn("1 call(s) failed", table)

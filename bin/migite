@@ -80,6 +80,8 @@ Usage:
   migite <intake.md>                a pre-written intake (same as --intake)
   migite --amend ["feedback"]       scope a follow-up change against a task already built
   migite doctor [--repo <path>]     read-only health check (see: migite doctor --help)
+  migite migrate-vault [--dry-run]  move flat task folders into run folders
+                                    (see: migite migrate-vault --help)
   migite config [options]           show, create, edit, or check the configuration
                                     (see: migite config --help)
 
@@ -120,6 +122,20 @@ esac
 if [[ "${1:-}" == "doctor" ]]; then
   shift
   run_doctor "$@"
+  exit $?
+fi
+
+# `migite migrate-vault [--dry-run]` - move every vault task folder that still
+# uses the flat layout into run folders (lib/vault.sh). Needs only the config,
+# for vault.base: no agent CLI, and it works outside a git repo.
+if [[ "${1:-}" == "migrate-vault" ]]; then
+  shift
+  case "${1:-}" in
+    -h|--help|help) migrate_vault_usage; exit 0 ;;
+  esac
+  require_python
+  load_migite_config "$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  run_migrate_vault "$@"
   exit $?
 fi
 
@@ -318,8 +334,14 @@ for _prompt in plan implement review architecture_critic; do
   [[ -f "$(prompt_path "$_prompt")" ]] || error "Prompt file missing: $(prompt_path "$_prompt") — is the migite checkout intact?"
 done
 unset _prompt
-# Print what the run spent on the way out — success, gate abort, or error alike.
-[[ "$(cfg budget.print_summary true)" == "true" ]] && trap print_usage_summary EXIT
+# On the way out (success, gate abort, or error alike): print what the run
+# spent, then refresh the task's index.md so it lists this run, even an aborted one.
+_migite_exit() {
+  [[ "$(cfg budget.print_summary true)" == "true" ]] && print_usage_summary
+  [[ -n "${TASK_DIR:-}" ]] && write_task_index "$TASK_DIR"
+  return 0
+}
+trap _migite_exit EXIT
 
 # Detects the project's stack ($STACK) and sets $APP_ROOT/$APP_REL_PATH — the
 # directory holding the Gemfile, which isn't always $REPO_ROOT (e.g. a
@@ -353,11 +375,11 @@ echo ""
 success "Workflow complete."
 echo ""
 echo -e "  Scratchpad: ${CYAN}$SCRATCHPAD_DIR${RESET}"
-echo -e "    intake.md          → task intake"
-echo -e "    plan.md            → planning output"
-echo -e "    implementation.md  → implementation notes"
-echo -e "    review.md          → review verdict"
-echo -e "    pr-description.md  → ready to paste into GitHub"
+echo -e "    plan.md                        → planning output"
+echo -e "    pr-description.md              → ready to paste into GitHub"
+echo -e "    $RUN_SLUG/implementation.md → implementation notes"
+echo -e "    $RUN_SLUG/review.md         → review verdict"
+echo -e "  Vault index: ${CYAN}$TASK_DIR/index.md${RESET}"
 echo -e "    plan.json / review.json / usage.json → machine-readable envelopes"
 echo -e "  Vault (read-only mirror): ${CYAN}$TASK_DIR${RESET}"
 echo ""

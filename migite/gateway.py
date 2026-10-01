@@ -57,6 +57,9 @@ DEFAULT_PERMISSION = "none"
 INLINE_MAX = 100_000                     # ui.prompt_inline_max
 ROLE_EFFORT: dict[str, str | None] = {}  # role -> effort level
 ROLE_TIMEOUT: dict[str, int | None] = {}  # role -> explicit timeout (config), else None
+HEADLESS_TOOLS = "isolated"              # permissions.headless_tools: isolated | default
+REVIEW_CALL_MAX_USD: float | None = 2.0  # budget.review_call_max_usd, for `read` roles
+_ISOLATION_NOTICE_SHOWN = False
 
 
 class AgentError(RuntimeError):
@@ -73,6 +76,7 @@ def configure_from(cfg: config.Config) -> None:
     """Point every later call at the agent, models, efforts, timeouts, and permission
     the loaded config selects. Each tool calls this once after config.load()."""
     global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT, ROLE_TIMEOUT
+    global HEADLESS_TOOLS, REVIEW_CALL_MAX_USD
     AGENT = agents.from_config(cfg)
     CONFIG = cfg
     DEFAULT_TIMEOUT = int(cfg.get("models.timeout_seconds") or DEFAULT_TIMEOUT)
@@ -82,16 +86,28 @@ def configure_from(cfg: config.Config) -> None:
     INLINE_MAX = int(cfg.get("ui.prompt_inline_max") or INLINE_MAX)
     ROLE_EFFORT = dict(cfg.efforts_by_role())
     ROLE_TIMEOUT = dict(cfg.timeouts_by_role())
+    HEADLESS_TOOLS = str(cfg.get("permissions.headless_tools") or "isolated")
+    REVIEW_CALL_MAX_USD = cfg.get("budget.review_call_max_usd")
 
 
 def reset() -> None:
     """Back to the built-in state: the default agent, no config, built-in timeouts,
     no permission flag, no effort. Tests call this between agents."""
     global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT, ROLE_TIMEOUT
+    global HEADLESS_TOOLS, REVIEW_CALL_MAX_USD, _ISOLATION_NOTICE_SHOWN
     AGENT, CONFIG = agents.get(), None
     DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX = 600, 900, "none", 100_000
     ROLE_EFFORT = {}
     ROLE_TIMEOUT = {}
+    HEADLESS_TOOLS, REVIEW_CALL_MAX_USD, _ISOLATION_NOTICE_SHOWN = "isolated", 2.0, False
+
+
+def tools_policy(role: str, scopes: tuple[str, ...] = ()) -> str:
+    """none | read | default: what a headless call for `role` may use (config.ROLE_TOOLS).
+    A scoped call, or permissions.headless_tools: default, keeps the CLI's full context."""
+    if HEADLESS_TOOLS == "default" or scopes:
+        return "default"
+    return config.ROLE_TOOLS.get(role, "none")
 
 
 def model_for(role: str) -> str:
@@ -194,6 +210,7 @@ class UsageRecord:
     cost_usd: float = 0.0
     duration_ms: int = 0
     ok: bool = True
+    turns: int = 0            # agent turns; more than 1 means the call used tools
 
 
 def _now() -> str:
@@ -251,6 +268,14 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         # Kimi's -p always runs its own auto policy and rejects the permission flags.
         print(f"      ⚠ the {agent.name} backend has no headless permission flag; "
               f"running with its own default instead of {resolved_permission}", file=sys.stderr, flush=True)
+    policy = tools_policy(role, scopes)
+    isolated = policy != "default" and agent.info.isolation
+    if policy != "default" and not agent.info.isolation:
+        global _ISOLATION_NOTICE_SHOWN
+        if not _ISOLATION_NOTICE_SHOWN:
+            _ISOLATION_NOTICE_SHOWN = True
+            print(f"      ⚠ the {agent.name} backend can't restrict a headless call's tools or context; "
+                  f"these calls run with its full toolset", file=sys.stderr, flush=True)
     req = agents.AskRequest(
         prompt=prompt,
         model=resolved_model or None,
@@ -258,6 +283,9 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         schema=schema if agent.info.structured_output else None,   # caller falls back to text
         permission=resolved_permission,
         scopes=scopes,
+        isolated=isolated,
+        tools=config.READ_TOOLS if policy == "read" else (),
+        max_budget_usd=REVIEW_CALL_MAX_USD if (isolated and policy == "read") else None,
     )
     timeout = resolve_timeout(role, thinking=thinking, explicit=timeout)
 
@@ -297,6 +325,7 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         cache_read_input_tokens=parsed.cache_read_input_tokens,
         cache_creation_input_tokens=parsed.cache_creation_input_tokens,
         cost_usd=parsed.cost_usd, duration_ms=parsed.duration_ms or elapsed, ok=parsed.ok,
+        turns=parsed.turns,
     )
     record(usage, ledger)
     print(f"      ✔ {agent.name} returned in {elapsed / 1000:.1f}s (exit {proc.returncode}"
@@ -378,7 +407,7 @@ _TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cach
 
 
 def summarize(records: list[dict]) -> dict:
-    total: dict[str, Any] = {"calls": 0, "failed": 0, "cost_usd": 0.0, "duration_ms": 0}
+    total: dict[str, Any] = {"calls": 0, "failed": 0, "cost_usd": 0.0, "duration_ms": 0, "turns": 0}
     for k in _TOKEN_KEYS:
         total[k] = 0
     by_model: dict[str, dict] = {}
@@ -389,11 +418,14 @@ def summarize(records: list[dict]) -> dict:
             total["failed"] += 1
         total["cost_usd"] += float(r.get("cost_usd") or 0)
         total["duration_ms"] += int(r.get("duration_ms") or 0)
+        total["turns"] += int(r.get("turns") or 0)   # absent in ledgers from before turns were recorded
         for k in _TOKEN_KEYS:
             total[k] += int(r.get(k) or 0)
         for bucket, key in ((by_model, r.get("model") or "(unknown)"), (by_tool, r.get("tool") or "(unknown)")):
-            b = bucket.setdefault(key, {"calls": 0, "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "duration_ms": 0})
+            b = bucket.setdefault(key, {"calls": 0, "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
+                                        "duration_ms": 0, "turns": 0})
             b["calls"] += 1
+            b["turns"] += int(r.get("turns") or 0)
             b["cost_usd"] += float(r.get("cost_usd") or 0)
             b["input_tokens"] += int(r.get("input_tokens") or 0) + int(r.get("cache_read_input_tokens") or 0) + int(r.get("cache_creation_input_tokens") or 0)
             b["output_tokens"] += int(r.get("output_tokens") or 0)
@@ -408,11 +440,14 @@ def format_summary(summary: dict) -> str:
     if t["calls"] == 0:
         return "  No headless model calls recorded."
     lines = ["  Model calls (headless only — interactive sessions not metered)", ""]
-    lines.append(f"  {'model':<34} {'calls':>5} {'in+cache tok':>13} {'out tok':>8} {'time':>7} {'cost':>8}")
+    # turns: "-" when the ledger predates turn counts or the agent CLI doesn't report them.
+    def _turns(n: int) -> str:
+        return f"{n:,}" if n else "-"
+    lines.append(f"  {'model':<34} {'calls':>5} {'turns':>5} {'in+cache tok':>13} {'out tok':>8} {'time':>7} {'cost':>8}")
     for model, b in sorted(summary["by_model"].items(), key=lambda kv: -kv[1]["cost_usd"]):
-        lines.append(f"  {model:<34} {b['calls']:>5} {b['input_tokens']:>13,} {b['output_tokens']:>8,} "
+        lines.append(f"  {model:<34} {b['calls']:>5} {_turns(b.get('turns', 0)):>5} {b['input_tokens']:>13,} {b['output_tokens']:>8,} "
                      f"{b['duration_ms'] / 1000:>6.0f}s {'$' + format(b['cost_usd'], '.2f'):>8}")
-    lines.append(f"  {'total':<34} {t['calls']:>5} "
+    lines.append(f"  {'total':<34} {t['calls']:>5} {_turns(t.get('turns', 0)):>5} "
                  f"{t['input_tokens'] + t['cache_read_input_tokens'] + t['cache_creation_input_tokens']:>13,} "
                  f"{t['output_tokens']:>8,} {t['duration_ms'] / 1000:>6.0f}s {'$' + format(t['cost_usd'], '.2f'):>8}")
     if t["cache_creation_input_tokens"]:

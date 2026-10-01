@@ -16,7 +16,9 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 - [Phase 3 — Review](#phase-3-review)
 - [Frontend: views, Turbo and Stimulus](#frontend)
 - [Phase 3.5 — Knowledge capture](#phase-3-5-knowledge)
+- [Phase 3.8: Plan update](#phase-3-8-plan-update)
 - [Phase 4 — PR description](#phase-4-pr-description)
+- [Phase 4.2: Run summary](#phase-4-2-run-summary)
 - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
 - [Active memory injection](#active-memory-injection)
 - [tmux integration](#tmux-integration)
@@ -68,7 +70,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 | Key | Action |
 |-----|--------|
 | `y` | Approve the plan and continue |
-| `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier), shows a colored diff of what changed, then re-opens the gate |
+| `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier) that returns exact edits rather than a rewritten plan (`migite/doc_edits.py`; a full rewrite is the fallback when no usable edit comes back), shows a colored diff of what changed, then re-opens the gate |
 | `e` | Edit — opens `plan.md` directly in `$EDITOR` (default: vim) with zero latency |
 | `n` | Reject — re-runs the full `migite-plan` agent from scratch (fresh exploration + synthesis + critic), shows a colored diff after |
 | `q` | Abort the workflow |
@@ -153,12 +155,17 @@ drops anything under `scratchpad/` so migite's own artifacts never show up as "y
 Note that `migite-plan`'s explorers and `migite-review`'s diff still use plain `git diff`, so a
 brand-new file is linted and tested but its *content* only reaches the reviewer once staged.
 
-Phase 3 also runs a separate, different check: any changed file (tracked or untracked) whose basename doesn't appear anywhere in `implementation.md` gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them.
+Phase 3 also runs a separate, different check: any changed file (tracked or untracked) whose basename doesn't appear in any run folder's `implementation.md` (the original build's and every amendment's) gets flagged as a warning before the review runs, so undocumented changes get caught before the reviewer sees them.
 
 Tooling failures — Ruby version unset, a git-sourced gem not checked out, rspec producing
 `0 examples` because of a DB connection or load error — are detected by one shared
 `tooling_failed <log>` helper wherever a rubocop/rspec log is inspected (Phase 3, the commit-gate
 re-checks, and the banner). When it fires, `TOOLING_ERROR` carries the message into the banner.
+
+**Specs aren't run twice on the same code.** Auto-heal records a fingerprint of the tree each time
+it runs rspec (`tree_fingerprint`: the diff plus every untracked file, minus `scratchpad/`). When
+Phase 3's rubocop sweep changes nothing and the fingerprint still matches, Phase 3 reuses heal's
+rspec results instead of running the same specs again.
 
 **Phase 3's full-suite fallback is configurable.** By default (`heal.full_suite_fallback: true`)
 Phase 3 and the commit-gate re-checks still run the whole rspec suite when no spec files changed —
@@ -193,12 +200,16 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 | Key | Action |
 |-----|--------|
 | `y` | Approve — continue to Phase 3.5 |
-| `f` | Claude fixes — opens an interactive session with the full review findings + original plan as context. Claude addresses every Critical and Warning. On `/exit`, migite re-runs rubocop + rspec + `migite-review` automatically and shows the gate again |
+| `f` | Claude fixes: opens an interactive session with the full review findings + the current plan (and any amendment it doesn't reflect yet) as context. Claude addresses every Critical and Warning. On `/exit`, migite re-runs rubocop + rspec + `migite-review` automatically and shows the gate again |
 | `e` | Edit — opens `review.md` directly in `$EDITOR` so you can annotate, dismiss, or restructure findings before deciding |
 | `n` | Manual fix — migite pauses and waits for you to press Enter when ready, then re-runs checks and re-review |
 | `q` | Abort the workflow |
 
-Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-run the full review afterwards through the same helper — there's no cap on how many times you can loop through this.
+Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-review afterwards through the same helper, and there's no cap on how many times you can loop through this.
+
+A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs all four. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
+
+The reviewers run with read-only tools (`Read`, `Grep`, `Glob`), no MCP servers or plugins, and a per-call cost cap (`budget.review_call_max_usd`); see [`permissions.headless_tools`](./configuration.md#permissions).
 
 **What `y` may approve over is a config choice** (`gates.commit.policy`, see
 [docs/configuration.md](./configuration.md#gates)). With the default `lenient`, `y` approves on
@@ -259,6 +270,40 @@ A background headless pass (the `knowledge` role) extracts 1–3 reusable bullet
 
 Only domain-level insights are captured: business logic clarifications, non-obvious constraints, architectural decisions. Rails conventions and testing patterns are excluded.
 
+<a id="phase-3-8-plan-update"></a>
+### Phase 3.8: Plan update
+
+`plan.md` is a living document: at the end of every run it is brought up to date with what the run
+decided and built, so the next run, reviewer, or person reads the design as it stands rather than
+as first planned plus a pile of amendments. The plan as approved at the gate is kept, unchanged, in
+`00-build/plan.md`.
+
+One headless call (the `plan_fold` role, standard tier, `migite/plan_fold.py`) reads this run's
+amendment (for an `--amend`), implementation notes, fix rounds and final review, and proposes exact
+edits: each one a passage copied from the plan and its corrected text. The model never rewrites
+the plan. An edit lands only when its passage appears exactly once in the plan; the rest are
+dropped and listed. You see the diff, then:
+
+| Key | Action |
+|---|---|
+| `y` | Apply the edits (the previous `plan.md` goes to `.plan-history/`) |
+| `e` | Apply them, then open `plan.md` in `$EDITOR` |
+| `n` | Keep the plan as it is |
+
+Every applied fold, even one that needed no edits (applied without asking), adds one line to a
+`## Revision history` section at the bottom of `plan.md`:
+
+```text
+- 2026-09-30 `01-amend-reduce-the-delay-before-chat-recordmessa`: Enqueue delay is 15 seconds, not 1 minute.
+```
+
+That section is also how migite knows which runs the plan reflects. The amend, implement, review,
+fix and PR-description prompts get the current plan plus only the amendments it doesn't reflect
+yet: normally none, or the current run's before its own fold. So prompt size stays flat however
+many times a task is amended. A declined or failed fold leaves `plan.md` alone, and that run's
+amendment keeps going into later prompts beside it. A task from before the living plan has no
+revision history, so every one of its amendments is still included, as before.
+
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)
 
@@ -266,10 +311,28 @@ The agent generates a PR description from the plan and review, following the pro
 this repo's [`templates/commit.md`](../templates/commit.md) (`deliver.sh` reads it via
 `$MIGITE_HOME`). Output goes to `pr-description.md` — ready to paste into GitHub.
 
+<a id="phase-4-2-run-summary"></a>
+### Phase 4.2: Run summary
+
+A headless pass (the `summary` role, fast tier) writes `summary.md` in the run's folder: a record
+for people of what this run did and why. It reads only this run's own files: the plan (or, for an
+`--amend`, the amendment), the implementation notes, every fix round, the final review, any
+commit-gate overrides, the note you typed at Phase 3.5, and `git diff --stat`. From those it writes:
+
+- a one-line `Summary:`, which `index.md` shows in the run's row
+- **What changed**, **Why**, **Decisions made during the run**, **Deviations from the plan**,
+  **Fix rounds** and **Follow-ups**
+
+The title, the date, and a **Run facts** section (review verdict, fix rounds, commit-gate
+re-reviews, auto-heal attempts, plan-gate rounds, headless model cost) are written by bash, not the
+model, so they can't be misreported. Nothing reads `summary.md` back into a later prompt, so
+summaries never grow the context of future runs. If the call fails or comes back empty, the run
+goes on without one.
+
 <a id="phase-4-5-self-improvement"></a>
 ### Phase 4.5 — Self-improvement
 
-A background headless pass (the `improve` role, standard tier) reviews the full run and appends 0–3 actionable observations to `docs/improvements.md` in this repo. Observations must be grounded in what happened during the run - no generic suggestions. The full migite source (~110 KB) is included only on *eventful* runs - a plan rejected at the gate, any commit-gate loop, or any auto-heal attempt - since that's when there's a script behaviour to point at; a quiet run gets a function index instead. Phase 3.5's knowledge extraction is pinned to the standard tier as well.
+A background headless pass (the `improve` role, standard tier) reviews the full run and appends 0–3 actionable observations to `docs/improvements.md` in this repo. Observations must be grounded in what happened during the run - no generic suggestions. It gets a function index of the migite script (file, line and name of every function), never the full source, and the rubocop and rspec logs capped at 8 KB each. The full source used to go in on every run with a gate rejection, commit-gate loop or heal attempt, which was most runs: about 180 KB of prompt for 0–3 bullets. Phase 3.5's knowledge extraction is pinned to the standard tier as well.
 
 ---
 

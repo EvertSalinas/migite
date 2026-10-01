@@ -99,9 +99,10 @@ class ClaudeTest(unittest.TestCase):
         env = json.dumps({"type": "result", "result": "ok", "is_error": False, "duration_ms": 5, "total_cost_usd": 0.5,
                           "usage": {"input_tokens": 3, "output_tokens": 4, "cache_read_input_tokens": 1,
                                     "cache_creation_input_tokens": 2},
-                          "modelUsage": {"claude-opus-5-5": {}}, "structured_output": {"a": 1}})
+                          "modelUsage": {"claude-opus-5-5": {}}, "structured_output": {"a": 1}, "num_turns": 7})
         r = self.agent.parse(env, 0, ask())
         self.assertEqual((r.text, r.cost_usd, r.model, r.structured), ("ok", 0.5, "claude-opus-5-5", {"a": 1}))
+        self.assertEqual(r.turns, 7)                              # >1 means the call used tools
         self.assertEqual((r.input_tokens, r.output_tokens, r.cache_read_input_tokens, r.cache_creation_input_tokens), (3, 4, 1, 2))
         bad = self.agent.parse(json.dumps({"result": "Something went wrong", "is_error": True}), 0, ask())
         self.assertFalse(bad.ok); self.assertIn("Something went wrong", bad.error)

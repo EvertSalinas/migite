@@ -1,7 +1,7 @@
 You are a senior engineer implementing an approved plan inside a migite-orchestrated session.
 
 ## Before writing any code
-1. Read the plan at `[PLAN_PATH]` — do this first before touching any file
+1. Read the plan: it is included in full below this brief (also saved at `[PLAN_PATH]`; don't re-read the file)
 2. Read every file listed under "Scope" or "Files to read" in the plan before making changes
 3. Treat every rule in the "Repository conventions and past lessons" block (if present) as mandatory
 

@@ -68,6 +68,11 @@ class AskRequest:
     schema: dict | None = None        # only sent when the agent has structured_output
     permission: str = "none"
     scopes: tuple[str, ...] = ()      # only sent when the agent maps every one
+    # Isolation (agents with AgentInfo.isolation): the call runs with only `tools`
+    # (() = none) and none of the CLI's MCP servers, plugins, hooks or skills.
+    isolated: bool = False
+    tools: tuple[str, ...] = ()
+    max_budget_usd: float | None = None   # stop the call past this spend (isolated calls only)
 
 
 @dataclass
@@ -113,6 +118,7 @@ class AskResult:
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cost_usd: float = 0.0
+    turns: int = 0                    # agent turns the call took; 0 when the CLI doesn't say
     raw: dict = field(default_factory=dict)
     is_envelope: bool = True          # False when stdout wasn't the CLI's machine format
 
@@ -144,6 +150,8 @@ class AgentInfo:
                                        # False = the CLI runs its own policy (Kimi -p forces auto)
     session_mode: str = "interactive"  # "interactive" (a seeded TUI session) |
                                        # "headless" (no seeded session; one-shot per phase)
+    isolation: bool = False            # can run a headless call with only named tools and
+                                       # without its MCP servers, plugins, hooks and skills
 
 
 class Agent:
@@ -170,6 +178,11 @@ class Agent:
             tools += list(self.info.scopes[scope])
         return tools
 
+    def instructions(self, cwd: str | None = None) -> str:
+        """Project and user instruction text an isolated call passes explicitly.
+        Only agents with AgentInfo.isolation run isolated; the rest have none."""
+        return ""
+
     def ask_launch(self, req: AskRequest) -> Launch:
         raise NotImplementedError
 
@@ -191,4 +204,5 @@ class Agent:
             "env_unset": list(i.env_unset), "exit_hint": i.exit_hint,
             "instruction_files": i.instruction_files, "models": dict(i.models),
             "permission_flags": i.permission_flags, "session_mode": i.session_mode,
+            "isolation": i.isolation,
         }

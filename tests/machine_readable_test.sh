@@ -111,6 +111,31 @@ check "print_usage_summary: runs only once per process" \
   test -z "$(print_usage_summary)"
 unset SCRATCHPAD_DIR TASK_DIR _USAGE_SUMMARY_PRINTED
 
+# A run folder's usage.json covers every invocation of that run: a resumed or
+# re-run build adds to 00-build/usage.json instead of replacing it.
+(
+  RUN_SCRATCH_DIR="$mr_dir/acc/scratch/00-build"; RUN_VAULT_DIR="$mr_dir/acc/vault/00-build"
+  mkdir -p "$RUN_SCRATCH_DIR"
+  first_calls=$(wc -l < "$MIGITE_USAGE_LEDGER" | tr -d ' ')
+  _USAGE_SUMMARY_PRINTED="" print_usage_summary >/dev/null
+  check "print_usage_summary: appends this invocation's calls to the run's usage.jsonl, mirrored" \
+    bash -c 'test "$(wc -l < "$1" | tr -d " ")" = "$3" && test -s "$2"' _ "$RUN_SCRATCH_DIR/usage.jsonl" "$RUN_VAULT_DIR/usage.jsonl" "$first_calls"
+  _USAGE_SUMMARY_PRINTED="" print_usage_summary >/dev/null
+  check "print_usage_summary: the same ledger twice is not counted twice" \
+    test "$(json_field "$RUN_SCRATCH_DIR/usage.json" total.calls)" = "$first_calls"
+
+  second_ledger="$mr_dir/acc/second.jsonl"
+  FAKE_CLAUDE_MODE=envelope MIGITE_USAGE_LEDGER="$second_ledger" agent_ask "second run" knowledge <<< "hi" >/dev/null
+  MIGITE_USAGE_LEDGER="$second_ledger" _USAGE_SUMMARY_PRINTED="" print_usage_summary >/dev/null
+  check "print_usage_summary: a later invocation adds to usage.json instead of replacing it" \
+    test "$(json_field "$RUN_SCRATCH_DIR/usage.json" total.calls)" = "$((first_calls + 1))"
+
+  rm -f "$RUN_SCRATCH_DIR/usage.jsonl" "$RUN_SCRATCH_DIR/usage.json"
+  MIGITE_USAGE_LEDGER="$second_ledger" _USAGE_SUMMARY_PRINTED="" print_usage_summary >/dev/null
+  check "print_usage_summary: a cleaned scratchpad picks the run's history back up from the vault" \
+    test "$(json_field "$RUN_SCRATCH_DIR/usage.json" total.calls)" = "$((first_calls + 1))"
+)
+
 # ── sync_json ────────────────────────────────────────────────────────────────
 printf '{"a":1}\n' > "$mr_dir/plan.json"
 sync_json "$mr_dir/plan.json" "$mr_dir/deep/er/plan.json"
