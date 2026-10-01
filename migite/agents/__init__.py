@@ -21,11 +21,13 @@ from .base import (PERMISSION_ALIASES, PERMISSIONS, SCOPES, TIERS, Agent, AgentI
                    AskResult, Launch, SessionRequest, normalize_permission)
 from .claude import ClaudeAgent
 from .cursor import CursorAgent
+from .kimi import KimiAgent
 from .opencode import OpenCodeAgent
 
 AGENTS: dict[str, type[Agent]] = {
     "claude": ClaudeAgent,
     "cursor": CursorAgent,
+    "kimi": KimiAgent,
     "opencode": OpenCodeAgent,
 }
 

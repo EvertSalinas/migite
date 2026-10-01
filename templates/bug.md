@@ -10,7 +10,7 @@
 
 **Jira:** <!-- ticket ID or N/A -->
 
-**Branch base:** <!-- main | staging | other -->
+**Branch base:** <!-- branch to work on; migite checks it out, creating it from the base branch if missing -->
 
 **Urgency:** <!-- low | normal | high | critical -->
 

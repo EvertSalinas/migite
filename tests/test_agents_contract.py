@@ -21,6 +21,7 @@ from migite import gateway     # noqa: E402
 FAKES = {
     "claude": "fake-claude",
     "cursor": "fake-cursor-agent",
+    "kimi": "fake-kimi",
     "opencode": "fake-opencode",
 }
 
@@ -46,6 +47,8 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(set(i.models), set(agents.TIERS))
             self.assertLessEqual(set(i.scopes), set(agents.SCOPES))
             self.assertIn(i.prompt_via, ("stdin", "arg"))
+            self.assertIn(i.session_mode, ("interactive", "headless"))
+            self.assertIsInstance(i.permission_flags, bool)
             self.assertGreater(i.max_arg_bytes, 0)
             json.dumps(agent.describe())                       # bash reads it as JSON
 
@@ -62,9 +65,11 @@ class ContractTest(unittest.TestCase):
     def test_every_permission_word_builds_and_auto_differs_from_none(self):
         for _, agent in self.each_agent():
             built = {w: agent.ask_launch(agents.AskRequest(prompt=PROMPT, permission=w)).argv for w in agents.PERMISSIONS}
+            session = {w: agent.session_launch(agents.SessionRequest(prompt=PROMPT, permission=w)).argv for w in agents.PERMISSIONS}
+            if not agent.info.permission_flags:
+                continue   # this CLI fixes its own approval policy; the words build but can't differ
             self.assertNotEqual(built["auto"], built["none"])
-            self.assertNotEqual(agent.session_launch(agents.SessionRequest(prompt=PROMPT, permission="auto")).argv,
-                                agent.session_launch(agents.SessionRequest(prompt=PROMPT, permission="none")).argv)
+            self.assertNotEqual(session["auto"], session["none"])
 
     def test_model_is_passed_only_when_given(self):
         for _, agent in self.each_agent():

@@ -68,6 +68,7 @@ class DefaultsTest(_Isolated):
         self.assertEqual(cfg.get("agent.backend"), "claude")
         self.assertIsNone(cfg.get("models.strong"))                        # tiers unset = backend default
         self.assertTrue(cfg.get("heal.full_suite_fallback"))
+        self.assertEqual(cfg.get("heal.prompt_log_max_bytes"), 60000)
         self.assertEqual(cfg.source("models.strong"), "defaults")
 
     def test_model_roles_resolve_through_tiers(self):
@@ -133,6 +134,49 @@ class EffortTest(_Isolated):
         self.assertIn("MIGITE_CFG_EFFORT_CRITIC=xhigh", out)
         self.assertIn("MIGITE_CFG_EFFORT_KNOWLEDGE=low", out)
         self.assertIn("MIGITE_CFG_EFFORT_EXPLORE=''", out)
+
+
+class TimeoutTest(_Isolated):
+    def test_no_override_by_default(self):
+        cfg = self.load()
+        self.assertTrue(all(v is None for v in cfg.timeouts_by_role().values()))
+        with self.assertRaises(KeyError):
+            cfg.timeout("nonexistent_role")
+
+    def test_tier_timeout_reaches_every_role_in_the_tier(self):
+        self.write_repo({"models": {"timeouts": {"strong": 1800, "standard": 1200}}})
+        cfg = self.load()
+        self.assertEqual(cfg.timeout("critic"), 1800)
+        self.assertEqual(cfg.timeout("think"), 1800)
+        self.assertEqual(cfg.timeout("knowledge"), 1200)
+        self.assertIsNone(cfg.timeout("explore"))   # fast tier left unset
+
+    def test_role_timeout_beats_tier(self):
+        self.write_repo({"models": {"timeouts": {"strong": 1800},
+                                    "roles_timeouts": {"plan_refine": 2400, "critic": 3000}}})
+        cfg = self.load()
+        self.assertEqual(cfg.timeout("critic"), 3000)        # per-role beats the tier
+        self.assertEqual(cfg.timeout("verdict"), 1800)       # strong tier override
+        self.assertEqual(cfg.timeout("plan_refine"), 2400)   # standard role, role override
+        self.assertIsNone(cfg.timeout("explore"))
+
+    def test_bad_timeout_values_are_errors(self):
+        self.write_repo({"models": {"timeouts": {"strong": "soon"}}})
+        with self.assertRaises(config.ConfigError):
+            self.load()
+        self.write_repo({"models": {"roles_timeouts": {"critic": []}}})
+        with self.assertRaises(config.ConfigError):
+            self.load()
+        self.write_repo({"models": {"roles_timeouts": {"planner": 900}}})
+        with self.assertRaises(config.ConfigError):
+            self.load()
+
+    def test_timeout_exported_to_shell(self):
+        self.write_repo({"models": {"timeouts": {"strong": 1800}, "roles_timeouts": {"knowledge": 900}}})
+        out = config.to_shell(self.load())
+        self.assertIn("MIGITE_CFG_TIMEOUT_CRITIC=1800", out)
+        self.assertIn("MIGITE_CFG_TIMEOUT_KNOWLEDGE=900", out)
+        self.assertIn("MIGITE_CFG_TIMEOUT_EXPLORE=''", out)
 
 
 class PrecedenceTest(_Isolated):
@@ -213,6 +257,11 @@ class ValidationTest(_Isolated):
 
     def test_bad_int_is_an_error(self):
         self.write_repo({"heal": {"max_attempts": "lots"}})
+        with self.assertRaises(config.ConfigError):
+            self.load()
+
+    def test_bad_int_is_an_error_for_prompt_log_max_bytes(self):
+        self.write_repo({"heal": {"prompt_log_max_bytes": "lots"}})
         with self.assertRaises(config.ConfigError):
             self.load()
 

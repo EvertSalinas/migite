@@ -2,7 +2,7 @@
 
 > 右手 (みぎて) — right hand. The trusted assistant that handles the groundwork so you can focus on what matters.
 
-Migite wraps an agent CLI (Claude Code by default, Cursor CLI or OpenCode by config) around every
+Migite wraps an agent CLI (Claude Code by default, Cursor CLI, Kimi Code, or OpenCode by config) around every
 engineering task in the same shape: **plan** before you touch
 a file, **gate** before you implement, **review** before you commit, and **write down** what was
 learned. It never commits for you. It extends your reach without replacing your judgment.
@@ -16,7 +16,7 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 - **Memory**: every artifact mirrored to a markdown vault (Obsidian-friendly), and a per-repo `knowledge.md` injected into every future plan.
 - **Machine-readable**: `plan.json`, `review.json`, and a per-run usage ledger with cost per model.
 - **Configurable**: one layered `.migite.yml` for models, effort, gates, permissions, prompts, budget.
-- **Agent-agnostic**: drives Claude Code by default, Cursor CLI or OpenCode with one config line (`agent.backend`). Capabilities a CLI lacks degrade explicitly, never silently.
+- **Agent-agnostic**: drives Claude Code by default, Cursor CLI, Kimi Code, or OpenCode with one config line (`agent.backend`). Capabilities a CLI lacks degrade explicitly, never silently.
 
 ---
 
@@ -36,8 +36,9 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 <a id="quickstart"></a>
 ## Quickstart
 
-Five minutes from clone to first run. The detailed version, with macOS and Linux notes, is in
-[docs/getting-started.md](./docs/getting-started.md).
+Five minutes from clone to first run. The detailed version, with per-OS steps for macOS, Ubuntu,
+Debian, Fedora/RHEL, and Arch/Omarchy, is in
+[docs/getting-started.md](./docs/getting-started.md#install).
 
 ```bash
 # 1. Clone and put the commands on your PATH
@@ -46,8 +47,12 @@ MIGITE_SRC="$HOME/Code/migite"; BIN="$HOME/.local/bin"; mkdir -p "$BIN"
 for f in "$MIGITE_SRC"/bin/*; do ln -sf "$f" "$BIN/$(basename "$f")"; done
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 
-# 2. Python deps (3.11+). PyYAML is optional: only needed for YAML config files.
-pip3 install langgraph pyyaml
+# 2. Python deps (3.11+) in a venv inside the checkout. Don't pip-install into the system
+#    Python: macOS/Homebrew, Debian, Ubuntu, Fedora and Arch refuse it. PyYAML is only
+#    needed for YAML config files.
+python3 -m venv "$MIGITE_SRC/.venv"
+"$MIGITE_SRC/.venv/bin/python" -m pip install langgraph pyyaml
+echo 'export MIGITE_PYTHON="$HOME/Code/migite/.venv/bin/python3"' >> ~/.zshrc   # or ~/.bashrc
 
 # 3. Your personal defaults (vault location, editor, models). Every value in the
 #    generated file is a default — delete the lines you don't change.
@@ -59,8 +64,9 @@ migite doctor
 migite "add a health-check endpoint" --type feature
 ```
 
-Prerequisites: an agent CLI logged in (Claude Code by default; Cursor CLI or OpenCode via
-`agent.backend`), `git`, Python 3.11+, and `bundle` for Rails repos. No separate API key: every
+Prerequisites: an agent CLI logged in (Claude Code by default; Cursor CLI, Kimi Code, or OpenCode via
+`agent.backend`), `git`, Python 3.11+ (macOS's built-in `python3` is 3.9: `brew install python`;
+on Debian/Ubuntu also `apt install python3-venv`), and `bundle` for Rails repos. No separate API key: every
 model call shells out to the CLI and shares its auth.
 
 ---
@@ -163,10 +169,12 @@ All commands: [docs/migite.md](./docs/migite.md) for the orchestrator's modes,
 
 Precedence: **flags > env vars > `$MIGITE_CONFIG` > `<repo>/.migite.yml` > `~/.config/migite/config.yml` > defaults**.
 Every default equals the behaviour without a file, so nothing changes until you write one.
+The repo file is local to you: ignore it globally, once, rather than committing it
+([how](./docs/configuration.md#gitignore)).
 
 ```bash
 migite config --edit --user   # once: ~/.config/migite/config.yml, your defaults for every repo
-migite config --edit          # per repo: .migite.yml, commit it with the project
+migite config --edit          # per repo: .migite.yml, keep it out of git (below)
 migite config                 # effective config, with the source of every value
 migite --help                 # every command and flag (each tool also has --help)
 ```
@@ -196,13 +204,13 @@ five ready-made recipes: [docs/configuration.md](./docs/configuration.md).
 
 | Needs | Why |
 |-------|-----|
-| An agent CLI, logged in: `claude` (default), `cursor-agent`, or `opencode` | Every model call. Auth is the CLI's own; no API key. See [docs/agents.md](./docs/agents.md) |
+| An agent CLI, logged in: `claude` (default), `cursor-agent`, `kimi`, or `opencode` | Every model call. Auth is the CLI's own; no API key. See [docs/agents.md](./docs/agents.md) |
 | `git` | Branch detection, diff scoping, base-branch resolution |
-| Python 3.11+ with `langgraph` | The planning, review, explore, audit, blueprint, and PR-review agents |
+| Python 3.11+ with `langgraph`, ideally in a venv that `MIGITE_PYTHON` points at | The planning, review, explore, audit, blueprint, and PR-review agents. Per-OS setup: [getting-started.md](./docs/getting-started.md#platforms) |
 | `bundle` | Only for the `rails` stack (rubocop + rspec). Not needed for `generic` |
 | PyYAML | Only if you use `.yml` config files. `.json` works without it |
 
-Runs on **macOS and Linux** with bash 4+. Notifications use `osascript` or `notify-send` when
+Runs on **macOS and Linux** (Ubuntu, Debian, Fedora/RHEL, Arch) with bash 4+. Notifications use `osascript` or `notify-send` when
 present and are skipped otherwise. tmux is optional: inside tmux, agents and interactive phases
 open in split panes; outside, they run inline. Python is resolved as `MIGITE_PYTHON` if set, else
 `python3` if it actually runs (an asdf shim with no version pinned is detected and skipped), else
@@ -220,13 +228,13 @@ Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down;
 
 | Doc | Read it when |
 |-----|--------------|
-| [docs/getting-started.md](./docs/getting-started.md) | Installing on macOS or Linux, verifying with `doctor`, a full first run with every file it produces |
+| [docs/getting-started.md](./docs/getting-started.md) | Installing on macOS, Ubuntu, Debian, Fedora/RHEL, or Arch, verifying with `doctor`, a full first run with every file it produces |
 | [docs/workflows/](./docs/workflows/README.md) | Tutorials, one per workflow, with every variant: build, amend, intake, explore, blueprint, audit, PR review, tickets, configure, other agents |
 | [docs/migite.md](./docs/migite.md) | The command-line reference and the run modes: amend, intake, blueprint, audit, staged; resuming a run |
 | [docs/phases.md](./docs/phases.md) | Phase by phase: what each step calls, every gate key, which files get linted and tested, memory injection, tmux |
 | [docs/outputs.md](./docs/outputs.md) | Every file a run writes, the commit-gate banner, the testing-plan requirement |
 | [docs/configuration.md](./docs/configuration.md) | You are writing a `.migite.yml`: every key, model roles and effort, strict gate, recipes |
-| [docs/agents.md](./docs/agents.md) | Running migite on Cursor CLI or OpenCode instead of Claude Code: capability matrix, per-backend models, what degrades |
+| [docs/agents.md](./docs/agents.md) | Running migite on Cursor CLI, Kimi Code, or OpenCode instead of Claude Code: capability matrix, per-backend models, what degrades |
 | [docs/standalone-tools.md](./docs/standalone-tools.md) | `migite-blueprint`, `migite-explore`, `migite-audit`, `migite-pr-review` |
 | [docs/tickets.md](./docs/tickets.md) | Using `--jira`: setting up `acli` (browser login, no token), the agent fallback, `migite-ticket` |
 | [docs/internals.md](./docs/internals.md) | Repository layout, the agent scripts' CLIs, `plan.json` / `review.json` / usage ledger with examples |
@@ -282,6 +290,6 @@ Roughly in the order they are likely to land:
 - **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
 - **Run manifest and `--yes`.** A `run.json` at every phase boundary so a run can resume from a recorded state, and a non-interactive mode so migite can run from CI or from another agent.
 - **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
-- **Verify Cursor and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
+- **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
 - **One-line installer** to replace the clone-and-symlink block above.

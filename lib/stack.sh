@@ -197,6 +197,44 @@ detect_base_branch() {
   echo "main"
 }
 
+# ensure_task_branch <branch> <base> - checks out <branch> unless already on it.
+# An existing local branch is checked out as-is; one that only exists on origin
+# is checked out tracking it; otherwise it is created from <base> (origin/<base>
+# when <base> isn't local, current HEAD when neither exists). Naming <base>
+# itself or an invalid ref is ignored with a warning, so a template left at
+# its default never moves the run. Updates BRANCH on a switch; a checkout git
+# refuses (local changes that would be overwritten) aborts the run.
+ensure_task_branch() {
+  local target="$1" base="$2" current
+  current=$(git branch --show-current)
+  [[ -z "$target" || "$target" == "$current" ]] && return 0
+  if [[ "$target" == "$base" ]]; then
+    warn "Intake names the base branch ($base) - staying on ${current:-detached HEAD}"
+    return 0
+  fi
+  if ! git check-ref-format --branch "$target" &>/dev/null; then
+    warn "Intake branch '$target' is not a valid branch name - staying on ${current:-detached HEAD}"
+    return 0
+  fi
+  if git show-ref --verify --quiet "refs/heads/$target"; then
+    git checkout -q "$target" || error "Could not check out '$target' - commit or stash local changes first"
+    log "Checked out existing branch: $target"
+  elif git show-ref --verify --quiet "refs/remotes/origin/$target"; then
+    git checkout -q -b "$target" --track "origin/$target" || error "Could not check out '$target' from origin - commit or stash local changes first"
+    log "Checked out branch $target tracking origin/$target"
+  else
+    local start=()
+    if git show-ref --verify --quiet "refs/heads/$base"; then
+      start=("$base")
+    elif git show-ref --verify --quiet "refs/remotes/origin/$base"; then
+      start=("origin/$base")
+    fi
+    git checkout -q -b "$target" ${start[@]+"${start[@]}"} || error "Could not create branch '$target' - commit or stash local changes first"
+    log "Created branch $target from ${start[0]:-${current:-HEAD}}"
+  fi
+  BRANCH="$target"
+}
+
 # tooling_failed <log> — checks a rubocop/rspec output log for the failure
 # patterns migite has had to add detection for one at a time in production
 # (docs/improvements.md): a Ruby version not selected for `bundle exec`, a
@@ -376,4 +414,34 @@ run_rspec_check() {
   app_files=$(strip_app_prefix "$files")
   # shellcheck disable=SC2086
   bundle_exec rspec $app_files 2>&1 | tee "$log"
+}
+
+# truncate_log <file> <max_bytes> — the log, or head+tail when over budget:
+# the first ~60% (the first failure blocks, which carry the diagnostic detail)
+# and the last ~40% (the "N examples, N failures" summary and the "Failed
+# examples:" list), joined by an elision marker naming the dropped byte count
+# and the full log's path. An unbounded log made the heal prompt overflow the
+# model's context window (docs/improvements.md, 2026-09-28 pass).
+truncate_log() {
+  local file="$1" max_bytes="$2" size
+  size=$(wc -c < "$file" | tr -d ' ')
+  if [[ "$size" -le "$max_bytes" ]]; then
+    cat "$file"
+    return
+  fi
+  local head_bytes=$(( max_bytes * 3 / 5 ))
+  local tail_bytes=$(( max_bytes - head_bytes ))
+  head -c "$head_bytes" "$file"
+  printf '\n\n... [%s bytes elided — full log: %s] ...\n\n' "$(( size - head_bytes - tail_bytes ))" "$file"
+  tail -c "$tail_bytes" "$file"
+}
+
+# compact_rspec_log <file> <max_bytes> — truncate_log's rspec-aware sibling:
+# over budget, identical failures merge into one block each (a mass failure is
+# a handful of distinct errors repeated) and backtraces are trimmed to the
+# first frame, so far more of the diagnostic content survives the same byte
+# budget. The parsing lives in migite/log_compact.py; under budget the file
+# passes through unchanged, keeping full backtraces for small failure counts.
+compact_rspec_log() {
+  "$MIGITE_PYTHON" -m migite.log_compact rspec --max-bytes "$2" "$1"
 }

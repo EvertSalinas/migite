@@ -36,7 +36,7 @@ Highest first:
 | Command-line flags | `--stack generic`, `--type bug` |
 | Environment variables | `DEV_LOG_BASE`, `MIGITE_ORG`, `MAX_HEAL_ATTEMPTS`, ... ([full list](#env)) |
 | `$MIGITE_CONFIG` | an explicit file, any path |
-| `<repo root>/.migite.yml` | per-project settings, committed with the repo |
+| `<repo root>/.migite.yml` | per-project settings, kept out of git ([why](#gitignore)) |
 | `~/.config/migite/config.yml` | your personal defaults (`$XDG_CONFIG_HOME` honoured) |
 | Built-in defaults | identical to migite's pre-config behaviour |
 
@@ -47,7 +47,7 @@ else from your user file and the defaults.
 ## Files and formats
 
 `.migite.yml`, `.migite.yaml`, or `.migite.json` at the repo root; `config.yml` / `.yaml` /
-`.json` under `~/.config/migite/`. YAML needs **PyYAML** (`pip install pyyaml`); it is only
+`.json` under `~/.config/migite/`. YAML needs **PyYAML** (`"$MIGITE_PYTHON" -m pip install pyyaml`); it is only
 required when a YAML file actually exists — with no config files, or JSON ones, migite runs
 without it.
 
@@ -56,12 +56,33 @@ An invalid file (bad YAML, a value outside its enum, a non-integer where one is 
 config would be worse than stopping. Unknown keys are a warning, not an error, so a typo is
 visible but not fatal.
 
+<a id="gitignore"></a>
+## Keep repo config out of git
+
+The per-repo `.migite.yml` (and a `.migite/` directory of prompt or template overrides) is your
+local setup for that repo, not part of the project. Don't commit it: teammates who don't use
+migite shouldn't see it in the tree, and yours shouldn't overwrite theirs on a pull.
+
+Ignore it once for every repo on your machine, with git's global ignore file, instead of editing
+each project's shared `.gitignore`:
+
+```bash
+mkdir -p ~/.config/git
+printf '%s\n' '.migite.yml' '.migite.yaml' '.migite.json' '.migite/' >> ~/.config/git/ignore
+```
+
+`~/.config/git/ignore` is the file git reads when `core.excludesFile` is unset. If you have set
+`core.excludesFile` (`git config --global core.excludesFile` prints it), append the lines to that
+file instead. To ignore it in a single repo without touching its `.gitignore`, add the same lines
+to that repo's `.git/info/exclude`. Check that it took effect with
+`git check-ignore -v .migite.yml`.
+
 <a id="command"></a>
 ## `migite config`
 
 ```bash
 migite config --edit --user   # open ~/.config/migite/config.yml, your defaults for every repo
-migite config --edit          # open this repo's .migite.yml (commit it)
+migite config --edit          # open this repo's .migite.yml (git-ignored, see above)
 migite config                 # effective configuration, with the source of every value
 migite config --init [--user] # write a starter file without opening it (--force overwrites)
 migite config --validate      # exit 1 on errors, print warnings
@@ -105,7 +126,7 @@ models:
     strong: xhigh
 ```
 
-**Team repo with a hard gate** (`<repo>/.migite.yml`, committed)
+**Repo with a hard gate** (`<repo>/.migite.yml`)
 
 ```yaml
 gates:
@@ -116,7 +137,7 @@ gates:
 heal:
   full_suite_fallback: false    # never run the whole suite when no spec files changed
 templates:
-  dir: .migite/templates        # this team's own PR template: .migite/templates/commit.md
+  dir: .migite/templates        # your own PR template for this repo: .migite/templates/commit.md
 ```
 
 **Cheap mode** for spikes and throwaway branches (`.migite.yml` or `MIGITE_CONFIG=cheap.yml`)
@@ -152,7 +173,7 @@ prompts:
 
 ```bash
 mkdir -p .migite/prompts && cp ~/Code/migite/prompts/review.md .migite/prompts/review.md
-$EDITOR .migite/prompts/review.md      # e.g. add your team's checklist items
+$EDITOR .migite/prompts/review.md      # e.g. add the repo's checklist items
 migite config | grep prompts           # confirm it is picked up
 ```
 
@@ -169,7 +190,7 @@ filled in.
 
 ```yaml
 agent:
-  backend: claude        # claude | cursor | opencode   (MIGITE_AGENT)
+  backend: claude        # claude | cursor | kimi | opencode   (MIGITE_AGENT)
   command: null          # override the executable: a name on PATH or a full path
 ```
 
@@ -226,8 +247,12 @@ models:
     strong: none
   roles_effort:                     # optional — per-role effort override
     critic: max
-  timeout_seconds: 600              # per headless call
-  thinking_timeout_seconds: 900     # for the calls marked as thinking-heavy (synthesis, critic)
+  timeout_seconds: 600              # headless calls off the strong tier
+  thinking_timeout_seconds: 900     # strong-tier calls (synthesis, critic, review, verdict)
+  timeouts:                         # optional per-tier timeout override, in seconds
+    strong: 1800
+  roles_timeouts:                   # optional per-role timeout override, in seconds (beats the tier)
+    think: 1800
 ```
 
 The default tiering follows one rule: **a drafter is never weaker than the critic whose findings it
@@ -266,6 +291,14 @@ quality/cost lever: `xhigh` is the recommended setting for coding work, `low` fo
 Haiku 4.5 rejects the flag and never receives it, whatever the fast tier says. To go back to the
 pre-2026-09 cheaper tiering, pin `think`, `explore_refine`, `review_correctness`, and
 `review_security` to `claude-sonnet-5` and `audit_area` to the Haiku id.
+
+**Timeouts.** Every headless call is bounded. Strong-tier calls (synthesis, critic, review,
+verdict — the slow ones) get `thinking_timeout_seconds`; every other call gets
+`timeout_seconds`. The tier is enough, so a slow call can't be forgotten: a role on the strong
+tier always gets the longer limit. To size a specific model or call, override per tier with
+`models.timeouts.<fast|standard|strong>` or per role with `models.roles_timeouts.<role>` (the
+role wins). Set a generous value when a reasoning backend routinely runs long — e.g.
+`models.timeouts.strong: 1800`. `migite config` prints each role's resolved `timeout=`.
 
 <a id="stack"></a>
 ### `stack`
@@ -331,10 +364,17 @@ each word becomes on each CLI.
 heal:
   max_attempts: 3             # MAX_HEAL_ATTEMPTS — Phase 2.5 fix-loop cap
   full_suite_fallback: true   # Phase 3: run the whole rspec suite when no spec files changed
+  prompt_log_max_bytes: 60000 # per-log cap on the rubocop/rspec/frontend-lint excerpts in a heal prompt
 ```
 
 `full_suite_fallback: false` makes Phase 3 consistent with Phase 2.5 (skip rspec, say so) instead
 of running the full suite, which needs a live DB and verifies nothing about the diff.
+
+`prompt_log_max_bytes` bounds each tooling log embedded in a heal prompt: over the cap, the
+excerpt keeps the head (the first failure blocks) and the tail (the examples summary and the
+failed-examples list) and elides the middle, naming the full log's path so the agent can read
+more. Without a cap, a mass-failure rspec run (hundreds of backtraces) overflows the model's
+context window and the CLI rejects the call.
 
 <a id="frontend"></a>
 ### `frontend`
@@ -450,6 +490,7 @@ description as `MIGITE_AGENT_*` (`load_agent_info`).
 The Python agents and standalone tools call `migite.config.load(repo_root)` themselves, so they
 work identically when invoked directly. `migite.paths.detect_org` consults `vault.org` after the
 `MIGITE_ORG` env var. `migite.gateway.configure_from(cfg)` selects the agent and applies
-timeouts, the headless permission mode, the role-to-model table, and the per-role effort table
-to every later call. Bash reaches the same gateway through `python -m migite.agent_cli ask --role <role>`,
+timeouts, the headless permission mode, the role-to-model table, the per-role effort table, and
+the per-role timeout table to every later call. Bash reaches the same gateway through
+`python -m migite.agent_cli ask --role <role>`,
 so the model and effort for a bash call site are resolved in exactly the same place.

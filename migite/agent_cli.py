@@ -39,6 +39,7 @@ SHELL_FIELDS = {
     "MIGITE_AGENT_BINARY": "binary",
     "MIGITE_AGENT_EXIT_HINT": "exit_hint",
     "MIGITE_AGENT_INSTRUCTIONS": "instruction_files",
+    "MIGITE_AGENT_SESSION_MODE": "session_mode",
 }
 
 

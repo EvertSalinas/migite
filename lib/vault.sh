@@ -14,15 +14,24 @@
 # vault folders created by `migite` (bash) and looked up by the standalone
 # tools (Python) always agree. There used to be four implementations that
 # disagreed on "_" and "+".
+#
+# Run under LC_ALL=C so the pipeline is byte-wise: in a UTF-8 locale GNU
+# sed/tr collation can treat accented letters as members of [a-z0-9], so the
+# bash slug kept unicode the Python sibling (strict ASCII [^a-z0-9]+) strips.
+# Byte-wise and char-wise agree here — every non-ASCII byte is non-alnum, and a
+# multi-byte character is one contiguous run, same as one regex match.
 slugify() {
-  echo "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed 's/[^a-z0-9]/-/g' \
-    | sed 's/--*/-/g' \
-    | sed 's/^-//' \
-    | sed 's/-$//' \
-    | cut -c1-50 \
-    | sed 's/-$//'
+  (
+    export LC_ALL=C
+    echo "$1" \
+      | tr '[:upper:]' '[:lower:]' \
+      | sed 's/[^a-z0-9]/-/g' \
+      | sed 's/--*/-/g' \
+      | sed 's/^-//' \
+      | sed 's/-$//' \
+      | cut -c1-50 \
+      | sed 's/-$//'
+  )
 }
 
 # recent_task_dirs <parent> [n=10] — basenames of the n most recently modified

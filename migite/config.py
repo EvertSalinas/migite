@@ -46,8 +46,9 @@ USER_FILE_NAMES = ("config.yml", "config.yaml", "config.json")
 
 # Agent names and each agent's model id per tier come from the agents package
 # (migite/agents/<name>.py is the only place an agent's model id is written down).
-# Cursor and OpenCode leave tiers unset = no --model is passed, so each CLI uses
-# its own default until the user pins tiers (`cursor-agent --list-models`, `opencode models`).
+# Cursor, Kimi, and OpenCode leave tiers unset = no --model is passed, so each CLI
+# uses its own default until the user pins tiers (`cursor-agent --list-models`,
+# `kimi --help`, `opencode models`).
 AGENT_BACKENDS = agents.names()
 PERMISSION_WORDS = agents.PERMISSIONS + tuple(agents.PERMISSION_ALIASES)
 PERMISSION_KEYS = ("permissions.interactive", "permissions.heal", "permissions.headless")
@@ -56,7 +57,7 @@ TRACKER_PROVIDERS = ("auto", "jira-acli", "jira-agent", "none")
 
 DEFAULTS: dict[str, Any] = {
     "agent": {
-        "backend": "claude",             # claude | cursor | opencode  (MIGITE_AGENT)
+        "backend": "claude",             # claude | cursor | kimi | opencode  (MIGITE_AGENT)
         "command": None,                 # override the backend's executable (path or name)
     },
     "tracker": {
@@ -88,8 +89,13 @@ DEFAULTS: dict[str, Any] = {
         # a haiku model regardless of these values.
         "effort": {"fast": "none", "standard": "none", "strong": "none"},
         "roles_effort": {},              # optional per-role effort override: {"critic": "max", ...}
-        "timeout_seconds": 600,
-        "thinking_timeout_seconds": 900,
+        "timeout_seconds": 600,          # headless calls that are not on the strong tier
+        "thinking_timeout_seconds": 900,  # strong-tier calls (synthesis, critic, review, verdict)
+        # Optional timeout overrides, in seconds. Per tier, then per role (role wins).
+        # Unset = the tier's default above. Raise these for a slow backend (e.g. a
+        # reasoning model that routinely runs past 15 minutes).
+        "timeouts": {"fast": None, "standard": None, "strong": None},
+        "roles_timeouts": {},            # optional per-role timeout override: {"refine_plan": 1800, ...}
     },
     "stack": "auto",                     # auto | rails | generic  (MIGITE_STACK, or --stack)
     "gates": {
@@ -112,6 +118,7 @@ DEFAULTS: dict[str, Any] = {
     "heal": {
         "max_attempts": 3,                   # MAX_HEAL_ATTEMPTS
         "full_suite_fallback": True,         # Phase 3: run the full rspec suite when no spec files changed
+        "prompt_log_max_bytes": 60000,       # per-log cap on the rubocop/rspec excerpts in a heal prompt
     },
     "frontend": {
         # The Hotwire half of a Rails app. Each of these only ever runs when the diff
@@ -218,8 +225,10 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "ui.notify": ("auto", "off"),
 }
 
-INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds", "gates.plan.warn_after_rejections",
-            "heal.max_attempts", "ui.prompt_inline_max")
+INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds",
+            "models.timeouts.fast", "models.timeouts.standard", "models.timeouts.strong",
+            "gates.plan.warn_after_rejections",
+            "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max")
 BOOL_KEYS = ("gates.commit.require_clean_lint", "gates.commit.require_green_specs",
              "heal.full_suite_fallback", "budget.print_summary")
 FLOAT_KEYS = ("budget.max_usd_per_run",)
@@ -231,8 +240,8 @@ STARTER_TEMPLATE = """\
 # effective result and where each value came from. Needs PyYAML: pip install pyyaml
 
 agent:
-  backend: claude            # claude | cursor | opencode  (MIGITE_AGENT). See docs/agents.md
-  # command: /path/to/cli    # override the executable (default: claude / cursor-agent / opencode)
+  backend: claude            # claude | cursor | kimi | opencode  (MIGITE_AGENT). See docs/agents.md
+  # command: /path/to/cli    # override the executable (default: claude / cursor-agent / kimi / opencode)
 
 tracker:
   provider: auto             # auto | jira-acli | jira-agent | none  (MIGITE_TRACKER). See docs/tickets.md
@@ -250,7 +259,7 @@ logs:
 models:
   # Tiers are model ids for the ACTIVE backend. Unset = that backend's default:
   #   claude:   fast=@FAST@  standard=@STANDARD@  strong=@STRONG@
-  #   cursor / opencode: no --model is passed until you pin one (`cursor-agent --list-models`, `opencode models`)
+  #   cursor / kimi / opencode: no --model is passed until you pin one (`cursor-agent --list-models`, `kimi --help`, `opencode models`)
   # fast: @FAST@   # explorers
   # standard: @STANDARD@         # lenses, analysts, audit areas, test-coverage review, knowledge, amendments, heal
   # strong: @STRONG@           # plan synthesis/refine, critic, correctness + security review, verdicts
@@ -263,8 +272,13 @@ models:
     strong: none
   # roles_effort:                   # per-role effort override
   #   critic: max
-  timeout_seconds: 600
-  thinking_timeout_seconds: 900
+  timeout_seconds: 600             # headless calls off the strong tier
+  thinking_timeout_seconds: 900    # strong-tier calls (synthesis, critic, review, verdict)
+  # timeouts:                      # optional per-tier timeout override, in seconds
+  #   standard: 1200
+  #   strong: 1800                 # e.g. raise for a slow reasoning model
+  # roles_timeouts:                # optional per-role timeout override, in seconds (beats the tier)
+  #   think: 2400
 
 stack: auto                  # auto | rails | generic  (or --stack on the command line)
 
@@ -284,6 +298,7 @@ permissions:                 # auto | edits | plan | ask | none  (Claude Code's 
 heal:
   max_attempts: 3
   full_suite_fallback: true  # Phase 3 runs the whole rspec suite when no spec files changed; false = skip
+  prompt_log_max_bytes: 60000  # per-log cap on the rubocop/rspec excerpts embedded in a heal prompt
 
 frontend:                    # views + Stimulus/Turbo; each runs only when the diff touches views or JavaScript
   lint: auto                 # auto = erb_lint / eslint when the repo configures them; off = never
@@ -335,7 +350,7 @@ def _flatten(d: dict, prefix: str = "") -> dict[str, Any]:
         key = f"{prefix}.{k}" if prefix else k
         # An EMPTY mapping is a leaf too — otherwise `stacks: {node: {}}` would
         # flatten to nothing and an unknown section could never be flagged.
-        if isinstance(v, dict) and v and key not in ("models.roles", "models.roles_effort"):
+        if isinstance(v, dict) and v and key not in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
             out.update(_flatten(v, key))
         else:
             out[key] = v
@@ -371,7 +386,7 @@ def _read_file(path: Path) -> dict:
             import yaml  # type: ignore
         except ImportError as e:  # pragma: no cover - depends on the environment
             raise ConfigError(
-                f"{path} exists but PyYAML is not installed. Run: pip install pyyaml "
+                f"{path} exists but PyYAML is not installed. Run: {sys.executable} -m pip install pyyaml "
                 f"(or rename the file to .json)"
             ) from e
         try:
@@ -414,7 +429,7 @@ def _coerce(key: str, value: Any, source: str) -> Any:
         raise ConfigError(f"{key} must be one of {', '.join(ENUMS[key])} (got {value!r} from {source})")
     if key in PERMISSION_KEYS:
         return agents.normalize_permission(str(value))
-    if key in ("models.roles", "models.roles_effort"):
+    if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
         if not isinstance(value, dict):
             raise ConfigError(f"{key} must be a mapping of role -> value (from {source})")
         unknown = sorted(set(value) - set(ROLE_TIERS))
@@ -426,6 +441,15 @@ def _coerce(key: str, value: Any, source: str) -> Any:
             if bad:
                 raise ConfigError(f"models.roles_effort values must be one of {', '.join(EFFORT_LEVELS)} "
                                   f"(got {', '.join(bad)} from {source})")
+        if key == "models.roles_timeouts":
+            out: dict[str, int] = {}
+            for role, secs in value.items():
+                try:
+                    out[str(role)] = int(secs)
+                except (TypeError, ValueError):
+                    raise ConfigError(f"models.roles_timeouts values must be integers of seconds "
+                                      f"(got {role}={secs!r} from {source})")
+            return out
         return {k: str(v) for k, v in value.items()}
     return value
 
@@ -479,6 +503,19 @@ class Config:
 
     def efforts_by_role(self) -> dict[str, str | None]:
         return {role: self.effort(role) for role in ROLE_TIERS}
+
+    def timeout(self, role: str) -> int | None:
+        """Explicit headless timeout for a role in seconds: models.roles_timeouts.<role>,
+        else models.timeouts.<tier>. None = no override — the gateway uses the tier's
+        built-in default (thinking_timeout_seconds on the strong tier, else timeout_seconds)."""
+        if role not in ROLE_TIERS:
+            raise KeyError(f"unknown model role {role!r}; known: {', '.join(sorted(ROLE_TIERS))}")
+        overrides = self.get("models.roles_timeouts") or {}
+        secs = overrides.get(role) or self.get(f"models.timeouts.{ROLE_TIERS[role]}")
+        return int(secs) if secs else None
+
+    def timeouts_by_role(self) -> dict[str, int | None]:
+        return {role: self.timeout(role) for role in ROLE_TIERS}
 
     def expanded_path(self, key: str) -> Path | None:
         v = self.get(key)
@@ -630,13 +667,15 @@ def _shell_value(v: Any) -> str:
 def to_shell(cfg: Config) -> str:
     lines = []
     for key, value in sorted(cfg.flat().items()):
-        if key in ("models.roles", "models.roles_effort"):
+        if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
             continue
         lines.append(f"{_shell_key(key)}={shlex.quote(_shell_value(value))}")
     for role, model in sorted(cfg.models_by_role().items()):
         lines.append(f"MIGITE_CFG_MODEL_{role.upper()}={shlex.quote(model)}")
     for role, level in sorted(cfg.efforts_by_role().items()):
         lines.append(f"MIGITE_CFG_EFFORT_{role.upper()}={shlex.quote(level or '')}")
+    for role, secs in sorted(cfg.timeouts_by_role().items()):
+        lines.append(f"MIGITE_CFG_TIMEOUT_{role.upper()}={shlex.quote(str(secs) if secs else '')}")
     lines.append("MIGITE_CFG_FILES=" + shlex.quote(" ".join(str(p) for p in cfg.files)))
     lines.append("MIGITE_CFG_WARNINGS=" + shlex.quote("\n".join(cfg.warnings)))
     return "\n".join(lines) + "\n"
@@ -645,7 +684,7 @@ def to_shell(cfg: Config) -> str:
 def show(cfg: Config) -> str:
     rows = []
     for key, value in sorted(cfg.flat().items()):
-        if key in ("models.roles", "models.roles_effort"):
+        if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
             value = json.dumps(value) if value else "{}"
         rows.append((key, _shell_value(value) or "(unset)", cfg.source(key)))
     width = max(len(r[0]) for r in rows)
@@ -661,7 +700,9 @@ def show(cfg: Config) -> str:
         pinned = " (pinned)" if role in (cfg.get("models.roles") or {}) else f" ({tier})"
         eff = cfg.effort(role)
         eff_note = f"  effort={eff}" if eff else ""
-        out.append(f"    {role:<38} {model or '(backend default)'}{pinned}{eff_note}")
+        secs = cfg.timeout(role)
+        timeout_note = f"  timeout={secs}s" if secs else ""
+        out.append(f"    {role:<38} {model or '(backend default)'}{pinned}{eff_note}{timeout_note}")
     out.append("")
     out.append("  files: " + (", ".join(str(p) for p in cfg.files) if cfg.files else "(none — defaults + env only)"))
     for w in cfg.warnings:
@@ -734,6 +775,8 @@ def main() -> None:
             print(cfg.model(args.key.split(":", 1)[1]))
         elif args.key.startswith("effort:"):
             print(cfg.effort(args.key.split(":", 1)[1]) or "")
+        elif args.key.startswith("timeout:"):
+            print(cfg.timeout(args.key.split(":", 1)[1]) or "")
         else:
             v = cfg.get(args.key)
             if v is None:

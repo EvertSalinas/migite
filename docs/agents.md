@@ -6,6 +6,7 @@ Migite drives an agent CLI; it is not tied to one. `agent.backend` in the config
 |-------|-----------------|------------|--------|
 | Claude Code | `claude` (default) | `claude` | Reference agent. Every capability, verified live. |
 | Cursor CLI | `cursor` | `cursor-agent` (alias `agent`) | Built from `cursor-agent --help` and the Cursor docs; no live run yet in this checkout (needs `cursor-agent login`). |
+| Kimi Code | `kimi` | `kimi` | Built from the Kimi Code CLI docs and its `stream-json` renderer source (`apps/kimi-code/src/cli/prompt-render.ts`); no live run yet in this checkout (needs `kimi` `/login`). |
 | OpenCode | `opencode` | `opencode` | Built from the documented `run --format json` event shapes; not installed here, so untested live. |
 
 ```yaml
@@ -17,17 +18,17 @@ agent:
 
 ## What migite needs from an agent, and what each one has
 
-| Need | Used for | Claude Code | Cursor | OpenCode |
-|---|---|---|---|---|
-| Headless call, text out | planner, reviewers, knowledge, amendments, heal, standalone tools | `claude --print --output-format json`, prompt on stdin | `cursor-agent -p --output-format json --trust "prompt"` | `opencode run --format json "message"` |
-| Interactive session with a first prompt | implement, gate fixes, PR description | `claude -- "prompt"` | `cursor-agent "prompt"` | `opencode --prompt "prompt"` |
-| Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache, cost | none (zeros recorded) | cost and tokens summed from `step_finish` events |
-| Structured output | the `review.json` verdict | `--json-schema` | no → the reviewer parses markdown | no → the reviewer parses markdown |
-| Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped |
-| Tool scope `jira.read` | the Jira fetch's agent fallback | the two Atlassian read tools via `--allowedTools` | no → only `acli` can fetch | no → only `acli` can fetch |
-| Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | `auto`/`edits` → `--auto` |
-| Exit command shown by `run_phase` | interactive sessions | `/exit` | `/quit` | `/exit` |
-| Project rules it reads | the implement prompt names them | `CLAUDE.md` | `AGENTS.md` and `.cursor/rules` | `AGENTS.md` |
+| Need | Used for | Claude Code | Cursor | Kimi Code | OpenCode |
+|---|---|---|---|---|---|
+| Headless call, text out | planner, reviewers, knowledge, amendments, heal, standalone tools | `claude --print --output-format json`, prompt on stdin | `cursor-agent -p --output-format json --trust "prompt"` | `kimi -p "prompt" --output-format stream-json` | `opencode run --format json "message"` |
+| Interactive session with a first prompt | implement, gate fixes, PR description | `claude -- "prompt"` | `cursor-agent "prompt"` | none — no seeded TUI; the phase runs headless as `kimi -p "prompt"` | `opencode --prompt "prompt"` |
+| Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache, cost | none (zeros recorded) | none (zeros recorded) | cost and tokens summed from `step_finish` events |
+| Structured output | the `review.json` verdict | `--json-schema` | no → the reviewer parses markdown | no → the reviewer parses markdown | no → the reviewer parses markdown |
+| Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped (set `[thinking].effort` in `~/.kimi-code/config.toml`) | dropped |
+| Tool scope `jira.read` | the Jira fetch's agent fallback | the two Atlassian read tools via `--allowedTools` | no → only `acli` can fetch | no → only `acli` can fetch | no → only `acli` can fetch |
+| Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | none — `-p` rejects `--yolo`/`--auto`/`--plan` and always runs Kimi's auto policy | `auto`/`edits` → `--auto` |
+| Exit command shown by `run_phase` | interactive sessions | `/exit` | `/quit` | n/a — the headless phase returns on its own | `/exit` |
+| Project rules it reads | the implement prompt names them | `CLAUDE.md` | `AGENTS.md` and `.cursor/rules` | `AGENTS.md` | `AGENTS.md` |
 
 Everything degrades explicitly, never silently: the reviewer announces it is using text
 synthesis, the planner warns when no ticket source can run, and the ledger records a call
@@ -44,15 +45,15 @@ keep working; `migite config` shows the normalized word.
 Model ids are agent-specific, so the three tiers have per-agent defaults, written down only in
 that agent's adapter:
 
-| Tier | Claude Code | Cursor | OpenCode |
-|---|---|---|---|
-| `fast` | `claude-haiku-4-5-20251001` | unset | unset |
-| `standard` | `claude-sonnet-5` | unset | unset |
-| `strong` | `claude-opus-5-5` | unset | unset |
+| Tier | Claude Code | Cursor | Kimi Code | OpenCode |
+|---|---|---|---|---|
+| `fast` | `claude-haiku-4-5-20251001` | unset | unset | unset |
+| `standard` | `claude-sonnet-5` | unset | unset | unset |
+| `strong` | `claude-opus-5-5` | unset | unset | unset |
 
-"Unset" means no model flag is passed and the CLI uses its own configured default. Cursor and
-OpenCode ids could not be verified without a login in this checkout, so nothing is guessed.
-Pin them once you know them:
+"Unset" means no model flag is passed and the CLI uses its own configured default. Cursor, Kimi, and
+OpenCode ids could not be verified without a login in this checkout, so nothing is guessed. Pin them
+once you know them:
 
 ```yaml
 agent:
@@ -61,6 +62,19 @@ models:
   fast: sonnet-4            # cursor-agent --list-models
   standard: sonnet-4-thinking
   strong: gpt-5
+```
+
+```yaml
+agent:
+  backend: kimi
+models:
+  # Kimi Code model ids for the managed service (kimi --help, kimi provider list).
+  # On a Plus plan: k3-256k and kimi-for-coding are available; the highspeed model
+  # and 1M K3 context need Pro. k3 (1M) pasted to a Plus plan bills roughly twice
+  # k3-256k for the same 256K window, so prefer k3-256k.
+  fast: kimi-for-coding     # no cheap small model exists; K2.8 is the efficient one
+  standard: kimi-for-coding
+  strong: k3-256k
 ```
 
 ```yaml
@@ -79,6 +93,7 @@ that take an effort level.
 
 ```bash
 MIGITE_AGENT=cursor migite --jira BB-1234
+MIGITE_AGENT=kimi migite --jira BB-1234
 MIGITE_AGENT=opencode migite-audit --focus jobs
 ```
 
@@ -101,6 +116,7 @@ gateway         migite/gateway.py, the same code for every agent
 adapters        migite/agents/base.py        the interface and shared types
                 migite/agents/claude.py      flags, output parser, model ids, permission map,
                 migite/agents/cursor.py      scopes, variables to unset, exit command,
+                migite/agents/kimi.py
                 migite/agents/opencode.py    instruction files, display name
 ```
 
@@ -117,7 +133,7 @@ The interface each adapter implements (`migite/agents/base.py`):
 class Agent:
     info: AgentInfo   # name, display_name, default_binary, models per tier, structured_output,
                       # effort, usage, scopes, prompt_via, max_arg_bytes, env_unset,
-                      # exit_hint, instruction_files
+                      # exit_hint, instruction_files, permission_flags, session_mode
     def ask_launch(self, req: AskRequest) -> Launch          # argv, stdin, env to set or unset
     def parse(self, stdout, returncode, req) -> AskResult    # that CLI's output in one shape
     def session_launch(self, req: SessionRequest) -> Launch
@@ -159,10 +175,14 @@ adapter.
 
 ## Known limits
 
-- Cursor and OpenCode have not been exercised live from this checkout. The adapters follow the
-  documented flags and output shapes and are covered by unit and contract tests with fake CLIs;
+- Cursor, Kimi, and OpenCode have not been exercised live from this checkout. The adapters follow
+  the documented flags and output shapes and are covered by unit and contract tests with fake CLIs;
   the first real run on each should be watched, and `usage.json` will show whether usage parsed.
   Cursor's `/quit` exit hint is from its docs and also unverified.
+- Kimi Code cannot open a session with a first prompt: the TUI takes none, and `-p` is
+  non-interactive and rejects `--yolo`/`--auto`/`--plan`. migite therefore runs the implement, gate
+  fix, and PR-description phases headless as `kimi -p`, and Kimi's own auto policy governs
+  permissions. `run_phase` prints "runs this phase headlessly" for it instead of an exit command.
 - Without structured output, the verdict comes from the markdown parser. It is anchored on the
   Verdict heading and tested against every past review, but a typed enum is stronger.
 - Cursor headless mode without `--force` only proposes changes; migite maps `auto` and `edits`
