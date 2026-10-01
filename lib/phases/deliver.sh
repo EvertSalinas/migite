@@ -105,7 +105,8 @@ End each bullet with a wikilink to the review: [[${REVIEW_WIKILINK}]]"
   echo ""
   log "Phase 3.8/4 - Updating the plan"
   fold_run_into_plan
-  # This run's last word on how to verify it; testing-plan.md itself is rewritten
+  update_testing_plan_from_run
+  # This run's last word on how to verify it; testing-plan.md itself is edited
   # by the next amend or fix round.
   snapshot_testing_plan
 
@@ -239,8 +240,9 @@ Output ONLY the bullet points, no preamble. Each bullet starts with '- '."
 # mid-run, deviations from the plan, fix rounds, outcome, follow-ups. The model
 # (the `summary` role, fast tier) writes only that narrative, from this run's own
 # files; the title, date and a "Run facts" section (verdict, fix rounds, heal
-# attempts, cost) come from bash, so they can't be misreported. Nothing reads
-# summary.md back into a later prompt. A failed or empty call leaves no file.
+# attempts, cost) come from bash, so they can't be misreported. A later amend
+# reads it in place of implementation.md once plan.md reflects this run. A failed
+# or empty call leaves no file.
 write_run_summary() {
   local engineer_note="${1:-}"
   local summary_file="$RUN_SCRATCH_DIR/summary.md"
@@ -350,6 +352,7 @@ Summary: <one sentence: what this run delivered>
     printf -- '- Auto-heal attempts: %s\n' "${HEAL_ATTEMPT:-0}"
     [[ "${AMEND_MODE:-false}" != "true" ]] && printf -- '- Plan gate rounds: %s\n' "${PLAN_GATE_ATTEMPTS:-1}"
     printf -- '- Plan update: %s\n' "${PLAN_FOLD_RESULT:-not run}"
+    [[ "${AMEND_MODE:-false}" == "true" ]] && printf -- '- Testing plan update: %s\n' "${TESTING_PLAN_UPDATE_RESULT:-not run}"
     printf -- '- Model cost (headless calls, up to this summary): %s\n' "$cost"
   } > "$summary_file"
   rm -f "$summary_body"
@@ -433,4 +436,79 @@ fold_run_into_plan() {
     esac
   done
   rm -f "$report"
+}
+
+# update_testing_plan_from_run - Phase 3.8, amend runs only. The amendment gate
+# edited testing-plan.md from what the amendment said would change; now that the
+# code is built, edit it again from what this run actually did: its amendment,
+# implementation notes, fix rounds and the final diff. Exact edits (edit_document)
+# on a copy; you see the diff and choose: apply, apply and edit, or keep it as it
+# is. No edits needed, no usable edits, or a failed call leave testing-plan.md
+# alone: the gate-time version stands, so there is no full rewrite here.
+update_testing_plan_from_run() {
+  TESTING_PLAN_UPDATE_RESULT="not run"
+  [[ "${AMEND_MODE:-false}" == "true" ]] || return 0
+  if [[ ! -s "$TESTING_PLAN_FILE" ]]; then
+    log "No testing-plan.md to update"
+    return 0
+  fi
+  local new_tp diff_file f
+  new_tp=$(mktemp)
+  diff_file=$(mktemp)
+  cp "$TESTING_PLAN_FILE" "$new_tp"
+  prompt_diff "$BASE_BRANCH" > "$diff_file"
+  local -a ctx=("Amendment=$AMENDMENT_FILE" "Implementation notes=$IMPLEMENTATION_FILE")
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && ctx+=("Fix round $(basename "$f" .md)=$f")
+  done < <(run_fix_files "$RUN_SCRATCH_DIR" "$RUN_VAULT_DIR")
+  ctx+=("Final diff against $BASE_BRANCH=$diff_file")
+
+  log "Asking $(agent_field display_name) for the testing-plan edits this run implies (one headless call)..."
+  if ! edit_document "$new_tp" testing_plan "Editing testing plan for $RUN_SLUG" "testing-plan.md" \
+       "The amendment below is now implemented. The testing plan was edited when the amendment was approved, from what it said would change. Edit it again wherever the code as built differs: seed data, routes, parameters, log text, expected results and teardown must match the final diff and implementation notes, and steps for behaviour the code no longer has must go. Keep its structure: Prerequisites, Verification steps, Teardown." \
+       "${ctx[@]}"; then
+    rm -f "$new_tp" "$diff_file"
+    TESTING_PLAN_UPDATE_RESULT="failed; testing-plan.md unchanged"
+    warn "Testing-plan update failed; testing-plan.md keeps the version from the amendment gate"
+    return 0
+  fi
+  rm -f "$diff_file"
+
+  if cmp -s "$TESTING_PLAN_FILE" "$new_tp"; then
+    rm -f "$new_tp"
+    TESTING_PLAN_UPDATE_RESULT="no changes needed"
+    success "Testing plan already matches what $RUN_SLUG built"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}── Proposed testing-plan changes ───────────────────${RESET}"
+  diff --unified=2 "$TESTING_PLAN_FILE" "$new_tp" | tail -n +3 \
+    | awk '/^\+/ { print "\033[0;32m" $0 "\033[0m"; next }
+           /^-/  { print "\033[0;31m" $0 "\033[0m"; next }
+           { print }' || true
+  echo -e "${BOLD}────────────────────────────────────────────────────${RESET}"
+
+  while true; do
+    read_gate_choice "TESTING PLAN UPDATE: $RUN_SLUG" "Apply these changes to testing-plan.md? [y/e/n] (y=apply, e=apply then edit, n=keep it as it is): "
+    case "$GATE_CHOICE" in
+      y|Y|e|E)
+        mv "$new_tp" "$TESTING_PLAN_FILE"
+        [[ "$GATE_CHOICE" =~ ^[eE]$ ]] && ${EDITOR:-vim} "$TESTING_PLAN_FILE"
+        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        TESTING_PLAN_UPDATE_RESULT="updated"
+        success "testing-plan.md updated for $RUN_SLUG"
+        break
+        ;;
+      n|N)
+        rm -f "$new_tp"
+        TESTING_PLAN_UPDATE_RESULT="skipped; testing-plan.md unchanged"
+        warn "testing-plan.md left as it was"
+        break
+        ;;
+      *)
+        warn "Invalid input - use y / e / n"
+        ;;
+    esac
+  done
 }

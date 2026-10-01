@@ -231,6 +231,8 @@ migite doctor
 ✔ Tool resolves: git
 ✔ Tool resolves: /Users/you/.asdf/installs/python/3.13.5/bin/python3
 ✔ Tool resolves: bundle
+ℹ Frontend linters: erb_lint eslint
+ℹ System specs: spec/system present (driver: cuprite; frontend.system_specs: on)
 ✔ config valid (1 file(s): /Users/you/.config/migite/config.yml)
 ✔ Prompt present: prompts/plan.md
 ✔ Prompt present: prompts/implement.md
@@ -244,7 +246,8 @@ migite doctor
 0 issues found.
 ```
 
-A `✘ Tool does not resolve: claude` means the Claude Code CLI is not on `PATH`; `✘ Config:` shows
+The `ℹ` frontend lines appear on the rails stack only, and say which linters and system-spec
+driver Phases 2.5 and 3 will use. A `✘ Tool does not resolve: claude` means the Claude Code CLI is not on `PATH`; `✘ Config:` shows
 the exact file and key that failed validation.
 
 <a id="user-config"></a>
@@ -401,8 +404,8 @@ files, untracked ones included. Only real failures reach Claude, up to `heal.max
 ✔ Auto-heal resolved failures after 1 attempt(s)
 ```
 
-**Phase 3, review.** An authoritative lint and test pass, then four reviewers in parallel and a
-structured verdict.
+**Phase 3, review.** An authoritative lint and test pass, then four reviewers in parallel (five when
+the diff touches views or JavaScript) and a structured verdict.
 
 ```text
 ▶ Phase 3/4 — Reviewing
@@ -478,6 +481,8 @@ description is an interactive session; the self-improvement pass is silent.
     00-build/implementation.md → implementation notes
     00-build/review.md         → review verdict
   Vault index: /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234/index.md
+    plan.json / review.json / usage.json → machine-readable envelopes
+  Vault (read-only mirror): /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234
 
 ── Usage ───────────────────────────────────────
   Model calls (headless only — interactive sessions not metered)
@@ -508,10 +513,10 @@ all of it.
 | File | What is in it |
 |------|---------------|
 | `plan.md` | Summary, scope grouped by layer, approach, test plan, risks, out of scope, open questions |
-| `testing-plan.md` | Seed script, verification steps with curl commands, teardown. Regenerated in full on every amendment and fix round |
+| `testing-plan.md` | Seed script, verification steps with curl commands, teardown. Updated with exact edits on every amendment and fix round, regenerated in full only when no usable edit comes back |
 | `pr-description.md` | Filled PR template |
 | `plan.json` | The plan's machine-readable envelope, see below |
-| `.plan-history/` | A snapshot of `plan.md` before every refine, edit, or redo |
+| `.plan-history/` | A snapshot of `plan.md` before every refine, edit, redo, or applied plan update |
 | `00-build/intake.md` | The filled-in template. Reused, not re-opened, if you run the same ticket again |
 | `00-build/jira-context.md` | The fetched ticket. Cached so redos do not refetch |
 | `00-build/architecture-critic.md` | The critic's findings, printed at the gate |
@@ -581,9 +586,10 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 
 One model call scoped a delta against the built code instead of ten calls re-planning from
 scratch. The amendment and everything its run writes go in
-`01-amend-the-export-must-be-idempotent-on/`; `testing-plan.md` is regenerated in full; then Phases 2 to 4 run as before. At the end,
-Phase 3.8 proposes the edits that fold the amendment into `plan.md` and shows you the diff, and the
-PR description covers the amended scope.
+`01-amend-the-export-must-be-idempotent-on/`; `testing-plan.md` is updated with exact edits; then Phases 2 to 4 run as before. At the end,
+Phase 3.8 proposes the edits that fold the amendment into `plan.md` and shows you the diff, then
+does the same for `testing-plan.md` from the code as built, and the PR description covers the
+amended scope.
 
 <a id="next"></a>
 ## Where to go next

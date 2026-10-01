@@ -1,6 +1,7 @@
 # tests/living_plan_test.sh - the living plan: plan_folded_runs,
-# unfolded_run_files, snapshot_approved_plan (lib/vault.sh) and
-# fold_run_into_plan (lib/phases/deliver.sh, Phase 3.8).
+# unfolded_run_files, snapshot_approved_plan (lib/vault.sh), and
+# fold_run_into_plan and update_testing_plan_from_run (lib/phases/deliver.sh,
+# Phase 3.8).
 #
 # plan.md is kept current at the end of every run by exact edits the engineer
 # approves, and its "## Revision history" records which runs it reflects: those
@@ -131,8 +132,73 @@ lp_fold() {
     bash -c '[[ "$(cat "$1")" == "$2" && "$3" == failed* ]]' _ "$PLAN_FILE" "$(printf '%s' "$_lp_plan")" "$PLAN_FOLD_RESULT"
 )
 
-unset -f lp_fold
+# ── update_testing_plan_from_run ─────────────────────────────────────────────
+_lp_tp='# Testing Plan
+
+### Verification steps
+1. Wait 1 minute, then check the receipts.
+'
+# lp_tp <mode> <gate-answer> [amend] - a fresh amend run (or a build when the third
+# argument is "build"), then the post-implementation testing-plan update.
+# shellcheck disable=SC2034  # the globals it sets are read by update_testing_plan_from_run
+lp_tp() {
+  SCRATCHPAD_DIR="$lp_dir/s4-$1-$2-${3:-amend}"; TASK_DIR="$lp_dir/v4-$1-$2-${3:-amend}"
+  set_run_paths "01-amend-reduce-delay"
+  AMEND_MODE=true; [[ "${3:-amend}" == "build" ]] && AMEND_MODE=false
+  AMENDMENT_FILE="$RUN_SCRATCH_DIR/amendment.md" BASE_BRANCH="no-such-base"
+  printf '%s' "$_lp_tp" > "$TESTING_PLAN_FILE"
+  echo "Reduce the delay to 15 seconds." > "$AMENDMENT_FILE"
+  echo "notes" > "$IMPLEMENTATION_FILE"
+  # A here-string, not a pipe: a pipe would lose TESTING_PLAN_UPDATE_RESULT in a subshell.
+  FAKE_CLAUDE_MODE="$1" update_testing_plan_from_run <<< "$2" > "$lp_dir/tp-$1-$2.txt" 2>&1
+}
+# shellcheck disable=SC2034
+(
+  lp_tp fold y
+  check "update_testing_plan_from_run: an approved update edits testing-plan.md and its vault copy" \
+    bash -c 'grep -q "Wait 15 seconds" "$1" && grep -q "Wait 15 seconds" "$2"' _ "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+  check "update_testing_plan_from_run: the diff is shown before asking" \
+    grep -q "Proposed testing-plan changes" "$lp_dir/tp-fold-y.txt"
+  check "update_testing_plan_from_run: an applied update is reported to the run summary" \
+    test "$TESTING_PLAN_UPDATE_RESULT" = "updated"
+)
+# shellcheck disable=SC2034
+(
+  lp_tp fold n
+  check "update_testing_plan_from_run: a declined update leaves testing-plan.md as it was" \
+    bash -c '[[ "$(cat "$1")" == "$2" && "$3" == skipped* ]]' _ "$TESTING_PLAN_FILE" "$(printf '%s' "$_lp_tp")" "$TESTING_PLAN_UPDATE_RESULT"
+)
+# shellcheck disable=SC2034
+(
+  lp_tp fold_noop ""
+  check "update_testing_plan_from_run: no edits needed changes nothing and doesn't ask" \
+    bash -c '[[ "$(cat "$1")" == "$2" && "$3" == "no changes needed" ]] && ! grep -q "TESTING PLAN UPDATE" "$4"' \
+      _ "$TESTING_PLAN_FILE" "$(printf '%s' "$_lp_tp")" "$TESTING_PLAN_UPDATE_RESULT" "$lp_dir/tp-fold_noop-.txt"
+)
+# shellcheck disable=SC2034
+(
+  lp_tp exit1 ""
+  check "update_testing_plan_from_run: a failed call keeps the gate-time testing plan and says so" \
+    bash -c '[[ "$(cat "$1")" == "$2" && "$3" == failed* ]]' _ "$TESTING_PLAN_FILE" "$(printf '%s' "$_lp_tp")" "$TESTING_PLAN_UPDATE_RESULT"
+)
+# shellcheck disable=SC2034
+(
+  lp_tp fold y build
+  check "update_testing_plan_from_run: a build run (not an amend) is left alone" \
+    bash -c '[[ "$(cat "$1")" == "$2" && "$3" == "not run" ]]' _ "$TESTING_PLAN_FILE" "$(printf '%s' "$_lp_tp")" "$TESTING_PLAN_UPDATE_RESULT"
+)
+# shellcheck disable=SC2034
+(
+  for _lp_case in "fold y" "fold e" "fold n" "fold_noop -" "exit1 -"; do
+    read -r _lp_mode _lp_answer <<< "$_lp_case"
+    out=$( (set -euo pipefail; EDITOR=true lp_tp "$_lp_mode" "$_lp_answer"; echo completed) 2>&1 )
+    check "update_testing_plan_from_run: '$_lp_case' completes under set -euo pipefail" \
+      bash -c '[[ "$1" == *completed* ]]' _ "$out"
+  done
+)
+
+unset -f lp_fold lp_tp
 PATH="$_lp_saved_path"
 if [[ -n "$_lp_saved_agent" ]]; then export MIGITE_AGENT="$_lp_saved_agent"; else unset MIGITE_AGENT; fi
 if [[ -n "$_lp_saved_xdg" ]]; then export XDG_CONFIG_HOME="$_lp_saved_xdg"; else unset XDG_CONFIG_HOME; fi
-unset lp_dir _lp_plan _lp_saved_agent _lp_saved_xdg _lp_saved_path
+unset lp_dir _lp_plan _lp_tp _lp_saved_agent _lp_saved_xdg _lp_saved_path

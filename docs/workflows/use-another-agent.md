@@ -108,8 +108,9 @@ MIGITE_AGENT=opencode migite --jira BB-1234       # answer r at "Use existing pl
 
 Every difference is announced where it matters (the reviewer says it is parsing markdown; the
 planner says when no ticket source can run), never silent. Permission words (`auto`, `edits`,
-`plan`, `ask`) are mapped to each CLI's own flags; Kimi's headless `-p` has no such flag and always
-runs its own auto policy, so those words are ignored there and `run_phase` reports it.
+`plan`, `ask`) are mapped to each CLI's own flags; Kimi's `-p` has no such flag and always runs its own
+auto policy. Headless calls warn when the configured word isn't `auto`; phase sessions still print
+the configured `Permission mode:` line but run with Kimi's auto policy regardless.
 
 ## When something goes wrong
 

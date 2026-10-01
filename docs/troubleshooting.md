@@ -204,5 +204,6 @@ Log in with `acli` instead, and revoke the token if the file was ever committed.
 
 The first line means a phase wrote the scratchpad copy and crashed before mirroring it; re-running
 the task re-syncs on the next write. The second means a file was added to the scratchpad by hand;
-migite only mirrors what it writes. Neither blocks a run. Drift from old runs of migite on its
+migite only mirrors what it writes. It also shows up after `migite migrate-vault`, which moves
+only the vault: the scratchpad's old top-level files move on the task's next run. Neither blocks a run. Drift from old runs of migite on its
 own repo is normal and safe to ignore or delete.

@@ -29,6 +29,13 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 <a id="phase-1-plan"></a>
 ### Phase 1 — Plan (LangGraph)
 
+Before planning, migite switches to the branch the intake names in its `**Branch base:**` (or plain
+`Branch:`) line, if any. An existing local branch is checked out as-is, one that only exists on
+`origin` is checked out tracking it, and otherwise the branch is created from the base branch.
+Naming the base branch itself, or an invalid branch name, only prints a warning and the run stays
+where it is. If local changes block the checkout, the run stops and asks you to commit or stash
+them first.
+
 `migite-plan` runs autonomously as a LangGraph graph:
 
 ```
@@ -120,6 +127,9 @@ After implementation, migite runs rubocop and rspec automatically. If failures e
 2. Checks re-run
 3. Repeats up to `MAX_HEAL_ATTEMPTS` (default 3)
 
+If a heal call itself fails (a CLI error, say), the loop stops there and the run moves on to review
+with the failures still present, as if the attempts were used up.
+
 Phase 3 always runs its own authoritative rubocop + rspec pass regardless — the heal loop delivers clean inputs to the reviewer, it doesn't skip the review.
 
 When the diff touches views or JavaScript, the loop also autofixes them with erb_lint / eslint
@@ -191,7 +201,7 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
     write_review   → review.md + sentinel
 ```
 
-All four reviewers use Sonnet 5 and run in parallel; `synthesize_verdict` uses Opus 5. The commit gate then opens with a context banner showing the verdict, spec failures, and rubocop offense count.
+All reviewers (four, or five with frontend) use Sonnet 5 and run in parallel; `synthesize_verdict` uses Opus 5. The commit gate then opens with a context banner showing the verdict, spec failures, and rubocop offense count.
 
 ```
 Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort):
@@ -207,7 +217,7 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 
 Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-review afterwards through the same helper, and there's no cap on how many times you can loop through this.
 
-A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs all four. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
+A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs every active dimension: the four core ones, plus frontend when the diff touches views or JavaScript. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
 
 The reviewers run with read-only tools (`Read`, `Grep`, `Glob`), no MCP servers or plugins, and a per-call cost cap (`budget.review_call_max_usd`); see [`permissions.headless_tools`](./configuration.md#permissions).
 
@@ -235,7 +245,8 @@ frontend even where nothing is detected. Checks and review always go by the diff
 backend-only diff never runs the frontend linters or reviewer, whatever the intake said.
 
 **Linting.** erb_lint runs on changed `.erb` files when `erb_lint` is in `Gemfile.lock` and the
-repo has a `.erb_lint.yml`; eslint runs on changed JavaScript when the repo has an eslint config.
+repo has a `.erb_lint.yml` (or `.erb-lint.yml`); eslint runs on changed JavaScript when the repo has
+an eslint config (`eslint.config.*` or `.eslintrc*`).
 An eslint config without `node_modules/.bin/eslint` is a tooling error, not a pass. Remaining
 problems appear as `FE lint:` in the commit banner and count as a lint blocker under
 `gates.commit.policy: strict`. `frontend.lint: off` turns both off.
@@ -304,6 +315,16 @@ many times a task is amended. A declined or failed fold leaves `plan.md` alone, 
 amendment keeps going into later prompts beside it. A task from before the living plan has no
 revision history, so every one of its amendments is still included, as before.
 
+**Testing plan, on `--amend` runs.** The amendment gate edits `testing-plan.md` from what the
+amendment says will change, before any code exists. So after the plan update, one more headless
+call (the `testing_plan` role, through `edit_document`) reads the amendment, the implementation
+notes, the run's fix rounds and the final diff, and proposes exact edits wherever the code as built
+differs from the testing plan. You see the diff, then answer the TESTING PLAN UPDATE prompt the same
+way: `y` apply, `e` apply then edit, `n` keep it as it is. When nothing needs to change it says so
+without asking. A failed call, or one with no usable edits, leaves the gate-time version in place;
+there is no full rewrite at this point. Build runs skip this step: their testing plan was written
+from the finished plan, and any fix rounds already edited it.
+
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)
 
@@ -324,9 +345,11 @@ commit-gate overrides, the note you typed at Phase 3.5, and `git diff --stat`. F
   **Fix rounds** and **Follow-ups**
 
 The title, the date, and a **Run facts** section (review verdict, fix rounds, commit-gate
-re-reviews, auto-heal attempts, plan-gate rounds, headless model cost) are written by bash, not the
-model, so they can't be misreported. Nothing reads `summary.md` back into a later prompt, so
-summaries never grow the context of future runs. If the call fails or comes back empty, the run
+re-reviews, auto-heal attempts, plan-gate rounds, plan update result, testing-plan update result
+on amend runs, headless model cost) are written by bash, not the
+model, so they can't be misreported. The only prompt that reads `summary.md` back is a later
+`--amend`: for a run that `plan.md` already reflects, it gets that run's summary in place of its
+full implementation notes, since the design is already in the plan. If the call fails or comes back empty, the run
 goes on without one.
 
 <a id="phase-4-5-self-improvement"></a>
@@ -343,10 +366,11 @@ Before Phase 1 (Plan), Phase 1.5 (TDD specs), and Phase 2 (Implement), migite re
 
 ```
 ## Repository conventions and past lessons
-<contents of knowledge.md>
+<newest knowledge.md entries, up to knowledge.inject_max_bytes>
+(N older entries not shown; all of them are in knowledge.md)
 ```
 
-This means every new task starts with the accumulated lessons from all previous tasks in the same repo. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
+Entries go in newest first, up to [`knowledge.inject_max_bytes`](./configuration.md#knowledge) (default 8000); the last line appears only when older entries were left out. This means every new task starts with the most recent lessons from previous tasks in the same repo. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
 
 ---
 
