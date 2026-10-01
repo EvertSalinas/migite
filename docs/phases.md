@@ -315,6 +315,16 @@ many times a task is amended. A declined or failed fold leaves `plan.md` alone, 
 amendment keeps going into later prompts beside it. A task from before the living plan has no
 revision history, so every one of its amendments is still included, as before.
 
+**Testing plan, on `--amend` runs.** The amendment gate edits `testing-plan.md` from what the
+amendment says will change, before any code exists. So after the plan update, one more headless
+call (the `testing_plan` role, through `edit_document`) reads the amendment, the implementation
+notes, the run's fix rounds and the final diff, and proposes exact edits wherever the code as built
+differs from the testing plan. You see the diff, then answer the TESTING PLAN UPDATE prompt the same
+way: `y` apply, `e` apply then edit, `n` keep it as it is. When nothing needs to change it says so
+without asking. A failed call, or one with no usable edits, leaves the gate-time version in place;
+there is no full rewrite at this point. Build runs skip this step: their testing plan was written
+from the finished plan, and any fix rounds already edited it.
+
 <a id="phase-4-pr-description"></a>
 ### Phase 4 — PR description (interactive)
 
@@ -335,7 +345,8 @@ commit-gate overrides, the note you typed at Phase 3.5, and `git diff --stat`. F
   **Fix rounds** and **Follow-ups**
 
 The title, the date, and a **Run facts** section (review verdict, fix rounds, commit-gate
-re-reviews, auto-heal attempts, plan-gate rounds, plan update result, headless model cost) are written by bash, not the
+re-reviews, auto-heal attempts, plan-gate rounds, plan update result, testing-plan update result
+on amend runs, headless model cost) are written by bash, not the
 model, so they can't be misreported. The only prompt that reads `summary.md` back is a later
 `--amend`: for a run that `plan.md` already reflects, it gets that run's summary in place of its
 full implementation notes, since the design is already in the plan. If the call fails or comes back empty, the run

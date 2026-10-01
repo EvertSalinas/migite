@@ -12,7 +12,7 @@ your feedback
    ├─ one call ───────── plan + each run's notes (summary once folded into the plan) + last review + git diff + feedback → NN-amend-<slug>/amendment.md
    ├─ AMENDMENT GATE ─── approve, refine, or edit
    ├─ testing plan ───── edited for the new behaviour
-   └─ implement → auto-heal → review → COMMIT GATE → knowledge → PLAN UPDATE → PR description
+   └─ implement → auto-heal → review → COMMIT GATE → knowledge → PLAN UPDATE → TESTING PLAN UPDATE → PR description
 ```
 
 **Use it when** the task was already built with migite. For a brand-new request, even a small one,
@@ -52,7 +52,10 @@ and a Rationale grounded in the current code. Then:
 From here it is the normal flow: an implementation session scoped to the amendment (the plan is
 marked as already built), auto-heal, review, and the commit gate. Then the PLAN UPDATE gate shows
 the edits that fold the amendment into `plan.md` (`y` apply, `e` apply then edit, `n` keep the plan
-as it is), and the PR description covers the original work and the amendment together.
+as it is). The TESTING PLAN UPDATE gate then does the same for `testing-plan.md`, with edits based
+on the code as built rather than on what the amendment said would change. It is skipped when
+nothing needs to change. Finally the PR description covers the original work and the amendment
+together.
 
 ```bash
 git add -A && git commit -m "fix(invoices): make PDF export idempotent on retry"
@@ -135,7 +138,7 @@ At the task's top level:
 | File | Contents |
 |---|---|
 | `plan.md` | updated at the end of the run with the edits you approve at the PLAN UPDATE gate, plus a revision line |
-| `testing-plan.md` | edited for current behaviour (rewritten in full only as a fallback) |
+| `testing-plan.md` | edited at the amendment gate, then again at the TESTING PLAN UPDATE gate from what was built |
 | `pr-description.md` | regenerated, including every amendment |
 | `index.md` | vault only: regenerated with a row for this run |
 

@@ -587,8 +587,9 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 One model call scoped a delta against the built code instead of ten calls re-planning from
 scratch. The amendment and everything its run writes go in
 `01-amend-the-export-must-be-idempotent-on/`; `testing-plan.md` is updated with exact edits; then Phases 2 to 4 run as before. At the end,
-Phase 3.8 proposes the edits that fold the amendment into `plan.md` and shows you the diff, and the
-PR description covers the amended scope.
+Phase 3.8 proposes the edits that fold the amendment into `plan.md` and shows you the diff, then
+does the same for `testing-plan.md` from the code as built, and the PR description covers the
+amended scope.
 
 <a id="next"></a>
 ## Where to go next

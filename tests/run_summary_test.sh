@@ -47,6 +47,8 @@ PATH="$rs_dir/bin:$PATH"
     bash -c 'grep -q "^- Fix rounds: 2$" "$1" && grep -q "^- Review verdict: needs_fixes$" "$1" && grep -q "^- Auto-heal attempts: 1$" "$1"' _ "$summary"
   check "write_run_summary: an amend run has no plan-gate fact" \
     not grep -q "Plan gate rounds" "$summary"
+  check "write_run_summary: an amend run records the post-implementation testing-plan update" \
+    grep -q "^- Testing plan update: not run$" "$summary"
   check "write_run_summary: the prompt carries the amendment, not the plan" \
     bash -c '[[ "$1" == *"Amendment this run implemented"*"Log the rejected go-live value."* ]]' _ "$prompt"
   check "write_run_summary: fix rounds reach the prompt in number order, from either copy" \
@@ -82,6 +84,8 @@ PATH="$rs_dir/bin:$PATH"
     grep -q "^- Plan gate rounds: 3$" "$RUN_SCRATCH_DIR/summary.md"
   check "write_run_summary: records the Phase 3.8 plan update outcome" \
     grep -q "^- Plan update: not run$" "$RUN_SCRATCH_DIR/summary.md"
+  check "write_run_summary: a build run has no testing-plan update fact" \
+    not grep -q "Testing plan update" "$RUN_SCRATCH_DIR/summary.md"
 
   # Phase 3.8 has already folded this run into plan.md; the summary must still
   # compare the work against the plan as approved, or deviations vanish.
