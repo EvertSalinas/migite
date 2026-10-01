@@ -37,12 +37,12 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 |------|----------|
 | `plan.md` | The living plan: the design as it now stands, updated at the end of every run ([Phase 3.8](./phases.md#phase-3-8-plan-update)), with a `## Revision history` line per run |
 | `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
-| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Regenerated in full on every `--amend` and fix round, unlike `plan.md` |
+| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
 | `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
 | `browser-check.md` | Only with `frontend.browser_check: ask` / `on` and a diff that touches views or JavaScript: the agent's PASS / FAIL / SKIPPED walk through the testing plan in a real browser, read by the `frontend` reviewer. See [Frontend](./phases.md#frontend) |
 | `.plan.done` | Sentinel written by migite-plan on success |
 | `.review.done` | Sentinel written by migite-review on success |
-| `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo |
+| `.plan-history/` | Timestamped `plan.md` snapshots, one per edit/refine/redo and one before each applied plan update |
 
 **`00-build/`: the original build**
 
@@ -66,8 +66,8 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `review-dimensions.json` | Each review dimension's own findings, so a re-review can carry clean dimensions over instead of running them again |
 | `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
-| `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary); never fed back into a prompt |
-| `testing-plan.md` | The task's testing plan as this run left it. The top-level `testing-plan.md` is rewritten by every amend and fix round, so these copies are its history |
+| `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary). A later `--amend` reads it in place of `implementation.md` once `plan.md` reflects this run |
+| `testing-plan.md` | The task's testing plan as this run left it. The top-level `testing-plan.md` is updated by every amend and fix round, so these copies are its history |
 | `usage.jsonl` | Every headless model call the run made, one JSON line each, across all of its invocations: a resumed or re-run build appends to it rather than starting over |
 | `usage.json` | Summary of `usage.jsonl` (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
 | `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
@@ -100,6 +100,8 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | `<ts>-<ticket>-rspec.txt` | Rspec output |
 | `<ts>-<ticket>-heal-rubocop.txt` | Heal loop rubocop |
 | `<ts>-<ticket>-heal-rspec.txt` | Heal loop rspec |
+| `<ts>-<ticket>-heal-frontend-lint.txt` | Heal loop erb_lint / eslint, when the diff touches views or JavaScript |
+| `<ts>-<ticket>-frontend-lint.txt` | Phase 3 erb_lint / eslint, when the diff touches views or JavaScript |
 | `<ts>-<ticket>-heal-fix-N.txt` | Claude's heal output per attempt |
 | `<ts>-<ticket>-critic.txt` | Architecture critic raw output |
 | `<ts>-<ticket>-knowledge.txt` | Raw knowledge extraction |
@@ -174,7 +176,7 @@ User.find_by(email: "test.user@example.com")&.destroy
 
 Only generic emails (`test.user@example.com`, `admin.qa@example.com`) — never real addresses.
 
-One gap worth knowing: regeneration only happens on `--amend` (and on a full plan `n`-redo at the Phase 1 gate). The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
+One gap worth knowing: updates only happen on `--amend`, on commit-gate fix rounds, and on a full plan `n`-redo at the Phase 1 gate. The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
 
 ---
 

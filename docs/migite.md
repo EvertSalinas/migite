@@ -106,14 +106,19 @@ skip intake        (reuses the original)
 skip 7 explorers   (the changed files are already in your diff)
 skip synthesis / architecture critic / refine
       │
-ONE Sonnet call ── reads plan.md + implementation.md + review.md
-                   + git diff <base> + knowledge.md + your feedback
+ONE Sonnet call ── reads plan.md + each run's implementation.md
+                   (summary.md for runs plan.md already reflects)
+                   + unfolded amendments + latest review.md
+                   + git diff --stat + diff capped at ui.prompt_diff_max_bytes
+                   + recent knowledge.md entries + your feedback
       │
 NN-amend-<slug>/amendment.md → gate [y/f/e/q]
       │ (on y)
-regenerate testing-plan.md in full — one more Sonnet call
+update testing-plan.md with exact edits - one more Sonnet call
+(regenerated in full only when no usable edit comes back)
       │
-Phase 2 implement → 2.5 heal → 3 review → commit gate → 3.5 knowledge → 4 PR description
+Phase 2 implement → 2.5 heal → 3 review → commit gate → 3.5 knowledge
+      → 3.8 plan update → 4 PR description → 4.2 run summary
 ```
 
 The gate itself:
@@ -124,7 +129,7 @@ Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly
 
 | Key | Action |
 |-----|--------|
-| `y` | Approve — regenerates `testing-plan.md` in full, then continues to implementation |
+| `y` | Approve - updates `testing-plan.md` with exact edits, then continues to implementation |
 | `f` | Feedback - one more headless call revises the amendment document in place |
 | `e` | Edit: opens `amendment.md` directly in `$EDITOR` |
 | `q` | Abort the workflow |
@@ -133,7 +138,7 @@ Key properties:
 
 - **Each amendment gets its own run folder**, `01-amend-<slug>/`, `02-amend-<slug>/`, so the record of what changed and why lives with the work. See [Run folders](./vault-structure.md#run-folders).
 - **`plan.md` stays current.** At the end of the run, [Phase 3.8](./phases.md#phase-3-8-plan-update) proposes exact edits that fold the amendment into it, shows you the diff, and adds a revision line. The approved original stays in `00-build/plan.md`.
-- **`testing-plan.md` is overwritten in full on approval**, unlike `plan.md` — it reflects current, post-amendment behaviour, not history. See [Testing Plan requirement](./outputs.md#testing-plan-requirement).
+- **`testing-plan.md` is edited on approval**, unlike `plan.md`, which waits for the end-of-run plan update. Exact edits rewrite or drop the steps the amendment invalidates; it is regenerated in full only when no usable edit comes back. It reflects current, post-amendment behaviour, not history. See [Testing Plan requirement](./outputs.md#testing-plan-requirement).
 - **Grounded in the diff, not a re-exploration.** The amendment prompt sees the actual built code, so it can say "this already handles that, only the retry path changes" instead of re-planning greenfield.
 - **Implementation is scoped to the amendment.** The implement prompt marks the current plan as already built and enforces the amendment's `Out of scope` section.
 - **The PR description covers every amendment**: through the updated plan, plus any amendment the plan doesn't reflect yet, so it describes the final delivered scope.

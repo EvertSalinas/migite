@@ -105,6 +105,12 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(gateway.tools_policy("summary"), "none")
         self.assertEqual(gateway.tools_policy("heal"), "default")
 
+    def test_every_review_dimension_gets_read_only_tools(self):
+        reviewers = [r for r in config.ROLE_TIERS if r.startswith(("review_", "pr_review_"))]
+        self.assertIn("review_frontend", reviewers)
+        for role in reviewers:
+            self.assertEqual(gateway.tools_policy(role), "read", role)
+
     def test_a_scoped_call_keeps_the_cli_context_its_mcp_tools_live_in(self):
         self.assertEqual(gateway.tools_policy("jira", ("jira.read",)), "default")
 

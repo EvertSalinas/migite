@@ -17,7 +17,7 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │       └── <ticket>/                             ← grouped by --jira, shared across tools
 │           ├── index.md                          ← generated after every run: current docs + one row per run (its summary line)
 │           ├── plan.md  +  plan.json             ← the living plan, updated at the end of every run
-│           ├── testing-plan.md                   ← current; regenerated in full on every --amend and fix round
+│           ├── testing-plan.md                   ← current; edited on every --amend and fix round
 │           ├── pr-description.md                 ← current; regenerated at the end of every run
 │           ├── 00-build/                         ← the original build
 │           │   ├── plan.md                       ← the plan as approved at the gate, never changed
@@ -89,7 +89,8 @@ scratchpad copy is missing. See [Output files](./outputs.md#output-files) for th
 
 Each run's files live in their own folder, so a later run can never overwrite an earlier one's
 implementation notes, fix rounds, review or usage. When migite reads the task's history (the
-implementation notes and latest review for a new amendment, every amendment for the reviewer and
+implementation notes, or the summary of a run `plan.md` already reflects, and the latest review
+for a new amendment; the amendments `plan.md` doesn't reflect yet for the reviewer, the fixer and
 the PR description), it reads every run folder in order, oldest first, from the scratchpad or,
 where the scratchpad lacks a run, from the vault. Fix rounds are numbered from 1 within their run.
 
@@ -104,6 +105,10 @@ To migrate every task in the vault at once, without waiting for a run:
 migite migrate-vault --dry-run   # list the moves
 migite migrate-vault             # make them, and write each task's index.md
 ```
+
+`migrate-vault` changes only the vault. A repo's scratchpad copy of a task moves the next time
+migite runs or amends that task there; until then, `migite doctor` may list its old top-level files
+as [drift](./troubleshooting.md#drift) with no vault counterpart.
 
 The flat layout overwrote per-run files on every `--amend`, so after migration a task's
 `00-build/` can hold a later amendment's implementation notes, fix rounds or review. They are

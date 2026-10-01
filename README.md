@@ -278,7 +278,7 @@ and logs before pasting; both forms ask you to confirm it.
 then either fixes it, asks for what's missing, or closes it with the reason. Ideas that hold up
 feed the [Roadmap](#roadmap) below.
 
-Separately, migite writes its own observations after eventful runs to
+Separately, migite reviews every run and writes its own observations to
 [docs/improvements.md](./docs/improvements.md). That file is the tool's notes on itself; your
 feedback belongs in Issues, where it can be discussed and tracked.
 

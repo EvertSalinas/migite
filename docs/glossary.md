@@ -9,14 +9,14 @@ Terms used across the docs, in the order you meet them in a run.
 | **Scratchpad** | `<repo>/scratchpad/<slug>/`, the working copy of every artifact. Every phase reads and writes here. Gitignore it in the target repo. |
 | **Vault** | `<vault.base>/<org>/<repo>/`, a markdown mirror of the scratchpad for reading later (Obsidian-friendly). Holds the per-repo `knowledge.md`. Default `~/dev-log`. |
 | **Org** | The first folder under the vault: `MIGITE_ORG` / `vault.org` if set, else the name of the directory containing the repo (`~/Code/Acme/foo` → `Acme`). |
-| **Phase** | One step of the pipeline: 1 plan, 1.5 TDD, 2 implement, 2.5 heal, 3 review, 3.5 knowledge, 4 PR description, 4.5 self-improvement. |
+| **Phase** | One step of the pipeline: 1 plan, 1.5 TDD, 2 implement, 2.5 heal, 3 review, 3.5 knowledge, 3.8 plan update, 4 PR description, 4.2 run summary, 4.5 self-improvement. |
 | **Gate** | A prompt where a human decides. Plan gate `[y/f/e/n/q]`, commit gate `[y/f/e/n/q]`, amendment gate `[y/f/e/q]`, stage checkpoint `[c/r/e/q]`. |
 | **Refine (`f`)** | At a gate, one model call that revises the document from one line of your feedback and shows a diff. |
 | **Explorer** | One of the seven parallel fast-tier calls in the planner, each reading up to 14 files from one area of the codebase (models, controllers, services, ...). An eighth, `views_frontend`, joins when the task may touch views or JavaScript. |
 | **Architecture critic** | The strong-tier call that attacks the draft plan for N+1s, missing indexes, auth gaps, migration safety, race conditions. Its findings feed the refine step and are printed at the plan gate. |
-| **Testing plan** | `testing-plan.md`: seed script, verification steps, teardown. Kept as a separate file and regenerated in full on every amendment and fix round so it describes current behaviour. |
+| **Testing plan** | `testing-plan.md`: seed script, verification steps, teardown. Kept as a separate file and updated with exact edits on every amendment and fix round (regenerated in full only when no usable edit comes back) so it describes current behaviour. |
 | **Heal loop** | Phase 2.5: rubocop autocorrect with no model call, rspec on changed specs, then headless fix attempts for what remains, capped by `heal.max_attempts`. |
-| **Reviewer / dimension** | One of the four parallel review calls: correctness, security, test coverage, testing plan. Each has its own config role. |
+| **Reviewer / dimension** | One of the parallel review calls: correctness, security, test coverage, testing plan, plus frontend when the diff touches views or JavaScript. Each has its own config role. |
 | **Verdict** | `READY TO COMMIT` or `NEEDS FIXES`, returned as a typed enum from a schema-validated call and written to `review.json`. |
 | **Envelope** | The machine-readable JSON beside a document: `plan.json`, `review.json`, `usage.json`. Bash reads these instead of grepping prose. |
 | **Usage ledger** | `$MIGITE_USAGE_LEDGER`, one JSON line per headless model call with tokens, cost, duration, model, label. Summarised at exit. |

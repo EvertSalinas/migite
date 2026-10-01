@@ -200,6 +200,7 @@ ROLE_TIERS: dict[str, str] = {
 ROLE_TOOLS: dict[str, str] = {
     "review_correctness": "read", "review_security": "read",
     "review_test_coverage": "read", "review_testing_plan": "read",
+    "review_frontend": "read",
     "pr_review_correctness": "read", "pr_review_security": "read",
     "pr_review_test_coverage": "read", "pr_review_conventions_and_migrations": "read",
     "audit_area": "read",

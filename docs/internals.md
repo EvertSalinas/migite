@@ -146,14 +146,20 @@ migite-review \
   --review-output  path/to/review.md \
   --sentinel       path/to/.review.done \
   [--base-branch   master] \
-  [--testing-plan  path/to/testing-plan.md]
+  [--testing-plan  path/to/testing-plan.md] \
+  [--amendment     path/to/amendment.md ...] \
+  [--previous      path/to/review-dimensions.json] \
+  [--frontend-files "app/views/a.html.erb app/javascript/b.js"] \
+  [--frontend-lint-log path/to/frontend-lint.txt] \
+  [--system-specs] \
+  [--browser-check path/to/browser-check.md]
 ```
 
-`--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades.
+`--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades. `--amendment` is repeatable, oldest first; migite passes only the amendments `plan.md` doesn't reflect yet. `--previous` takes the last review's `review-dimensions.json` and re-runs only the dimensions `dims_to_rerun` picks, carrying the clean ones over. `--frontend-files` adds the `frontend` reviewer; `--frontend-lint-log`, `--system-specs` and `--browser-check` give it the erb_lint/eslint log, whether the repo has `spec/system`, and Phase 3.1's `browser-check.md`.
 
 **Models used (defaults):** one config role per dimension — `review_correctness` and
 `review_security` on the strong tier (`claude-opus-5-5`), `review_test_coverage` and
-`review_testing_plan` on the standard tier (`claude-sonnet-5`) — and `verdict` (strong) for
+`review_testing_plan` and `review_frontend` on the standard tier (`claude-sonnet-5`) — and `verdict` (strong) for
 `synthesize_verdict`. See [docs/configuration.md](./configuration.md#models).
 
 `synthesize_verdict` is given `prompts/review.md` as the output format (resolved the same way as
@@ -179,13 +185,15 @@ the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `durat
 ```json
 {"ts": "...", "tool": "migite-plan", "label": "explore:models", "model": "claude-haiku-4-5-20251001",
  "input_tokens": 10, "output_tokens": 39, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 23624,
- "cost_usd": 0.0475, "duration_ms": 1407, "ok": true}
+ "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1}
 ```
 
 If the CLI doesn't return the envelope (older version, plain-text error) the wrapper passes stdout
-through untouched with zero usage, so nothing downstream changes. Note the
-`cache_creation_input_tokens`: every headless call re-sends Claude Code's own system context
-(~23k tokens in testing), which is a large share of a run's cost and is why the summary prints it.
+through untouched with zero usage, so nothing downstream changes. `turns` above 1 means the call
+used tools. Note the `cache_creation_input_tokens`: with `permissions.headless_tools: default`,
+every headless call re-sends Claude Code's own system context (~23k tokens in testing), a large
+share of a run's cost and why the summary prints it. The default, `isolated`, drops that context
+for every role that doesn't need it (see [configuration.md](./configuration.md#permissions)).
 
 **`plan.json`** (beside `plan.md`, written by `migite-plan`):
 

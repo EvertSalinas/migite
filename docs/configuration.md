@@ -393,10 +393,12 @@ heal:
 `full_suite_fallback: false` makes Phase 3 consistent with Phase 2.5 (skip rspec, say so) instead
 of running the full suite, which needs a live DB and verifies nothing about the diff.
 
-`prompt_log_max_bytes` bounds each tooling log embedded in a heal prompt: over the cap, the
-excerpt keeps the head (the first failure blocks) and the tail (the examples summary and the
-failed-examples list) and elides the middle, naming the full log's path so the agent can read
-more. Without a cap, a mass-failure rspec run (hundreds of backtraces) overflows the model's
+`prompt_log_max_bytes` bounds each tooling log embedded in a heal prompt. The rspec log is
+compacted first (`migite/log_compact.py`): identical failures merge into one block with a count,
+each keeps only its first backtrace frame, and the examples summary and the full "Failed examples:"
+list are kept. Rubocop and frontend-lint logs, and an rspec log still over the cap after
+compaction, keep the head (the first failure blocks) and the tail (the summary) and elide the
+middle. The prompt names each full log's path so the agent can read more. Without a cap, a mass-failure rspec run (hundreds of backtraces) overflows the model's
 context window and the CLI rejects the call.
 
 <a id="frontend"></a>

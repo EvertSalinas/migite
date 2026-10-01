@@ -55,7 +55,9 @@ from the plan gate on.
 Copy a template and fill it in, or write the minimum yourself. Put `Title:` and `Type:` as plain
 lines at the top: that is what migite reads for the folder name and the task type (the bold
 `**Type:**` form in the templates is not picked up when you pass a file, and falls back to the type
-picker).
+picker). An optional `Branch:` line (or the templates' `**Branch base:**`) names the branch to work
+on: migite checks it out before planning, creating it from the base branch if it doesn't exist.
+Leave it out, or set it to the base branch, to stay on the current branch.
 
 ```markdown
 Title: Add rate limiting to POST /sessions

@@ -13,7 +13,7 @@ ticket or sentence
    ├─ (TDD specs) ──── optional
    ├─ implement ────── interactive agent session, you steer and exit
    ├─ auto-heal ────── rubocop autocorrect, failing specs fixed headlessly
-   ├─ review ───────── authoritative lint + tests, 4 reviewers, typed verdict
+   ├─ review ───────── authoritative lint + tests, 4-5 reviewers, typed verdict
    ├─ COMMIT GATE ──── you: approve, or have it fixed and re-reviewed
    └─ knowledge, PR description, improvement notes
 ```
@@ -32,6 +32,10 @@ migite doctor                                 # fix anything marked ✘
 
 A branch name that contains the ticket key (`BB-1234`) lets [Amend a task](./amend-a-task.md) find
 this task again later without being told.
+
+Instead of switching by hand, you can put the branch name in the intake's `**Branch base:**` field.
+Migite checks it out before planning, and creates it from the base branch if it doesn't exist yet.
+Leaving the field empty, or set to the base branch, keeps you on the current branch.
 
 ## Walkthrough: from a Jira ticket
 
@@ -98,8 +102,8 @@ preloaded. Watch it, answer its questions, redirect it when it drifts. Exit the 
 ### 4. Auto-heal and review
 
 No input needed. Rubocop autocorrects with no model call, failing specs are fixed headlessly (up to
-`heal.max_attempts`, default 3), then Phase 3 runs lint and tests again and four reviewers read the
-diff in parallel.
+`heal.max_attempts`, default 3), then Phase 3 runs lint and tests again and four reviewers (five when the
+diff touches views or JavaScript) read the diff in parallel.
 
 ```text
 ▶ Phase 2.5 — Running checks (auto-heal enabled, max 3 attempts)
@@ -133,14 +137,19 @@ Loop through `f` or `n` as often as you need. Then `y`.
 
 ### 6. Finish
 
-Migite asks one question for the repo's memory, writes the PR description in a short session, and
-prints what it spent:
+Migite asks one question for the repo's memory, proposes edits that bring `plan.md` up to date
+with what the run built, writes the PR description in a short session, writes the run's
+`summary.md`, and prints what it spent:
 
 ```text
 ▶ Phase 3.5/4 — Capturing knowledge
   Anything worth remembering from this run that migite might not catch? (optional, Enter to skip):
   invoices without line items are legal drafts, never an error
+▶ Phase 3.8/4 - Updating the plan
+  PLAN UPDATE: 00-build
+  Apply these changes to plan.md? [y/e/n] (y=apply, e=apply then edit, n=keep the plan as it is):
 ▶ Phase 4/4 — Generating PR description
+▶ Phase 4.2/4 - Writing run summary
 ✔ Workflow complete.
 ```
 
@@ -275,10 +284,12 @@ Everything lands in `scratchpad/bb-1234/` in the repo and is mirrored to the vau
 
 | File | Use it for |
 |---|---|
-| `plan.md`, `00-build/architecture-critic.md` | what was agreed before any code, and what the critic flagged |
+| `plan.md` | the living plan: the design as it now stands, updated at the end of every run |
+| `00-build/plan.md`, `00-build/architecture-critic.md` | what was agreed before any code, and what the critic flagged |
 | `testing-plan.md` | seed data, curl steps, and teardown for verifying the change by hand |
 | `00-build/implementation.md` | the agent's notes on what it changed |
 | `00-build/review.md`, `00-build/review.json` | the review and its machine-readable verdict |
+| `00-build/summary.md` | what the run changed and why, decisions, fix rounds, follow-ups |
 | `pr-description.md` | the PR body, ready to paste |
 | `00-build/usage.json` | calls, tokens, and cost for the run |
 | `index.md` (vault only) | every run of the task, its verdict, and links to its files |
