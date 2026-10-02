@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from migite import agents  # noqa: E402
+from migite import config  # noqa: E402
 from migite import gateway  # noqa: E402
 
 FAKE_DIR = str(ROOT / "tests")
@@ -223,12 +224,19 @@ class GatewayTest(_FakeClaude):
 
     def test_session_launch_defaults_and_pointer(self):
         self.assertEqual(gateway.session_launch("do it").argv,
-                         ["claude", "--permission-mode", "bypassPermissions", "--", "do it"])
+                         ["claude", "--permission-mode", "bypassPermissions", "--model",
+                          "claude-opus-5-5", "--", "do it"])          # the session role's tier
         self.assertEqual(gateway.session_launch("do it", permission="plan").argv[1:3], ["--permission-mode", "plan"])
         big = "z" * (gateway.INLINE_MAX + 1)
         launch = gateway.session_launch(big, prompt_file="/logs/p.txt")
         self.assertIn("/logs/p.txt", launch.argv[-1])
         self.assertLess(len(launch.argv[-1]), 1000)
+
+    def test_session_launch_obeys_a_pinned_role(self):
+        cfg = config.Config({"models": {"roles": {"session": "pinned-session"}}}, {}, [], [])
+        gateway.configure_from(cfg)
+        argv = gateway.session_launch("do it").argv
+        self.assertEqual(argv[argv.index("--model") + 1], "pinned-session")
 
     def test_reset_restores_the_built_in_state(self):
         gateway.AGENT = agents.get("opencode")

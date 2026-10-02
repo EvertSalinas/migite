@@ -176,6 +176,9 @@ ROLE_TIERS: dict[str, str] = {
     "plan_fold": "standard",      # end-of-run exact edits that keep plan.md current
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
     "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
+    "session": "strong",          # run_phase's interactive sessions: implement, specs, gate
+                                  # fixes, PR description — the drafter, never weaker than the
+                                  # critic whose findings it applies. Pins via models.roles.session.
     # migite-explore
     "lens": "standard", "explore_synth": "strong", "challenge": "strong",
     "explore_refine": "strong",   # the reviser should not be weaker than the challenger
