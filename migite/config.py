@@ -201,6 +201,7 @@ ROLE_TIERS: dict[str, str] = {
 #   default - the CLI's normal toolset and context: heal edits files, and jira's
 #             scoped MCP tools need the CLI's MCP servers
 ROLE_TOOLS: dict[str, str] = {
+    "critic": "read",             # architecture critic verifies the plan's claims against the repo
     "review_correctness": "read", "review_security": "read",
     "review_test_coverage": "read", "review_testing_plan": "read",
     "review_frontend": "read",

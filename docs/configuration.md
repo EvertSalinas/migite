@@ -377,7 +377,7 @@ the agent CLI's MCP servers, plugins, hooks or skills:
 
 | Roles | Tools |
 |---|---|
-| `review_*`, `pr_review_*`, `audit_area` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
+| `critic`, `review_*`, `pr_review_*`, `audit_area` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
 | `heal` | the CLI's full toolset (it edits files) |
 | `jira` | the CLI's full context (its scoped tools are MCP tools) |
 | every other role | no tools: the prompt carries everything |
