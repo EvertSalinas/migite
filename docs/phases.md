@@ -70,6 +70,18 @@ Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (
 
 After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. The gate then opens:
 
+**The refiner can say no.** `refine_plan` applies the critic's findings as exact edits, but it is no longer
+forced to apply every one. For each finding it either edits the plan or rejects it, and it may reject only
+when the plan itself or the explorer reports (which it is given as context) show the finding is wrong or
+already handled, for example the plan already specifies the index or lock the critic asks for. A rejection
+must quote that evidence verbatim, and migite checks the quote is really in the plan or the explorer reports.
+Rejections that check out are listed under `## Rejected by the plan refiner` at the end of
+`architecture-critic.md`, so they print right below the critic's findings at the gate, each with its
+reason. One whose quote cannot be found is not trusted: it is listed under `## Not applied, reason not
+verified` and stays open. If you disagree with a rejection, `f` asks for the change. The refiner has no
+tools, so when it cannot show from that text that a finding is wrong it must address it. Both lists are
+in `plan.json` (`refine_rejected[]`, `refine_unverified[]`). The full-rewrite fallback still addresses every finding.
+
 ```
 Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort):
 ```
@@ -196,12 +208,35 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
     ├── review: testing_plan     (testing-plan.md completeness — see below)
     └── review: frontend         (only when the diff touches views or JavaScript - see Frontend)
          │
+    verify_findings      → a second agent tries to disprove each Critical (see below)
+         │
     synthesize_verdict   → de-duplicates findings → READY TO COMMIT | NEEDS FIXES
          │
     write_review   → review.md + sentinel
 ```
 
 All reviewers (four, or five with frontend) use Sonnet 5 and run in parallel; `synthesize_verdict` uses Opus 5. The commit gate then opens with a context banner showing the verdict, spec failures, and rubocop offense count.
+
+**Findings are checked before they decide the verdict.** A reviewer can be confidently wrong about code
+it did read, and a wrong Critical turns into a wrong `NEEDS FIXES` and a wrong `f` fix round. So
+`verify_findings` (`migite/verify.py`, shared with `migite-pr-review`) sits between the reviewers and
+the synthesis:
+
+- **Evidence.** The correctness, security and test-coverage reviewers must quote, on an `**Evidence:**`
+  line, the exact line of code each Critical and Warning rests on. migite checks the quote exists near the
+  cited line (no model call). A Warning whose evidence is missing or does not match is sent to the refuter.
+- **Refuter.** Every Critical goes to a fresh agent (role `refute`, strong tier, read-only tools) that
+  sees the claim and the cited location but not the reviewer's reasoning or fix, and is asked to disprove
+  it by tracing the code the way Ruby and Rails resolve it (constant lookup through enclosing modules,
+  inheritance, concerns, default scopes). `CONFIRMED` keeps the finding and adds a `**Verified:**` line.
+  `REFUTED` removes it from the findings and lists it under `## Refuted by verification` at the end of
+  `review.md` (and in `review.json` as `refuted[]`), so you can audit the call. `UNVERIFIABLE` demotes it
+  to a Note. If the refuter fails or times out the finding stays as reported, marked as not checked.
+- The `testing_plan` and `frontend` reviewers are not refuted: their findings rest on a document or a
+  browser report, not on code. At most 12 findings are checked per run, Criticals first.
+
+To decorrelate the refuter's mistakes from the reviewers', pin it to another model or backend with
+`models.roles.refute` (see [configuration](./configuration.md#models)).
 
 ```
 Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort):

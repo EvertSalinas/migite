@@ -190,6 +190,10 @@ ROLE_TIERS: dict[str, str] = {
     "pr_review_test_coverage": "standard",
     "pr_review_conventions_and_migrations": "standard",
     "pr_verdict": "strong",
+    # both reviewers: the second agent that tries to disprove each Critical (migite/verify.py).
+    # Never weaker than the reviewers whose findings it checks; pin `models.roles.refute` to
+    # another model or backend to decorrelate its mistakes from theirs.
+    "refute": "strong",
 }
 
 # What each headless role may use when permissions.headless_tools is `isolated`:
@@ -204,6 +208,7 @@ ROLE_TOOLS: dict[str, str] = {
     "pr_review_correctness": "read", "pr_review_security": "read",
     "pr_review_test_coverage": "read", "pr_review_conventions_and_migrations": "read",
     "audit_area": "read",
+    "refute": "read",
     "heal": "default",
     "jira": "default",
 }

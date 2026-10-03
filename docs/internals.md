@@ -56,6 +56,7 @@ migite/                       ← wherever you clone this repo
 │   │   ├── kimi.py           ← Kimi Code
 │   │   └── opencode.py       ← OpenCode
 │   ├── trackers/             ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
+│   ├── verify.py             ← evidence gate and refuter for reviewer findings, shared by review.py and pr_review.py
 │   └── tools/                ← the LangGraph tools
 │       ├── plan.py           ← the planner ("migite-plan"), called by Phase 1
 │       ├── review.py         ← the reviewer ("migite-review"), called by Phase 3
@@ -63,6 +64,7 @@ migite/                       ← wherever you clone this repo
 │       ├── blueprint.py      ← behind bin/migite-blueprint
 │       ├── audit.py          ← behind bin/migite-audit
 │       └── pr_review.py      ← behind bin/migite-pr-review
+├── evals/                    ← promptfoo setup that calibrates the refuter against labeled findings (README.md); offline, not part of the package
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
 ├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
 ├── tests/                    ← run.sh (bash suite), test_*.py (unittest, incl. the adapter contract), fake CLIs per agent, fixtures/
@@ -204,6 +206,8 @@ for every role that doesn't need it (see [configuration.md](./configuration.md#p
 | `plan_headings` | The plan's `## ` headings, in order |
 | `synth_retries` | 0 or 1 — whether synthesis needed the stub retry |
 | `refine_status` | `no_concerns` / `applied_as_edits` / `no_edits_needed` (the critic's findings applied as exact edits, or none needed) / `applied` / `applied_after_retry` / `kept_draft` (the full-rewrite fallback) |
+| `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports. Listed at the end of `architecture-critic.md` |
+| `refine_unverified[]` | Findings the refiner declined but whose quoted reason is not in the plan or the explorer reports: left open, listed the same way |
 | `explorers.count`, `explorers.failed[]` | How many explorers ran and which failed |
 | `usage` | This tool's calls from the ledger, summed |
 
@@ -215,6 +219,7 @@ for every role that doesn't need it (see [configuration.md](./configuration.md#p
 | `verdict_label`, `reason` | The model's exact verdict string and its one-line justification |
 | `findings[]` | `{severity, dimension, file, line, problem, fix}` from the structured call (empty in the markdown fallback) |
 | `counts` | Per-severity totals (from `findings[]`, or 🔴/🟡/🟢 counts in the fallback) |
+| `refuted[]` | Findings the verification step disproved: `{dimension, severity, title, location, reason, evidence}`. They are not in `findings[]` or `counts` |
 | `dimensions` | Per-reviewer 🔴/🟡/🟢 counts and a `failed` flag |
 | `source` | `structured` or `markdown` |
 | `usage` | This tool's calls from the ledger, summed |

@@ -13,7 +13,7 @@ ticket or sentence
    ├─ (TDD specs) ──── optional
    ├─ implement ────── interactive agent session, you steer and exit
    ├─ auto-heal ────── rubocop autocorrect, failing specs fixed headlessly
-   ├─ review ───────── authoritative lint + tests, 4-5 reviewers, typed verdict
+   ├─ review ───────── authoritative lint + tests, 4-5 reviewers, a refuter on each Critical, typed verdict
    ├─ COMMIT GATE ──── you: approve, or have it fixed and re-reviewed
    └─ knowledge, PR description, improvement notes
 ```
@@ -68,7 +68,11 @@ out of scope, then save and close.
 
 ### 2. The plan gate
 
-The critic's findings print above the prompt. Read `plan.md` (it is in the scratchpad), then decide:
+The critic's findings print above the prompt. The refiner has already applied them to the plan as exact edits,
+except any it could show were wrong or already handled from the plan and the explorer reports: those are
+listed under "Rejected by the plan refiner", each with its reason, right below the findings. Read them: a
+rejected finding is not re-raised by anything later, and `f` asks for the change if you disagree. Read
+`plan.md` (it is in the scratchpad), then decide:
 
 ```text
 ── Architecture critic ─────────────────────────────
@@ -103,7 +107,10 @@ preloaded. Watch it, answer its questions, redirect it when it drifts. Exit the 
 
 No input needed. Rubocop autocorrects with no model call, failing specs are fixed headlessly (up to
 `heal.max_attempts`, default 3), then Phase 3 runs lint and tests again and four reviewers (five when the
-diff touches views or JavaScript) read the diff in parallel.
+diff touches views or JavaScript) read the diff in parallel. A second agent then tries to disprove each
+Critical before it can decide the verdict: a wrong finding is dropped (and listed at the end of
+`review.md`), one it cannot confirm becomes a Note, and a confirmed one carries a `Verified:` line.
+See [Phase 3](../phases.md#phase-3-review).
 
 ```text
 ▶ Phase 2.5 — Running checks (auto-heal enabled, max 3 attempts)

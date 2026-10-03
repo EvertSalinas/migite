@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Calibrates migite's refuter (migite/verify.py) against findings you labeled true or false:
+# does it confirm the real ones and refute the wrong ones? See README.md.
+description: migite refuter calibration
+
+# The provider builds the real refuter prompt itself; this only gives each test a name.
+prompts:
+  - "{{id}}"
+
+providers:
+  # The prompt migite ships, on the model your migite config gives the `refute` role.
+  - id: file://providers/refuter.py
+    label: shipped prompt
+  # The same model with the focused prompt from variants.py: it stops at the first decisive line.
+  - id: file://providers/refuter.py
+    label: focused prompt
+    config:
+      variant: focused
+  # Compare models too. Every provider doubles the cost of a run.
+  # - id: file://providers/refuter.py
+  #   label: shipped prompt on opus
+  #   config:
+  #     model: claude-opus-5-5
+
+tests: file://tests_from_golden.py:generate_tests
+
+defaultTest:
+  assert:
+    - type: python
+      value: file://assertions/verdict.py
+
+evaluateOptions:
+  maxConcurrency: 3

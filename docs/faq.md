@@ -21,6 +21,19 @@ That is Claude Code's own system context being sent with each headless call. It 
 cache hit after the first call in a run, so the per-call cost drops sharply from the second call
 on. The usage summary prints the total so you can see it.
 
+**Can a wrong review finding block me?**
+Less often than it used to. Reviewers must quote the line each Critical and Warning rests on, and
+a second agent (the refuter) then tries to disprove every Critical with read-only tools before it
+can decide the verdict. A finding it disproves is dropped and listed at the end of `review.md`
+under "Refuted by verification". It can still be wrong in both directions, which is why
+[calibrating it](./workflows/calibrate-the-refuter.md) against findings you labeled is a workflow of
+its own. See [troubleshooting](./troubleshooting.md#troubleshooting-refuted).
+
+**What does the refuter cost?**
+One strong-tier call per Critical, roughly $0.2 to $0.6 each on Fable 5.1 (it varies about 30% between
+runs of the same finding), and none when a review has no Critical. At most 12 findings are checked
+per run. Warnings are checked only when their evidence did not check out.
+
 **Does `--jira` fetch the ticket's content?**
 Yes, for planning. The ticket's title, type, priority, status, description, and acceptance
 criteria are fetched before the planner runs, cached to `jira-context.md`, and given to synthesis

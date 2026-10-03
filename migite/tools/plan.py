@@ -377,6 +377,8 @@ class PlanState(TypedDict):
     # what refine_plan did with the critic findings.
     synth_retries: int
     refine_status: str
+    refine_rejected: list     # critic findings the refiner rejected, with evidence found in the plan or explorer reports
+    refine_unverified: list   # findings it declined, but whose quoted reason is not in either: left open
 
 
 class ExploreInput(TypedDict):
@@ -572,6 +574,41 @@ def run_architecture_critic(state: PlanState) -> dict:
     return {"critic_findings": findings}
 
 
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def check_rejections(rejected: list, plan: str, explorations: list) -> tuple[list[dict], list[dict]]:
+    """Split the findings the refiner rejected into (verified, unverified). A rejection stands only
+    when the passage it quotes as evidence is really in the plan or the explorer reports: the refiner
+    has no tools, so a reason it cannot quote is a guess, and the finding stays open."""
+    haystack = _norm("\n".join([plan, *explorations]))
+    verified, unverified = [], []
+    for r in rejected:
+        if not isinstance(r, dict) or not str(r.get("finding", "")).strip():
+            continue
+        item = {k: str(r.get(k, "")).strip() for k in ("finding", "reason", "evidence")}
+        quote = _norm(item["evidence"])
+        (verified if quote and quote in haystack else unverified).append(item)
+    return verified, unverified
+
+
+def rejections_appendix(rejected: list, unverified: list) -> str:
+    """The sections added to architecture-critic.md (shown at the plan gate) for findings the refiner
+    did not apply. Plain text, no severity marks, so nothing that counts them reads these as findings."""
+    parts = []
+    if rejected:
+        rows = "\n".join(f"- {r['finding']}: {r['reason']} (evidence: \"{r['evidence'][:200]}\")" for r in rejected)
+        parts.append("## Rejected by the plan refiner\nThe refiner judged these findings wrong or already handled, from the "
+                     "plan and the explorer reports, so the plan was not changed for them. If you disagree, ask for the "
+                     "change with `f`.\n" + rows)
+    if unverified:
+        rows = "\n".join(f"- {r['finding']}: {r['reason']}" for r in unverified)
+        parts.append("## Not applied, reason not verified\nThe refiner declined these findings, but the passage it quoted "
+                     "as its reason is not in the plan or the explorer reports. Treat them as open.\n" + rows)
+    return "\n\n".join(parts)
+
+
 def refine_plan(state: PlanState) -> dict:
     findings = state.get("critic_findings", "")
     if "No architectural concerns" in findings:
@@ -586,13 +623,26 @@ def refine_plan(state: PlanState) -> dict:
             state["plan_draft"], name="plan.md", role="think", label="refine_plan:edits", tool="migite-plan",
             task=("An architecture critic reviewed this plan. Edit the plan so it addresses every finding "
                   "below, keeping its structure and formatting conventions (### subheadings, tables, `---` "
-                  "between top-level sections)."),
-            context=[("Architecture critic findings", findings)])
+                  "between top-level sections). A finding the plan or the explorer reports show to be wrong "
+                  "or already handled is rejected instead of edited."),
+            context=[("Architecture critic findings", findings),
+                     ("Explorer reports (what the codebase contains)", "\n\n".join(state.get("explorations") or [])[:24000])],
+            triage=True)
     except gateway.AgentError as e:
         edited, report = None, {"reason": str(e)[:200]}
     if edited is not None:
         doc_edits.print_report(report)
-        return {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed"}
+        out = {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed"}
+        verified, unverified = check_rejections(report.get("rejected_findings") or [], state["plan_draft"],
+                                                state.get("explorations") or [])
+        if verified:
+            out["refine_rejected"] = verified
+        if unverified:
+            out["refine_unverified"] = unverified
+        if verified or unverified:
+            print(f"  ▶ Refine rejected {len(verified)} finding(s) with evidence"
+                  + (f"; {len(unverified)} declined without a reason that checks out (left open)" if unverified else ""), flush=True)
+        return out
     print(f"  ⚠ Refine by edits didn't work ({report.get('reason', 'unknown')}); rewriting the plan in full", flush=True)
     prompt = f"""Original plan:
 {state['plan_draft']}
@@ -701,7 +751,8 @@ def write_outputs(state: PlanState) -> dict:
 
     critic_path = Path(state["critic_output"])
     critic_path.parent.mkdir(parents=True, exist_ok=True)
-    critic_path.write_text(state["critic_findings"])
+    appendix = rejections_appendix(state.get("refine_rejected") or [], state.get("refine_unverified") or [])
+    critic_path.write_text(f"{state['critic_findings'].rstrip()}\n\n{appendix}\n" if appendix else state["critic_findings"])
     print(f"    ✔ architecture-critic.md → {critic_path}", flush=True)
 
     testing_plan_path = Path(state["testing_plan_output"])
@@ -738,6 +789,8 @@ def write_outputs(state: PlanState) -> dict:
         "plan_headings": [l.strip() for l in state["plan_final"].splitlines() if l.startswith("## ")],
         "synth_retries": state.get("synth_retries", 0),
         "refine_status": state.get("refine_status", ""),
+        "refine_rejected": state.get("refine_rejected") or [],
+        "refine_unverified": state.get("refine_unverified") or [],
         "explorers": {
             "count": len(state["explorations"]),
             "failed": failed_explorers,
@@ -874,6 +927,8 @@ def main() -> None:
             "testing_plan":   "",
             "synth_retries":  0,
             "refine_status":  "",
+            "refine_rejected": [],
+            "refine_unverified": [],
         })
         print("\n  ✔ migite-plan complete", flush=True)
     except Exception as e:

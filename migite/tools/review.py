@@ -3,7 +3,8 @@
 #
 # Reads plan.md, any amendments, implementation notes, rubocop/rspec logs, and git diff.
 # Fans out 4 parallel specialist reviewers (5 when the diff touches views or
-# JavaScript: see FRONTEND_DIMENSION), synthesises a verdict, and writes
+# JavaScript: see FRONTEND_DIMENSION), has a second agent try to disprove their
+# Criticals (migite/verify.py), synthesises a verdict, and writes
 # review.md + sentinel. Called by migite's spawn_langgraph().
 #
 # Usage:
@@ -29,6 +30,7 @@ from langgraph.types import Send
 from migite import gateway
 from migite import config
 from migite import paths
+from migite import verify
 
 # Defaults from config's single table; main() replaces them from the loaded
 # config (one role per review dimension, plus `verdict`).
@@ -245,6 +247,8 @@ class ReviewState(TypedDict):
     sentinel: str
     review_cmd: str
     findings: Annotated[list[str], operator.add]
+    verified: list[str]  # findings after verify_findings: confirmed, demoted or removed
+    refuted: list[dict]  # what verification disproved, for the appendix and review.json
     verdict: str
     review_meta: dict   # structured fields for review.json, set by synthesize_verdict
     rerun: list[str]    # dimensions to review this pass; the others were carried over
@@ -333,6 +337,11 @@ def review_dimension(state: DimensionInput) -> dict:
                 "A FAIL step or a JavaScript console error is 🔴 Critical unless the report shows it is an "
                 "environment problem (server not running, seed data missing), which is a 🟡 Warning.\n"
             )
+    evidence_field = "" if dim in verify.SKIP_DIMENSIONS else f"  - {verify.EVIDENCE_LINE}\n"
+    grounding = (f"You have read-only tools (Read, Grep, Glob) on the repository, and nothing else. Open a file "
+                 f"whenever a claim needs it, and no more: each costs time and tokens.\n"
+                 if dim in verify.SKIP_DIMENSIONS else
+                 verify.GROUNDING + "\nEach file you open costs time and tokens: open what a claim needs, no more.")
     prompt = f"""You are a senior Rails engineer doing a focused code review.
 Your dimension: **{dim}**
 
@@ -353,7 +362,13 @@ Criteria: {state['description']}
 ## RSpec results
 {state['rspec_log'][:1500]}
 
-Review for **{dim}** only. List each finding with severity:
+Review for **{dim}** only. Report each finding as a block:
+
+- 🔴 **Critical** (or 🟡 **Warning**, or 🟢 **Note**) · `path/file.rb:N` · <short title>
+  - **Problem:** <what is wrong, and what it causes in practice>
+{evidence_field}  - **Fix:** <the change you recommend, concrete enough to apply>
+
+Severity:
 - 🔴 **Critical** — will break in production or is a security risk
 - 🟡 **Warning** — likely issue under load or edge cases
 - 🟢 **Note** — low severity, worth being aware of
@@ -361,9 +376,7 @@ Review for **{dim}** only. List each finding with severity:
 If nothing found, output exactly: ✅ No issues in this dimension.
 Do not repeat findings that other dimensions would cover.
 
-You have read-only tools (Read, Grep, Glob) on the repository, and nothing else. Everything above is
-usually enough: open a file only to check what the diff can't show, such as a caller, a model's
-validations, or a spec the diff doesn't include. Each file you open costs time and tokens."""
+{grounding}"""
 
     try:
         result = call_agent(prompt, f"review_{dim}", label=f"review:{dim}").text
@@ -375,6 +388,26 @@ validations, or a spec the diff doesn't include. Each file you open costs time a
         else:
             result = f"🔴 **Critical** — reviewer failed: {e}"
     return {"findings": [f"### {dim}\n{result}"]}
+
+
+def reviewed(state: ReviewState) -> list[str]:
+    """The reviewers' findings after verification, or as reported when it did not run."""
+    return state.get("verified") or state["findings"]
+
+
+def verify_findings(state: ReviewState) -> dict:
+    """Evidence gate and refuter over every dimension's findings, before the synthesis sees them."""
+    intent = "\n".join([state["plan"], state["implementation"], *state.get("amendments", [])])
+    context = ("\nThe change under review is in the repository working tree (uncommitted or on this branch). "
+               f"The approved plan, for intent:\n{state['plan'][:2500]}\n")
+    blocks, refuted = verify.verify_blocks(
+        state["findings"],
+        ask=lambda prompt, label: call_agent(prompt, verify.REFUTE_ROLE, label=label).text,
+        read_file=verify.make_reader(state["repo_root"]),
+        extra=f"{state['git_diff']}\n{intent}",
+        context=context,
+    )
+    return {"verified": blocks, "refuted": refuted}
 
 
 def synth_frontend_block(state: ReviewState) -> str:
@@ -391,7 +424,8 @@ def synth_frontend_block(state: ReviewState) -> str:
 
 def synthesize_verdict(state: ReviewState) -> dict:
     print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
-    findings_text = "\n\n".join(state["findings"])
+    findings_text = "\n\n".join(reviewed(state))
+    refuted = state.get("refuted") or []
     base_prompt = f"""## Review format
 {state['review_cmd']}
 
@@ -437,7 +471,7 @@ Return a JSON object matching the provided schema:
                 "findings": s.get("findings") or [],
                 "source": "structured",
             }
-            return {"verdict": s["document"], "review_meta": meta}
+            return {"verdict": verify.append_refuted(s["document"], refuted), "review_meta": meta}
         print("  ⚠ Structured verdict missing or malformed — falling back to text synthesis", flush=True)
     except Exception as e:
         if gateway.supports("structured_output"):
@@ -456,7 +490,7 @@ Return a JSON object matching the provided schema:
         "findings": [],
         "source": "markdown",
     }
-    return {"verdict": doc, "review_meta": meta}
+    return {"verdict": verify.append_refuted(doc, refuted), "review_meta": meta}
 
 
 def write_review(state: ReviewState) -> dict:
@@ -475,7 +509,7 @@ def write_review(state: ReviewState) -> dict:
     else:
         counts = gateway.severity_counts(state["verdict"])
     dimensions = {}
-    for block in state["findings"]:
+    for block in reviewed(state):
         head, _, body = block.partition("\n")
         dim = head.lstrip("# ").strip()
         dimensions[dim] = {**gateway.severity_counts(body), "failed": "reviewer failed" in body}
@@ -489,6 +523,7 @@ def write_review(state: ReviewState) -> dict:
         "reason": meta.get("reason", ""),
         "counts": counts,
         "findings": findings,
+        "refuted": state.get("refuted") or [],
         "dimensions": dimensions,
         "source": meta.get("source", "markdown"),
         "outputs": {"review": str(review_path)},
@@ -499,7 +534,7 @@ def write_review(state: ReviewState) -> dict:
     # Each dimension's own output, for a later re-review to carry clean ones over.
     gateway.write_json(review_path.with_name("review-dimensions.json"), {
         "dimensions": {head.lstrip("# ").strip(): body.strip() for head, _, body in
-                       (block.partition("\n") for block in state["findings"])},
+                       (block.partition("\n") for block in reviewed(state))},
         "testing_plan_sha": _sha(state["testing_plan"]),
     })
     print(f"    ✔ review.json → {json_path}  (verdict={envelope['verdict']}, "
@@ -516,12 +551,14 @@ def build_graph() -> StateGraph:
     g = StateGraph(ReviewState)
     g.add_node("load_inputs", load_inputs)
     g.add_node("review_dimension", review_dimension)
+    g.add_node("verify_findings", verify_findings)
     g.add_node("synthesize_verdict", synthesize_verdict)
     g.add_node("write_review", write_review)
 
     g.add_edge(START, "load_inputs")
     g.add_conditional_edges("load_inputs", route_to_reviewers, ["review_dimension"])
-    g.add_edge("review_dimension", "synthesize_verdict")
+    g.add_edge("review_dimension", "verify_findings")
+    g.add_edge("verify_findings", "synthesize_verdict")
     g.add_edge("synthesize_verdict", "write_review")
     g.add_edge("write_review", END)
     return g.compile()
@@ -596,7 +633,7 @@ def main() -> None:
         rerun = dims_to_rerun(previous, testing_plan, dim_names)
         carried = carried_findings(previous, rerun, dim_names)
 
-    print(f"\n  migite-review | {dims}  verdict={gateway.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
+    print(f"\n  migite-review | {dims}  refute={gateway.model_for(verify.REFUTE_ROLE) or 'default'}  verdict={gateway.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
 
     graph = build_graph()
     try:
@@ -618,6 +655,8 @@ def main() -> None:
             "sentinel": args.sentinel,
             "review_cmd": review_cmd,
             "findings": carried,
+            "verified": [],
+            "refuted": [],
             "verdict": "",
             "review_meta": {},
             "rerun": rerun,

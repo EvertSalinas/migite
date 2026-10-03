@@ -138,6 +138,18 @@ models:
     critic: max                   # the critic thinks hardest
 ```
 
+The refuter (`refute`, the second agent that tries to disprove each Critical) is worth pinning
+separately: it decides whether a finding blocks a merge, runs on only a few findings per review,
+and checks the reviewers' work better when it is not the same model.
+
+```yaml
+models:
+  roles:
+    refute: claude-fable-5-1      # a stronger, different model than the Opus reviewers it checks
+```
+
+Measure a change like this before relying on it: [Calibrate the refuter](./calibrate-the-refuter.md).
+
 `migite config` lists every role and the model it resolves to. The three tiers (`fast`,
 `standard`, `strong`) move many roles at once; `roles` pins one. See
 [configuration.md](../configuration.md#models).
@@ -194,3 +206,4 @@ ledger lines (`MIGITE_USAGE_LEDGER`, in `logs.dir`).
 
 - [configuration.md](../configuration.md): every key, with recipes
 - [Use another agent](./use-another-agent.md): the `agent` block
+- [Calibrate the refuter](./calibrate-the-refuter.md): measure a model or prompt change for the `refute` role

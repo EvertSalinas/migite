@@ -1,0 +1,18 @@
+# The shape of golden/findings.yaml (which is gitignored: it holds findings from private repos).
+# extract_candidates.py writes these; label.py fills in `label`.
+- id: pr-review-example-20261001-151652#1
+  repo: ~/Code/some-org/some-repo          # a local checkout
+  ref: 0123456789abcdef0123456789abcdef01234567   # the commit the review looked at
+  ref_approximate: false                   # true: the report only had a date
+  severity: critical                       # critical | warning
+  location: app/controllers/api/v1/chat/messages/insights_controller.rb:7
+  title: Wrong base controller breaks `authorize` and `current_user`
+  problem: >-
+    InsightsController inherits from the bare ApplicationController, which does not include
+    Pundit::Authorization, so `authorize` raises NoMethodError.
+  source: some-org/some-repo/bb-1/pr-review-example-20261001-151652.md
+  hint:
+    branch: bb-1
+    commits_touching_the_file_after_the_review: 0
+  label: false                             # true = a real problem; false = the finding is wrong; null = not labeled yet
+  label_note: Inside module API::V1::Chat::Messages the constant resolves to API::V1::Chat::ApplicationController.

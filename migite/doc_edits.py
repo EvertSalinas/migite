@@ -52,6 +52,30 @@ EDIT_SCHEMA = {
     "required": ["revision", "edits"],
 }
 
+# Triage mode (the plan refiner): the context holds findings, and the editor may reject one it can
+# show is wrong from the text it was given, instead of being forced to address every finding.
+TRIAGE_PROPERTY = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "finding": {"type": "string", "description": "the rejected finding, quoted or paraphrased briefly"},
+            "reason": {"type": "string", "description": "one line: why it is wrong or already handled"},
+            "evidence": {"type": "string", "description": "a passage copied verbatim from the document or the context that shows it"},
+        },
+        "required": ["finding", "reason", "evidence"],
+    },
+}
+TRIAGE_SCHEMA = {**EDIT_SCHEMA, "properties": {**EDIT_SCHEMA["properties"], "rejected_findings": TRIAGE_PROPERTY}}
+
+TRIAGE_RULES = """- For each finding in the context, either edit the document so it addresses the finding, or REJECT it by
+  listing it in `rejected_findings`. Reject only when the document or the rest of the context shows the
+  finding is wrong or already handled: for example the document already specifies the index, guard or lock
+  it asks for, or it assumes something the explorer reports contradict. `evidence` is a passage copied
+  VERBATIM from the document or the context that shows this.
+- You have no tools and cannot read the codebase. When you cannot show from the text you were given that a
+  finding is wrong, address it. Never reject a finding because it is costly or inconvenient to fix."""
+
 EDIT_RULES = """- Each edit's `find` is a passage copied VERBATIM from the document (whitespace included), long enough
   to appear exactly once in it. `replace` is that passage corrected. Edits that don't match exactly once
   are dropped. To add new text, `find` the passage it goes after and `replace` it with that passage plus
@@ -106,11 +130,18 @@ def parse_reply(text: str, structured: object = None) -> dict | None:
                 obj = None
     if not isinstance(obj, dict) or not isinstance(obj.get("edits", []), list):
         return None
-    return {"revision": str(obj.get("revision") or ""), "edits": obj.get("edits") or []}
+    parsed = {"revision": str(obj.get("revision") or ""), "edits": obj.get("edits") or []}
+    if isinstance(obj.get("rejected_findings"), list):      # only a triage reply carries it
+        parsed["rejected_findings"] = [r for r in obj["rejected_findings"] if isinstance(r, dict)]
+    return parsed
 
 
-def build_update_prompt(doc: str, *, name: str, task: str, context: list[tuple[str, str]]) -> str:
+def build_update_prompt(doc: str, *, name: str, task: str, context: list[tuple[str, str]], triage: bool = False) -> str:
     blocks = "\n".join(f"\n## {heading}\n{body}" for heading, body in context if body.strip())
+    triage_rules = f"\n{TRIAGE_RULES}" if triage else ""
+    shape = ('{"revision": "...", "edits": [{"find": "...", "replace": "...", "why": "..."}], '
+             '"rejected_findings": [{"finding": "...", "reason": "...", "evidence": "..."}]}') if triage else \
+            '{"revision": "...", "edits": [{"find": "...", "replace": "...", "why": "..."}]}'
     return f"""You are editing {name}, a document for a software task. {task}
 {blocks}
 
@@ -118,27 +149,31 @@ def build_update_prompt(doc: str, *, name: str, task: str, context: list[tuple[s
 {doc}
 
 ## Rules
-{EDIT_RULES}
+{EDIT_RULES}{triage_rules}
 - `revision`: one sentence, at most 25 words, saying what changed (or "No changes." for an empty list).
 
-Return ONLY a JSON object: {{"revision": "...", "edits": [{{"find": "...", "replace": "...", "why": "..."}}]}}"""
+Return ONLY a JSON object: {shape}"""
 
 
 def update(doc: str, *, name: str, task: str, context: list[tuple[str, str]], role: str,
-           label: str, tool: str = "migite") -> tuple[str | None, dict]:
+           label: str, tool: str = "migite", triage: bool = False) -> tuple[str | None, dict]:
     """Ask for edits to `doc` and apply them. Returns (new_doc, report); new_doc is
     None when no usable edit came back, so the caller falls back to a full rewrite:
     an unparseable reply, or edits proposed where none applied. An empty edit list
     is a real answer (nothing to change) and returns the document as it was.
+    With `triage`, the editor may also reject findings in the context; the report then carries
+    `rejected_findings` (unchecked: the caller verifies their evidence).
     Raises gateway.AgentError when the call itself fails."""
-    prompt = build_update_prompt(doc, name=name, task=task, context=context)
-    schema = EDIT_SCHEMA if gateway.supports("structured_output") else None
+    prompt = build_update_prompt(doc, name=name, task=task, context=context, triage=triage)
+    schema = (TRIAGE_SCHEMA if triage else EDIT_SCHEMA) if gateway.supports("structured_output") else None
     res = gateway.call_agent(prompt, role, label=label, tool=tool, schema=schema)
     reply = parse_reply(res.text, res.structured)
     if reply is None:
         return None, {"reason": "the reply had no usable JSON edit list", "applied": [], "rejected": []}
     new_doc, applied, rejected = apply_edits(doc, reply["edits"])
     report = {"revision": reply["revision"], "applied": applied, "rejected": rejected}
+    if triage:
+        report["rejected_findings"] = reply.get("rejected_findings", [])
     if reply["edits"] and not applied:
         return None, {**report, "reason": "no proposed edit matched the document exactly once"}
     return new_doc, report

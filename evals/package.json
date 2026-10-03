@@ -1,0 +1,14 @@
+{
+  "name": "migite-evals",
+  "private": true,
+  "description": "Offline evals for migite's LLM steps, run with promptfoo. Not part of the Python package.",
+  "scripts": {
+    "extract": "${MIGITE_PYTHON:-python3} extract_candidates.py",
+    "label": "${MIGITE_PYTHON:-python3} label.py",
+    "eval": "PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 PROMPTFOO_PYTHON=\"${MIGITE_PYTHON:-python3}\" promptfoo eval --no-cache",
+    "view": "PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 promptfoo view"
+  },
+  "devDependencies": {
+    "promptfoo": "0.123.1"
+  }
+}
