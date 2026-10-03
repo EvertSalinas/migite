@@ -285,6 +285,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `pr_review_correctness`, `pr_review_security` | strong | `migite-pr-review` reviewers |
 | `pr_review_test_coverage`, `pr_review_conventions_and_migrations` | standard | `migite-pr-review` reviewers |
 | `pr_verdict` | strong | `migite-pr-review` verdict |
+| `refute` | strong | `migite-review` and `migite-pr-review`: the second agent that tries to disprove each Critical before the verdict. Never weaker than the reviewers it checks; pin it to another model or backend to decorrelate errors |
 
 Changing a tier moves every role in it; pinning a role moves only that call. An unknown role
 name under `roles:` or `roles_effort:` is an error.
@@ -377,7 +378,7 @@ the agent CLI's MCP servers, plugins, hooks or skills:
 
 | Roles | Tools |
 |---|---|
-| `critic`, `review_*`, `pr_review_*`, `audit_area` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
+| `critic`, `review_*`, `pr_review_*`, `audit_area`, `refute` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
 | `heal` | the CLI's full toolset (it edits files) |
 | `jira` | the CLI's full context (its scoped tools are MCP tools) |
 | every other role | no tools: the prompt carries everything |

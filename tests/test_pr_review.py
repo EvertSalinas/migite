@@ -7,6 +7,7 @@ imports it at module load). Run: python3 -m unittest tests/test_pr_review.py"""
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -131,6 +132,18 @@ class ReviewerPromptTest(unittest.TestCase):
         for expected in ("**Problem:**", "**Fix:**", "**Alternative:**", "The Fix line is required on every finding"):
             self.assertIn(expected, prompt)
 
+    def test_each_reviewer_must_quote_evidence_and_is_told_it_has_tools(self):
+        def call_agent(prompt, role, label=""):
+            self.prompts.append(prompt)
+            return "✅ No issues in security."
+        self.tool.call_agent = call_agent
+        self.tool.review_dimension(self.dim_state())
+        prompt = self.prompts[0]
+        for expected in ("**Evidence:**", "required on every Critical and Warning", "Read, Grep, Glob",
+                         "constant lookup through the enclosing modules", "not a Critical"):
+            self.assertIn(expected, prompt)
+        self.assertNotIn("Only build on code you can see above", prompt)
+
     def test_a_failed_reviewer_still_gives_an_actionable_finding(self):
         def call_agent(prompt, role, label=""):
             raise RuntimeError("agent timed out")
@@ -139,6 +152,74 @@ class ReviewerPromptTest(unittest.TestCase):
         self.assertIn("agent timed out", block)
         self.assertIn("**Fix:**", block)
         self.assertIn("migite doctor", block)
+
+
+WRONG_CRITICAL = """- 🔴 **Critical** · `app/controllers/insights_controller.rb:5` · Wrong base controller
+  - **Problem:** inherits from the bare ApplicationController.
+  - **Evidence:** `app/controllers/insights_controller.rb:5` `class InsightsController < ApplicationController`
+  - **Fix:** inherit from API::V1::Chat::ApplicationController."""
+
+CONTROLLER = ("module API\n  module V1\n    module Chat\n      module Messages\n"
+              "        class InsightsController < ApplicationController\n")
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class VerificationStepTest(unittest.TestCase):
+    def setUp(self):
+        self.tool = load_tool()
+        self.calls = []
+        self.tmp = tempfile.TemporaryDirectory()
+        path = Path(self.tmp.name) / "app" / "controllers"
+        path.mkdir(parents=True)
+        (path / "insights_controller.rb").write_text(CONTROLLER)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fake(self, reply):
+        def call_agent(prompt, role, label=""):
+            self.calls.append((prompt, role, label))
+            return reply
+        self.tool.call_agent = call_agent
+
+    def state(self, **extra):
+        return {"branch": "feat/x", "base": "main", "repo_root": self.tmp.name, "diff": "", "jira": "",
+                "commits": "abc", "changed_files": ["a.rb"],
+                "findings": [f"### correctness\n{WRONG_CRITICAL}"], **extra}
+
+    def test_the_graph_verifies_between_the_reviewers_and_the_synthesis(self):
+        edges = {(e.source, e.target) for e in self.tool.build_graph().get_graph().edges}
+        self.assertIn(("review_dimension", "verify_findings"), edges)
+        self.assertIn(("verify_findings", "synthesize_verdict"), edges)
+
+    def test_a_refuted_critical_never_reaches_the_synthesis(self):
+        self.fake("VERDICT: REFUTED\nEVIDENCE: `x.rb:1` `module Chat`\nREASON: resolves to the Chat base.")
+        out = self.tool.verify_findings(self.state())
+        self.assertEqual([c[1] for c in self.calls], ["refute"])
+        self.assertNotIn("🔴", out["verified"][0])
+        self.assertEqual(out["refuted"][0]["title"], "Wrong base controller")
+
+        self.calls.clear()
+        self.fake("### unused")
+        self.tool.synthesize_verdict(self.state(**out))
+        self.assertNotIn("Wrong base controller", self.calls[0][0])
+
+    def test_the_synthesis_appends_what_was_refuted_to_the_review(self):
+        self.fake(COMPLETE)
+        refuted = [{"dimension": "correctness", "severity": "critical", "title": "Wrong base controller",
+                    "location": "a.rb:5", "reason": "resolves lexically", "evidence": ""}]
+        out = self.tool.synthesize_verdict(self.state(verified=["### correctness\n✅ No issues remain"], refuted=refuted))
+        self.assertTrue(out["verdict"].startswith(COMPLETE.rstrip()))
+        self.assertIn("## Refuted by verification", out["verdict"])
+        self.assertIn("Wrong base controller", out["verdict"])
+
+    def test_the_synthesis_prompt_carries_verification_through_and_defines_the_verdict(self):
+        self.fake(COMPLETE)
+        self.tool.synthesize_verdict(self.state())
+        prompt = self.calls[0][0]
+        self.assertIn("Evidence, Verified and Verification lines", prompt)
+        self.assertIn("never promote it", prompt)
+        self.assertIn("NEEDS CHANGES only when a Critical finding remains", prompt)
 
 
 if __name__ == "__main__":

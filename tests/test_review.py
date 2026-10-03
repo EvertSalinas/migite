@@ -8,6 +8,7 @@ Run: python3 -m unittest tests/test_review.py"""
 
 import importlib.util
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -80,6 +81,68 @@ class FrontendReviewerTest(unittest.TestCase):
         self.assertEqual(self.review.synth_frontend_block(state(browser_check=BROWSER_REPORT)), "")
         block = self.review.synth_frontend_block(state(frontend_files=["a.js"], browser_check=BROWSER_REPORT))
         self.assertIn("Result: FAIL - the modal never opened", block)
+
+
+CRITICAL = """- 🔴 **Critical** · `app/models/item.rb:2` · Unscoped lookup
+  - **Problem:** finds items across accounts.
+  - **Evidence:** `app/models/item.rb:2` `Item.find(id)`
+  - **Fix:** scope it to the account."""
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class VerificationStepTest(unittest.TestCase):
+    def setUp(self):
+        self.review = load_tool()
+        self.calls = []
+        self.tmp = tempfile.TemporaryDirectory()
+        (Path(self.tmp.name) / "app" / "models").mkdir(parents=True)
+        (Path(self.tmp.name) / "app" / "models" / "item.rb").write_text("class Item\n  Item.find(id)\nend\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fake(self, text="", structured=None):
+        def fake_call_agent(prompt, role, label="", schema=None):
+            self.calls.append((role, prompt, label))
+            return types.SimpleNamespace(text=text, structured=structured)
+        self.review.call_agent = fake_call_agent
+
+    def test_code_reviewers_must_quote_evidence_but_document_reviewers_need_not(self):
+        self.fake("✅ No issues in this dimension.")
+        for dim in ("security", "testing_plan"):
+            self.review.review_dimension({**state(), "dimension": dim, "description": "d", "amendments": []})
+        security, testing_plan = self.calls[0][1], self.calls[1][1]
+        self.assertIn("**Evidence:**", security)
+        self.assertIn("constant lookup through the enclosing modules", security)
+        self.assertNotIn("**Evidence:**", testing_plan)
+
+    def test_the_graph_verifies_between_the_reviewers_and_the_synthesis(self):
+        edges = {(e.source, e.target) for e in self.review.build_graph().get_graph().edges}
+        self.assertIn(("review_dimension", "verify_findings"), edges)
+        self.assertIn(("verify_findings", "synthesize_verdict"), edges)
+
+    def test_a_refuted_critical_is_removed_and_the_rest_of_the_review_is_unchanged(self):
+        self.fake("VERDICT: REFUTED\nEVIDENCE: `app/models/item.rb:2` `Item.find(id)`\nREASON: scoped by a default scope.")
+        out = self.review.verify_findings({**state(), "repo_root": self.tmp.name,
+                                           "findings": [f"### security\n{CRITICAL}", "### test_coverage\n✅ No issues in this dimension."]})
+        self.assertEqual([c[0] for c in self.calls], ["refute"])
+        self.assertIn("plan", self.calls[0][1].lower())                       # the refuter is given the plan for intent
+        self.assertNotIn("🔴", out["verified"][0])
+        self.assertEqual(out["verified"][1], "### test_coverage\n✅ No issues in this dimension.")
+        self.assertEqual(out["refuted"][0]["reason"], "scoped by a default scope.")
+
+    def test_the_review_appends_the_refuted_findings_and_records_them_in_review_json(self):
+        refuted = [{"dimension": "security", "severity": "critical", "title": "Unscoped lookup", "location": "a.rb:2",
+                    "reason": "default scope", "evidence": ""}]
+        structured = {"verdict": "READY TO COMMIT", "reason": "clean", "findings": [],
+                      "document": "# Review: t\n\n## Verdict: READY TO COMMIT\n\nclean"}
+        self.fake(structured=structured)
+        out = self.review.synthesize_verdict({**state(), "review_cmd": "format", "amendments": [], "refuted": refuted,
+                                              "findings": ["### security\n" + CRITICAL],
+                                              "verified": ["### security\n✅ No issues remain"]})
+        self.assertNotIn("Unscoped lookup", self.calls[0][1])                 # the synthesis saw the verified findings
+        self.assertIn("## Refuted by verification", out["verdict"])
+        self.assertTrue(out["verdict"].startswith("# Review: t"))             # the verdict line is still first
 
 
 if __name__ == "__main__":

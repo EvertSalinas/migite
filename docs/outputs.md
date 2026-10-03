@@ -36,7 +36,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | File | Contents |
 |------|----------|
 | `plan.md` | The living plan: the design as it now stands, updated at the end of every run ([Phase 3.8](./phases.md#phase-3-8-plan-update)), with a `## Revision history` line per run |
-| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
+| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status and the findings it rejected, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
 | `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
 | `browser-check.md` | Only with `frontend.browser_check: ask` / `on` and a diff that touches views or JavaScript: the agent's PASS / FAIL / SKIPPED walk through the testing plan in a real browser, read by the `frontend` reviewer. See [Frontend](./phases.md#frontend) |
@@ -52,7 +52,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `task.md` | Optional — supplementary details added via [Intake mode](./migite.md#intake-mode)'s prompt and/or `--attach`, kept separate from `intake.md` |
 | `jira-context.md` | Optional — fetched Jira ticket content when `--jira` is used and the fetch succeeds |
 | `plan.md` | The plan as approved at the gate, never changed afterwards |
-| `architecture-critic.md` | Pre-implementation risk findings |
+| `architecture-critic.md` | Pre-implementation risk findings. When the plan refiner rejected a finding it could show wrong or already handled, a `## Rejected by the plan refiner` section lists it with the reason and evidence; one whose reason did not check out is under `## Not applied, reason not verified` |
 | `spec-implementation.md` | Optional: the spec files written in the TDD red phase |
 
 **Every run folder (`00-build/`, `NN-amend-<slug>/`)**
@@ -62,9 +62,9 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `amendment.md` | Amend runs only: the scoped delta, folded into `plan.md` at the end of the run |
 | `implementation.md` | Notes from this run's implementation session |
 | `implementation-stage-N.md` | Per-layer notes, `--staged` mode only |
-| `review.md` | Code review verdict and findings |
+| `review.md` | Code review verdict and findings. When verification disproved a finding, a `## Refuted by verification` section at the end lists it with the reason, so the call can be audited |
 | `review-dimensions.json` | Each review dimension's own findings, so a re-review can carry clean dimensions over instead of running them again |
-| `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
+| `review.json` | Machine-readable envelope beside `review.md`: `verdict` (`needs_fixes` / `ready`), reason, typed `findings[]`, per-severity `counts`, `refuted[]` (findings verification disproved: they are not in `findings[]` or `counts`), per-dimension counts, `source` (`structured` from a schema-validated call, or `markdown` fallback), usage. **This is what the commit gate reads**; deleted before every review run and when you hand-edit `review.md` at the gate |
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
 | `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary). A later `--amend` reads it in place of `implementation.md` once `plan.md` reflects this run |
 | `testing-plan.md` | The task's testing plan as this run left it. The top-level `testing-plan.md` is updated by every amend and fix round, so these copies are its history |

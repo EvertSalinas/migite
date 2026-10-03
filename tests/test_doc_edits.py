@@ -80,6 +80,54 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual(fake.call_args.args[1], "testing_plan")
 
 
+class TriageTest(unittest.TestCase):
+    """The plan refiner may reject a critic finding it can show is wrong, instead of addressing every one."""
+
+    def setUp(self):
+        patcher = mock.patch.object(doc_edits.gateway, "supports", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_update(self, **kw):
+        return doc_edits.update(DOC, name="plan.md", task="A critic reviewed this.", role="think", label="t",
+                                context=[("Findings", "- the delay is too long\n- no index")], **kw)
+
+    REPLY = ('{"revision": "x", "edits": [{"find": "Wait 1 minute", "replace": "Wait 15 seconds"}], '
+             '"rejected_findings": [{"finding": "no index", "reason": "the plan adds it", "evidence": "add_index"}]}')
+
+    def test_triage_returns_the_rejected_findings_beside_the_edits(self):
+        with reply(self.REPLY):
+            new, report = self.run_update(triage=True)
+        self.assertIn("Wait 15 seconds", new)
+        self.assertEqual(report["rejected_findings"], [{"finding": "no index", "reason": "the plan adds it", "evidence": "add_index"}])
+
+    def test_triage_is_off_by_default_and_the_prompt_says_so(self):
+        with reply(self.REPLY) as fake:
+            _, report = self.run_update()
+        self.assertNotIn("rejected_findings", report)
+        self.assertNotIn("REJECT it", fake.call_args.args[0])
+
+    def test_the_triage_prompt_allows_rejection_only_with_quoted_evidence_and_no_guessing(self):
+        with reply(self.REPLY) as fake:
+            self.run_update(triage=True)
+        prompt = fake.call_args.args[0]
+        self.assertIn("REJECT it", prompt)
+        self.assertIn("VERBATIM", prompt)
+        self.assertIn("You have no tools", prompt)
+        self.assertIn('"rejected_findings"', prompt)
+
+    def test_rejecting_every_finding_with_no_edits_leaves_the_document_unchanged(self):
+        only_rejections = ('{"revision": "No changes.", "edits": [], "rejected_findings": '
+                           '[{"finding": "a", "reason": "b", "evidence": "c"}]}')
+        with reply(only_rejections):
+            new, report = self.run_update(triage=True)
+        self.assertEqual(new, DOC)
+        self.assertEqual(len(report["rejected_findings"]), 1)
+
+    def test_the_triage_schema_only_adds_the_rejection_list(self):
+        self.assertEqual(set(doc_edits.TRIAGE_SCHEMA["properties"]) - set(doc_edits.EDIT_SCHEMA["properties"]), {"rejected_findings"})
+
+
 class CliTest(unittest.TestCase):
     def run_cli(self, text=None, raises=None):
         tmp = Path(tempfile.mkdtemp())
@@ -140,6 +188,60 @@ class RefinePlanTest(unittest.TestCase):
         with mock.patch.object(self.tool.doc_edits, "update", return_value=(None, {"reason": "no usable JSON"})):
             out = self.tool.refine_plan(self.state)
         self.assertEqual(out, {"plan_final": rewritten, "refine_status": "applied"})
+
+    def test_the_refiner_is_asked_to_triage_with_the_explorer_reports_as_context(self):
+        self.tool.call_agent = mock.Mock()
+        self.state["explorations"] = ["### models\nMessageRead has a unique index."]
+        with mock.patch.object(self.tool.doc_edits, "update", return_value=("# Plan\n", {"applied": [], "rejected": []})) as upd:
+            self.tool.refine_plan(self.state)
+        self.assertTrue(upd.call_args.kwargs["triage"])
+        headings = [h for h, _ in upd.call_args.kwargs["context"]]
+        self.assertEqual(headings, ["Architecture critic findings", "Explorer reports (what the codebase contains)"])
+        self.assertIn("MessageRead has a unique index.", upd.call_args.kwargs["context"][1][1])
+
+    def test_a_rejection_whose_evidence_is_in_the_plan_or_reports_stands_and_one_without_is_left_open(self):
+        self.tool.call_agent = mock.Mock()
+        self.state["explorations"] = ["### models\nMessageRead has a unique index."]
+        rejected = [
+            {"finding": "no unique index", "reason": "it exists", "evidence": "MessageRead has a   unique index."},
+            {"finding": "no job queue", "reason": "the plan names one", "evidence": "queue: :critical"},
+            {"finding": "", "reason": "x", "evidence": "y"},
+        ]
+        report = {"applied": [], "rejected": [], "rejected_findings": rejected}
+        with mock.patch.object(self.tool.doc_edits, "update", return_value=("# Plan\n", report)):
+            out = self.tool.refine_plan(self.state)
+        self.assertEqual([r["finding"] for r in out["refine_rejected"]], ["no unique index"])
+        self.assertEqual([r["finding"] for r in out["refine_unverified"]], ["no job queue"])
+        self.assertEqual(out["refine_status"], "no_edits_needed")
+
+    def test_the_appendix_goes_to_the_critic_file_without_severity_marks(self):
+        text = self.tool.rejections_appendix(
+            [{"finding": "no index", "reason": "the plan adds it", "evidence": "add_index :reads"}],
+            [{"finding": "no queue", "reason": "guess", "evidence": "x"}])
+        self.assertIn("## Rejected by the plan refiner", text)
+        self.assertIn("ask for the change with `f`", text)
+        self.assertIn("## Not applied, reason not verified", text)
+        for mark in "🔴🟡🟢":
+            self.assertNotIn(mark, text)
+        self.assertEqual(self.tool.rejections_appendix([], []), "")
+
+    def test_the_critic_file_and_plan_json_record_what_the_refiner_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            state = {"plan_output": str(tmp / "plan.md"), "critic_output": str(tmp / "critic.md"),
+                     "testing_plan_output": str(tmp / "tp.md"), "sentinel": str(tmp / ".done"),
+                     "plan_final": "# Plan\n## Approach\nx\n", "testing_plan": "t", "explorations": [],
+                     "base_branch": "main", "critic_findings": "🟡 **Warning** no index\n🟡 **Warning** slow job",
+                     "refine_status": "applied_as_edits",
+                     "refine_rejected": [{"finding": "no index", "reason": "the plan adds it", "evidence": "add_index"}]}
+            self.tool.write_outputs(state)
+            critic = (tmp / "critic.md").read_text()
+            envelope = json.loads((tmp / "plan.json").read_text())
+        self.assertTrue(critic.startswith("🟡 **Warning** no index\n🟡 **Warning** slow job"))
+        self.assertIn("## Rejected by the plan refiner", critic)
+        self.assertEqual(envelope["critic"]["warning"], 2)                      # the appendix is not counted as findings
+        self.assertEqual(envelope["refine_rejected"][0]["finding"], "no index")
+        self.assertEqual(envelope["refine_unverified"], [])
 
     def test_a_failed_edit_call_also_falls_back(self):
         rewritten = "# Plan\n## Approach\nRewritten.\n" + self.body

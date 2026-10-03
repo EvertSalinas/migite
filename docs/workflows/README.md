@@ -16,6 +16,7 @@ does; these say which ones to combine, in what order, for a real piece of work.
 | Define a new project before any code exists | [Blueprint a project](./blueprint-a-project.md) | `migite-blueprint "..."` |
 | Find what is wrong with a codebase, then fix it | [Audit and remediate](./audit-and-remediate.md) | `migite-audit`, then `migite --audit` |
 | Review a teammate's branch | [Review a pull request](./review-a-pull-request.md) | `migite-pr-review --branch ...` |
+| Check that the review's refuter is trustworthy, or change its model or prompt | [Calibrate the refuter](./calibrate-the-refuter.md) | `npm run eval` in `evals/` |
 | Read a Jira ticket the way the planner does | [Read a ticket](./read-a-ticket.md) | `migite-ticket BB-1234` |
 | Set migite up for yourself or a team, and keep it healthy | [Configure migite](./configure-migite.md) | `migite config --edit`, `migite doctor` |
 | Run any of the above on Cursor, Kimi, or OpenCode | [Use another agent](./use-another-agent.md) | `MIGITE_AGENT=cursor migite ...` |
@@ -27,6 +28,7 @@ explore an initiative ──► intakes ──► start from an intake ──►
 blueprint a project ────► intakes ──► start from an intake ──► ...
 audit ──────────────────► migite --audit ──► build a task ──► ...
 ticket ─────────────────► build a task ──► amend a task ──► review a pull request (teammate)
+past PR reviews ────────► label them ──► calibrate the refuter ──► change the refute model or prompt
 ```
 
 ## Conventions in these tutorials

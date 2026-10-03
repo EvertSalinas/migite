@@ -101,6 +101,7 @@ class PolicyTest(unittest.TestCase):
     def test_roles_map_to_their_tools(self):
         self.assertEqual(gateway.tools_policy("review_correctness"), "read")
         self.assertEqual(gateway.tools_policy("pr_review_security"), "read")
+        self.assertEqual(gateway.tools_policy("refute"), "read")
         self.assertEqual(gateway.tools_policy("think"), "none")
         self.assertEqual(gateway.tools_policy("summary"), "none")
         self.assertEqual(gateway.tools_policy("heal"), "default")

@@ -1,0 +1,5 @@
+node_modules/
+.cache/
+# The labeled findings come from real PR reviews of private repos: they stay on this machine.
+golden/*.yaml
+!golden/example.yaml

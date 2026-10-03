@@ -82,5 +82,9 @@ Date: <today>
   connection failure, `0 examples`), say so under Checks and treat it as `NEEDS FIXES` — a
   check that did not run has verified nothing.
 - De-duplicate findings that multiple specialists reported. Keep the file path on every finding.
+- Specialist findings arrive already checked by a second agent that tried to disprove them. A
+  `**Verified:**` line means it confirmed the finding. A `**Verification:**` line means the finding
+  could not be confirmed and was demoted to a Note, or was not checked: keep it a Note and never
+  promote it. Findings the second agent disproved are not in the list, so do not reintroduce them.
 - Do not soften a finding you cannot verify from the diff — mark it `🟡` with "verify:" instead
-  of dropping it.
+  of dropping it. (This does not apply to a finding that carries a `**Verification:**` line.)

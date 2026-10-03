@@ -159,6 +159,28 @@ decision, a missing factory, or a genuinely wrong review finding. Use `e` at the
 ready. With `gates.commit.policy: strict`, a capital `Y` approves over the remaining blockers and
 records them in `gate-overrides.md`.
 
+<a id="troubleshooting-refuted"></a>
+### A finding was refuted, or confirmed, and I disagree
+
+Each Critical is checked by a second agent before the verdict (see
+[Phase 3](./phases.md#phase-3-review)), and a finding it disproves is **removed** from the review
+and listed under `## Refuted by verification` at the end of `review.md` (and in `review.json` as
+`refuted[]`). No later step re-raises it, so read that section after a review that came back
+cleaner than you expected.
+
+- **A real finding was refuted:** keep it. Add it to your golden set as a **true** finding so the
+  refuter's error rate is measured ([Calibrate the refuter](./workflows/calibrate-the-refuter.md)).
+- **A wrong Critical survived with a `Verified:` line:** strike it with `e` at the commit gate, and
+  add it to the golden set as a **false** finding.
+- **`not checked`:** the refuter itself failed (a timeout, a malformed reply, or more than 12
+  findings in one run). The finding is exactly as the reviewer reported it.
+- **`⚠ the working tree is on 'x', not 'y'`** (`migite-pr-review`): the reviewers and the refuter
+  read files from the working tree, so check the branch out and re-run. Otherwise their evidence
+  is from the wrong code.
+- **Cost went up:** each Critical is one strong-tier call (about $0.2 to $0.6). Pin `refute` to a
+  cheaper model in `models.roles`, or see which calls cost what in the usage summary (labels
+  `refute:<dimension>:<n>`).
+
 <a id="backends"></a>
 ### Other backends (Cursor, Kimi, OpenCode)
 

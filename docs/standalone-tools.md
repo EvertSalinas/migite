@@ -7,7 +7,7 @@ Every tool prints its options with `--help`, outside a repo and before any depen
 All four read the same layered configuration as `migite`
 ([docs/configuration.md](./configuration.md)): `vault.base` / `vault.org` for output paths,
 `models` for every call (roles `lens`, `explore_synth`, `challenge`, `explore_refine`, `analyst`,
-`blueprint_synth`, `extract`, `audit_area`, `audit_synth`, `pr_review_<dimension>`, `pr_verdict`),
+`blueprint_synth`, `extract`, `audit_area`, `audit_synth`, `pr_review_<dimension>`, `pr_verdict`, `refute`),
 `models.effort` / `models.roles_effort` for `--effort`, `models.timeout_seconds` /
 `models.thinking_timeout_seconds` (plus the optional `models.timeouts` / `models.roles_timeouts`
 overrides) for per-call limits, and `permissions.headless`. The "Models used" notes below
@@ -389,7 +389,18 @@ and the draft with fewer gaps is kept:
 **Fix:** extract `RETENTION_PERIOD = 30.days` on `Item` and use it in both places.
 ~~~
 
-**Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5-5` for the final verdict. This tool is read-only: it never commits anything, and there's no gate to approve.
+**Findings are verified before the verdict.** A wrong Critical is the costliest thing a review can
+contain, so after the reviewers a second agent (role `refute`, strong tier, read-only tools) tries to
+disprove each Critical, and each Warning whose evidence did not check out. Reviewers must quote the
+line each Critical and Warning rests on on an `**Evidence:**` line, and migite confirms the quote is at
+the cited place in the branch (no model call). The refuter sees the claim and location, not the
+reviewer's reasoning or fix. `CONFIRMED` findings stay with a `**Verified:**` line, `REFUTED` ones are
+removed and listed under `## Refuted by verification` at the end of the review so you can audit the call,
+and `UNVERIFIABLE` ones become Notes. If the refuter fails the finding stays as reported, marked not
+checked. Reviewers and the refuter read files from the working tree, so check the branch out first;
+migite warns when the working tree is on a different branch. Details: [phases.md](./phases.md#phase-3-review).
+
+**Models used:** `claude-sonnet-5` for the 4 parallel specialist reviewers, `claude-opus-5-5` for the final verdict and the refuter. This tool is read-only: it never commits anything, and there's no gate to approve.
 
 ---
 
