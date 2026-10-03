@@ -165,6 +165,38 @@ def looks_like_stub(text: str, min_headings: int = 3, min_chars: int = 400) -> b
     return len(extract_headings(text)) < min_headings or len(text) < min_chars
 
 
+# ── Critic output guard ─────────────────────────────────────────────────────────
+# Observed failure mode: a model given no tool channel still wants to inspect the
+# repo, so it writes its intended tool calls as plain text (`<invoke name="Bash">
+# …</invoke>`). The critic node used to store that verbatim, so architecture-critic.md
+# held machine syntax instead of findings and refine_plan() saw zero emoji.
+
+_TOOL_CALL_BLOCK_RE = re.compile(
+    r"<\s*(?:antml:)?(?:invoke|parameter)\b.*?</\s*(?:antml:)?(?:invoke|parameter)\s*>",
+    re.DOTALL,
+)
+_TOOL_TAG_RE = re.compile(r"<\s*/?\s*(?:antml:)?(?:invoke|parameter)\b[^>]*>")
+
+
+def strip_tool_call_markup(text: str) -> str:
+    """Drop any leaked tool-call XML so a confused model's scratch calls never
+    reach architecture-critic.md."""
+    text = _TOOL_CALL_BLOCK_RE.sub("", text)
+    text = _TOOL_TAG_RE.sub("", text)
+    return text.strip()
+
+
+def critic_is_usable(text: str) -> bool:
+    """True when the critic returned a real findings checklist: at least one
+    🔴/🟡/🟢 finding, or the exact clean signal. False for empty output or leaked
+    tool-call markup (the model never produced findings)."""
+    if re.search(r"<\s*(?:antml:)?(?:invoke|parameter)\b", text):
+        return False
+    if "No architectural concerns" in text:
+        return True
+    return any(mark in text for _, mark in gateway.SEVERITY_MARKS)
+
+
 # ── File discovery helpers ──────────────────────────────────────────────────────
 
 def extract_keywords(text: str) -> set[str]:
@@ -371,6 +403,7 @@ class PlanState(TypedDict):
     explorations: Annotated[list[str], operator.add]
     plan_draft: str
     critic_findings: str
+    critic_usable: bool
     plan_final: str
     testing_plan: str
     # Provenance for plan.json — how many stub retries synthesis needed, and
@@ -571,7 +604,36 @@ def run_architecture_critic(state: PlanState) -> dict:
 {blueprint_block}{audit_block}## Plan to review:
 {state['plan_draft']}"""
     findings = call_agent(prompt, thinking=True, label="architecture_critic", role="critic")
-    return {"critic_findings": findings}
+
+    # A model that wanted tools it wasn't given can answer with raw tool-call syntax
+    # instead of findings; a bare/narrative reply is just as unusable. Retry once with
+    # an explicit correction, then degrade to a visible warning rather than writing
+    # garbage to architecture-critic.md or aborting the whole plan run.
+    if not critic_is_usable(findings):
+        print("  ⚠ Architecture critic returned no usable findings — retrying once", flush=True)
+        retry_prompt = prompt + (
+            "\n\nYour previous reply was not a critique — it contained raw tool-call "
+            "syntax (for example `<invoke name=\"Bash\">`) or no findings at all. Do not "
+            "call or describe any tool. Output ONLY the findings checklist using the "
+            "🔴/🟡/🟢 prefixes, or the exact line "
+            "'✅ No architectural concerns found.'"
+        )
+        findings = strip_tool_call_markup(
+            call_agent(retry_prompt, thinking=True, label="architecture_critic:retry", role="critic")
+        )
+        if not critic_is_usable(findings):
+            print("  ⚠ Architecture critic still produced no usable findings — "
+                  "marking the plan as un-critiqued", flush=True)
+            return {
+                "critic_findings": (
+                    "🟡 **Warning** — The architecture critic did not return a review "
+                    "(it emitted raw tool-call syntax or no findings, twice). Treat this "
+                    "plan as un-critiqued and review it manually; the raw reply is in the "
+                    "agent log."
+                ),
+                "critic_usable": False,
+            }
+    return {"critic_findings": findings, "critic_usable": True}
 
 
 def _norm(text: str) -> str:
@@ -611,6 +673,11 @@ def rejections_appendix(rejected: list, unverified: list) -> str:
 
 def refine_plan(state: PlanState) -> dict:
     findings = state.get("critic_findings", "")
+    if not state.get("critic_usable", True):
+        # The critic's output was tool-call syntax/no findings, not an actionable
+        # critique — don't ask refine to "address" the warning placeholder.
+        print("  ▶ Refine: critic produced no usable findings — plan unchanged", flush=True)
+        return {"plan_final": state["plan_draft"], "refine_status": "critic_unusable"}
     if "No architectural concerns" in findings:
         print("  ▶ Refine: no concerns — plan unchanged", flush=True)
         return {"plan_final": state["plan_draft"], "refine_status": "no_concerns"}
@@ -764,6 +831,7 @@ def write_outputs(state: PlanState) -> dict:
     # is derived deterministically from the documents already written, so it can
     # never disagree with them; usage comes from this process's ledger records.
     critic = state["critic_findings"]
+    critic_usable = state.get("critic_usable", True)
     critic_counts = gateway.severity_counts(critic)
     failed_explorers = [
         block.splitlines()[0].lstrip("# ").strip()
@@ -782,7 +850,8 @@ def write_outputs(state: PlanState) -> dict:
             "source": state.get("frontend_source", ""),
         },
         "critic": {
-            "clean": "No architectural concerns" in critic,
+            "usable": critic_usable,
+            "clean": critic_usable and "No architectural concerns" in critic,
             **critic_counts,
         },
         "open_questions": count_open_questions(state["plan_final"]),
@@ -923,6 +992,7 @@ def main() -> None:
             "explorations":   [],
             "plan_draft":     "",
             "critic_findings": "",
+            "critic_usable":  True,
             "plan_final":     "",
             "testing_plan":   "",
             "synth_retries":  0,

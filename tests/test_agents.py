@@ -290,6 +290,16 @@ class EndToEndTest(unittest.TestCase):
         with self.assertRaises(gateway.AgentError):
             gateway.call_agent("x", "knowledge", ledger=self.ledger)
 
+    def test_session_command_carries_the_config_model(self):
+        # Without it opencode resumes whatever model its last session in this directory used.
+        gateway.configure_from(self.cfg_for("opencode"))
+        self.assertNotIn("--model", gateway.session_launch("do it").argv)   # nothing pinned → the CLI's own default
+        cfg = self.cfg_for("opencode")
+        cfg._data["models"]["strong"] = "deepseek/deepseek-flash"
+        gateway.configure_from(cfg)
+        self.assertEqual(gateway.session_launch("do it", permission="auto").argv,
+                         ["opencode", "--prompt", "do it", "--auto", "--model", "deepseek/deepseek-flash"])
+
     def test_headless_permission_comes_from_the_config(self):
         gateway.configure_from(self.cfg_for("cursor", MIGITE_PERMISSION_MODE="acceptEdits"))
         os.environ["FAKE_AGENT_MODE"] = "ok"

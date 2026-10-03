@@ -142,5 +142,66 @@ class FrontendPlanningTest(unittest.TestCase):
         self.assertIn("```javascript\nimport", context)
 
 
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class CriticOutputGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.plan = load_tool()
+        self.responses = []
+        self.prompts = []
+
+        def fake_call_agent(prompt, role="think", thinking=False, label=""):
+            self.prompts.append((label, prompt))
+            return self.responses.pop(0)
+        self.plan.call_agent = fake_call_agent
+
+    def critic(self, **state):
+        return self.plan.run_architecture_critic(
+            base_state(critic_cmd="critique", plan_draft="# Plan\n## Scope\n", **state))
+
+    def test_usable_clean_signal_passes_through_untouched(self):
+        self.responses = ["✅ No architectural concerns found."]
+        self.assertEqual(self.critic(), {"critic_findings": "✅ No architectural concerns found.",
+                                         "critic_usable": True})
+
+    def test_findings_checklist_is_usable(self):
+        self.assertTrue(self.plan.critic_is_usable("🔴 **Critical** — n+1 in #index"))
+        self.assertTrue(self.plan.critic_is_usable("🟡 **Warning** — missing index"))
+        self.assertFalse(self.plan.critic_is_usable(""))
+        self.assertFalse(self.plan.critic_is_usable("I checked the code and it looks fine."))
+
+    def test_leaked_tool_call_markup_is_not_usable_and_is_stripped(self):
+        leaked = '<invoke name="Bash">\n<parameter name="command">cat app/models/event.rb</parameter>\n</invoke>\n🟢 **Note** — fine'
+        self.assertFalse(self.plan.critic_is_usable(leaked))
+        self.assertEqual(self.plan.strip_tool_call_markup(
+            '<invoke name="Bash"><parameter name="command">ls</parameter></invoke>'), "")
+        self.assertEqual(self.plan.strip_tool_call_markup(leaked), "🟢 **Note** — fine")
+
+    def test_unusable_reply_is_retried_once_and_the_retry_is_used(self):
+        self.responses = [
+            '<invoke name="Bash"><parameter name="command">grep -n foo</parameter></invoke>',
+            "🟡 **Warning** — no index on events.client_id",
+        ]
+        out = self.critic()
+        self.assertEqual([label for label, _ in self.prompts],
+                         ["architecture_critic", "architecture_critic:retry"])
+        self.assertTrue(out["critic_usable"])
+        self.assertIn("no index on events.client_id", out["critic_findings"])
+        self.assertNotIn("<invoke", out["critic_findings"])
+
+    def test_two_unusable_replies_degrade_to_a_warning_placeholder(self):
+        self.responses = ["", '<invoke name="Bash"><parameter name="command">ls</parameter></invoke>']
+        out = self.critic()
+        self.assertFalse(out["critic_usable"])
+        self.assertIn("un-critiqued", out["critic_findings"])
+        self.assertNotIn("<invoke", out["critic_findings"])
+
+    def test_refine_skips_an_unusable_critique(self):
+        out = self.plan.refine_plan(base_state(
+            plan_draft="# Plan\n## Scope\n", critic_findings="🟡 **Warning** — un-critiqued",
+            critic_usable=False))
+        self.assertEqual(out["refine_status"], "critic_unusable")
+        self.assertEqual(out["plan_final"], "# Plan\n## Scope\n")
+
+
 if __name__ == "__main__":
     unittest.main()
