@@ -292,10 +292,10 @@ run_rubocop_check() {
   app_files=$(strip_app_prefix "$files")
   if [[ "$autocorrect" == "true" ]]; then
     # shellcheck disable=SC2086
-    bundle_exec rubocop -a $app_files --format progress 2>&1 | tee "$log"
+    bundle_exec rubocop -a --force-exclusion $app_files --format progress 2>&1 | tee "$log"
   else
     # shellcheck disable=SC2086
-    bundle_exec rubocop $app_files --format progress 2>&1 | tee "$log"
+    bundle_exec rubocop --force-exclusion $app_files --format progress 2>&1 | tee "$log"
   fi
 }
 

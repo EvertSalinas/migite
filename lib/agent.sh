@@ -129,7 +129,9 @@ write_prompt() {
 # run_phase <label> <output_file> <prompt> [permission]
 # Opens an interactive session on the configured agent, in a tmux pane or inline,
 # with the prompt as its first message, and blocks until you exit it. permission
-# defaults to `permissions.interactive` (auto unless changed). A prompt too long
+# defaults to `permissions.interactive` (auto unless changed). The session runs on
+# the model the `session` role resolves to (models.*), so the CLI's own last-used
+# model never overrides the config. A prompt too long
 # for one command-line argument (ui.prompt_inline_max) is passed as a pointer to
 # its prompt file; the gateway decides that, the same way for every agent.
 run_phase() {
@@ -148,6 +150,7 @@ run_phase() {
   echo -e "${CYAN}  Starting interactive ${agent_name} session: ${BOLD}$label${RESET}"
   echo -e "  ${CYAN}Output file: ${outfile}${RESET}"
   echo -e "  ${CYAN}Permission mode: ${permission_mode}${RESET}"
+  [[ -n "${MIGITE_CFG_MODEL_SESSION:-}" ]] && echo -e "  ${CYAN}Model: ${MIGITE_CFG_MODEL_SESSION}${RESET}"
   if [[ "$session_mode" == "headless" ]]; then
     echo -e "  ${CYAN}${agent_name} runs this phase headlessly and returns automatically when done${RESET}"
   else

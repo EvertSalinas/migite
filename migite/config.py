@@ -176,6 +176,9 @@ ROLE_TIERS: dict[str, str] = {
     "plan_fold": "standard",      # end-of-run exact edits that keep plan.md current
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
     "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
+    "session": "strong",          # run_phase's interactive sessions: implement, specs, gate
+                                  # fixes, PR description — the drafter, never weaker than the
+                                  # critic whose findings it applies. Pins via models.roles.session.
     # migite-explore
     "lens": "standard", "explore_synth": "strong", "challenge": "strong",
     "explore_refine": "strong",   # the reviser should not be weaker than the challenger
@@ -198,6 +201,7 @@ ROLE_TIERS: dict[str, str] = {
 #   default - the CLI's normal toolset and context: heal edits files, and jira's
 #             scoped MCP tools need the CLI's MCP servers
 ROLE_TOOLS: dict[str, str] = {
+    "critic": "read",             # architecture critic verifies the plan's claims against the repo
     "review_correctness": "read", "review_security": "read",
     "review_test_coverage": "read", "review_testing_plan": "read",
     "review_frontend": "read",

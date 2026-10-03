@@ -109,10 +109,10 @@ check "agent_think --permission: reaches the CLI" grep -q -- "--force" "$FAKE_AG
 pf="$ag_dir/prompt.txt"; printf 'do the thing' > "$pf"
 session_cmd() { "$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" session --prompt-file "$pf" "$@"; }
 use_agent claude
-check "session: claude → env -u CLAUDECODE claude --permission-mode bypassPermissions -- <prompt>" \
-  test "$(session_cmd --permission auto)" = "env -u CLAUDECODE claude --permission-mode bypassPermissions -- 'do the thing'"
+check "session: claude → env -u CLAUDECODE claude --permission-mode bypassPermissions --model <strong> -- <prompt>" \
+  test "$(session_cmd --permission auto)" = "env -u CLAUDECODE claude --permission-mode bypassPermissions --model claude-opus-5-5 -- 'do the thing'"
 check "session: no --permission → permissions.interactive (auto by default)" \
-  test "$(session_cmd)" = "env -u CLAUDECODE claude --permission-mode bypassPermissions -- 'do the thing'"
+  test "$(session_cmd)" = "env -u CLAUDECODE claude --permission-mode bypassPermissions --model claude-opus-5-5 -- 'do the thing'"
 use_agent cursor
 check "session: cursor → cursor-agent --force <prompt>" \
   test "$(session_cmd --permission auto)" = "cursor-agent --force 'do the thing'"
@@ -124,6 +124,21 @@ check "session: plan on opencode → no approval flag" \
 use_agent kimi
 check "session: kimi runs the phase headless (kimi -p <prompt>, no permission flag)" \
   test "$(session_cmd --permission plan)" = "kimi -p 'do the thing'"
+
+# the config's model reaches the session command — otherwise opencode resumes whatever
+# model its last session in this directory used
+cat > "$ag_dir/home/.config/migite/config.yml" <<'YAML'
+models:
+  strong: deepseek/deepseek-flash
+YAML
+use_agent opencode
+check "session: opencode pins the config's model" \
+  test "$(session_cmd --permission edits)" = "opencode --prompt 'do the thing' --auto --model deepseek/deepseek-flash"
+use_agent kimi
+check "session: the pinned model reaches every backend's session" \
+  test "$(session_cmd --permission plan)" = "kimi --model deepseek/deepseek-flash -p 'do the thing'"
+rm "$ag_dir/home/.config/migite/config.yml"
+use_agent kimi
 big="$ag_dir/big.txt"; head -c 200000 /dev/zero | tr '\0' 'x' > "$big"
 bigcmd=$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "$REPO_ROOT" session --prompt-file "$big" 2>/dev/null)
 check "session: a prompt over ui.prompt_inline_max becomes a pointer to its prompt file" \

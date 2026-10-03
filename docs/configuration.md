@@ -238,7 +238,8 @@ models:
   # (claude: haiku-4-5 / sonnet-5 / opus-5-5; cursor and opencode: no --model passed until you pin one).
   fast: claude-haiku-4-5-20251001   # tier: file exploration
   standard: claude-sonnet-5         # tier: lenses, analysts, audit areas, checklist review, knowledge, amendments
-  strong: claude-opus-5-5           # tier: plan synthesis/refine, critic, correctness + security review, verdicts
+  strong: claude-opus-5-5           # tier: plan synthesis/refine, critic, correctness + security
+                                   # review, verdicts, interactive sessions
   roles:                            # optional — pin one call site without moving its tier
     think: claude-sonnet-5
     review_security: claude-opus-5-5
@@ -274,6 +275,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
 | `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
+| `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description |
 | `lens` | standard | `migite-explore` lenses |
 | `explore_synth`, `challenge`, `explore_refine` | strong | `migite-explore` synthesis, adversarial challenge, and the revision that applies it |
 | `analyst`, `extract` | standard | `migite-blueprint` analysts, milestone/knowledge extraction |
@@ -286,6 +288,14 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 
 Changing a tier moves every role in it; pinning a role moves only that call. An unknown role
 name under `roles:` or `roles_effort:` is an error.
+
+**Interactive sessions.** `run_phase` (implement, spec writing, gate fixes, PR description) opens
+the agent's own interface, so it is neither metered nor a headless call — but it runs on the
+`session` role's model, passed to the CLI as its model for that run. Without it, the CLI decides
+on its own: opencode resumes whatever model its last session in this directory used, whatever
+`models:` says. Pin `models.roles.session` to move interactive work without touching a tier.
+(`migite config` shows a `timeout=` for the role like any other; it is unused — a session ends
+when you exit it.)
 
 **Effort.** `models.effort.<tier>` (or `models.roles_effort.<role>`) becomes `--effort <level>` on
 every headless call for that tier/role. `none` (the default everywhere) passes no flag, so the
@@ -367,7 +377,7 @@ the agent CLI's MCP servers, plugins, hooks or skills:
 
 | Roles | Tools |
 |---|---|
-| `review_*`, `pr_review_*`, `audit_area` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
+| `critic`, `review_*`, `pr_review_*`, `audit_area` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
 | `heal` | the CLI's full toolset (it edits files) |
 | `jira` | the CLI's full context (its scoped tools are MCP tools) |
 | every other role | no tools: the prompt carries everything |

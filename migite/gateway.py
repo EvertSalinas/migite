@@ -345,10 +345,15 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
     return CallResult(text=parsed.text, structured=structured, usage=usage, raw=parsed.raw)
 
 
-def session_launch(prompt: str, *, permission: str | None = None, prompt_file: str | None = None) -> agents.Launch:
+def session_launch(prompt: str, *, role: str = "session", permission: str | None = None,
+                   prompt_file: str | None = None) -> agents.Launch:
     """The command that opens an interactive session on the active agent with `prompt`
     as its first message. Sessions always take the prompt as an argument, so a long
-    one becomes a pointer to `prompt_file`. Unset permission = permissions.interactive."""
+    one becomes a pointer to `prompt_file`. Unset permission = permissions.interactive.
+
+    The session runs on the model `role` resolves to, the same way a headless call
+    does: without it the CLI picks its own — opencode, for one, resumes whatever
+    model its last session in this directory used, whatever the config says."""
     if permission is None:
         permission = (CONFIG.get("permissions.interactive") if CONFIG is not None else None) or "auto"
     word = agents.normalize_permission(permission)
@@ -358,7 +363,8 @@ def session_launch(prompt: str, *, permission: str | None = None, prompt_file: s
     if tmp:
         # No caller-owned file to point at: keep the temp file, the session reads it later.
         print(f"      ⚠ prompt kept at {tmp} for the session to read", file=sys.stderr, flush=True)
-    return AGENT.session_launch(agents.SessionRequest(prompt=text, permission=word))
+    return AGENT.session_launch(agents.SessionRequest(prompt=text, permission=word,
+                                                      model=model_for(role) or None))
 
 
 # ── Envelope helpers shared by the agents ─────────────────────────────────────

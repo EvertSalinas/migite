@@ -21,7 +21,7 @@ agent:
 | Need | Used for | Claude Code | Cursor | Kimi Code | OpenCode |
 |---|---|---|---|---|---|
 | Headless call, text out | planner, reviewers, knowledge, amendments, heal, standalone tools | `claude --print --output-format json`, prompt on stdin | `cursor-agent -p --output-format json --trust "prompt"` | `kimi -p "prompt" --output-format stream-json` | `opencode run --format json "message"` |
-| Interactive session with a first prompt | implement, gate fixes, PR description | `claude -- "prompt"` | `cursor-agent "prompt"` | none — no seeded TUI; the phase runs headless as `kimi -p "prompt"` | `opencode --prompt "prompt"` |
+| Interactive session with a first prompt | implement, gate fixes, PR description | `claude [--model m] -- "prompt"` | `cursor-agent [--model m] "prompt"` | none — no seeded TUI; the phase runs headless as `kimi [--model m] -p "prompt"` | `opencode --prompt "prompt" [--model m]` |
 | Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache, cost | none (zeros recorded) | none (zeros recorded) | cost and tokens summed from `step_finish` events |
 | Structured output | the `review.json` verdict | `--json-schema` | no → the reviewer parses markdown | no → the reviewer parses markdown | no → the reviewer parses markdown |
 | Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped (set `[thinking].effort` in `~/.kimi-code/config.toml`) | dropped |
@@ -89,6 +89,11 @@ models:
 Every call site names a role (`think`, `critic`, `review_security`, `heal`, ...), never a model.
 Roles and `models.roles` pins work the same on every agent. `models.effort` only reaches agents
 that take an effort level.
+
+Interactive sessions are no exception. The `session` role's model goes to the CLI with the session
+(`claude --model m -- "prompt"`), the same way a headless call passes it — without it the CLI picks
+its own, and opencode resumes whatever model its last session in that directory used, whatever the
+config says.
 
 ## Switching for one run
 

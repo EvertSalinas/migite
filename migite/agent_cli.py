@@ -14,7 +14,8 @@ parts live in migite/agents/<name>.py.
         in $MIGITE_USAGE_LEDGER. Exit 3 when a scope can't be honoured, 1 on failure.
   python -m migite.agent_cli session --prompt-file F [--permission P]
         one shell command line that opens an interactive session with the file's
-        contents as the first message (a pointer to the file when it is too long)
+        contents as the first message (a pointer to the file when it is too long),
+        on the model the `session` role resolves to from the config
   python -m migite.agent_cli check
         the agent's binary, path, and version; exit 1 when the CLI is missing
 
