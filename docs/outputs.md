@@ -71,10 +71,51 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `usage.jsonl` | Every headless model call the run made, one JSON line each, across all of its invocations: a resumed or re-run build appends to it rather than starting over |
 | `usage.json` | Summary of `usage.jsonl` (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
 | `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
+| `run.json` | The run manifest: how far the run got, written at every phase boundary, so running the same command again resumes it. See [below](#run-json) |
 
 If the scratchpad copy of any of the above is missing (cleaned, fresh clone, different
 machine), `resume_from_vault()` pulls it back in from the vault mirror before the phase that
 needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
+
+<a id="run-json"></a>
+**`run.json`** (schema_version 1, written by `migite/runstate.py` through `lib/manifest.sh`):
+
+```json
+{
+  "schema_version": 1, "tool": "migite-run", "generated_at": "...", "updated_at": "...",
+  "status": "in_progress",
+  "next_phase": "implement",
+  "args":   { "task": "", "task_type": "feature", "jira_ticket": "BB-1234", "jira_url": "", "intake": "",
+              "audit": "", "blueprint": "", "attach": [], "staged": false, "stack": "",
+              "amend": { "feedback": "", "file": "", "num": "" } },
+  "repo":   { "org": "Acme", "name": "api", "root": "...", "branch": "bb-1234", "base_branch": "main" },
+  "layout": { "slug": "bb-1234", "run_slug": "00-build", "task_dir": "...", "scratchpad_dir": "...",
+              "log_dir": "...", "usage_ledger": "...", "timestamp": "..." },
+  "phases": {
+    "plan":      { "status": "done", "gate_attempts": 2, "started_at": "...", "completed_at": "..." },
+    "tdd":       { "status": "skipped", "decided": false },
+    "implement": { "status": "running", "stage_num": 0, "stage_count": 0, "stage_labels": [] },
+    "heal":      { "status": "pending", "heal_attempt": 0 },
+    "review":    { "status": "pending", "gate_attempts": 0, "tree_fingerprint": "" },
+    "deliver":   { "status": "pending" }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | `in_progress`, `complete` (every phase done or skipped), or `failed` (the last invocation exited with an error; the phase it was in stays `running`) |
+| `next_phase` | The first phase not done or skipped, or `done`. Derived on every write, never set directly |
+| `phases.*.status` | `pending`, `running` (written as the phase begins, so a crash leaves it identifiable), `pending_gate` (its work finished, its gate wasn't approved: a `q`), `done`, `skipped`. Each change stamps `started_at` or `completed_at` |
+| `phases.plan.gate_attempts`, `phases.review.gate_attempts` | Rounds at the plan gate and re-reviews at the commit gate, carried across invocations |
+| `phases.tdd.decided` | The answer to the TDD question, so a resumed run doesn't ask it again |
+| `phases.implement.stage_*` | `--staged` only: the stage labels and how many stages finished |
+| `phases.heal.heal_attempt` | Heal attempts used |
+| `phases.review.tree_fingerprint` | The tree the current `review.md` reviewed, recorded at a `q`; a resumed gate reuses the review only while the code still matches |
+| `layout.slug`, `layout.run_slug` | The task and run folders. On resume every path is re-derived from these and today's config, so the stored paths are informational |
+
+Writes are atomic (a temp file, then a rename), so a crash mid-write never leaves a truncated
+manifest. Design: [run-manifest-and-resume.md](./run-manifest-and-resume.md).
 
 <a id="vault"></a>
 ### Vault (`~/dev-log/<org>/<repo>/<ticket>/`) — read-only mirror

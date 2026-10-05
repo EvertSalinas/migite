@@ -290,7 +290,7 @@ feedback belongs in Issues, where it can be discussed and tracked.
 Roughly in the order they are likely to land:
 
 - **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
-- **Run manifest and `--yes`.** A `run.json` at every phase boundary so a run can resume from a recorded state, and a non-interactive mode so migite can run from CI or from another agent.
+- **`--yes`, a non-interactive mode** so migite can run from CI or from another agent. The run manifest it builds on is in: every run writes `run.json` at each phase boundary and resumes from it ([docs/migite.md](./docs/migite.md#resuming-a-run)).
 - **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
 - **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.

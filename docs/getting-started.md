@@ -371,7 +371,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 | `f` | Type one line of feedback; one model call revises the plan in place and shows a coloured diff |
 | `e` | Open `plan.md` in your editor, no model call |
 | `n` | Throw the plan away and re-run all 7 explorers, synthesis, and critic |
-| `q` | Abort. Nothing is lost: re-running the same command resumes from `plan.md` |
+| `q` | Abort. Nothing is lost: running the same command again comes back to this gate |
 
 Say `f`, type `use ActiveStorage instead of writing the PDF to /tmp`, review the diff, then `y`.
 

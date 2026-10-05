@@ -4,9 +4,12 @@
 #
 # Sourced by migite. run_implement expects AMEND_MODE, STAGED,
 # KNOWLEDGE_INJECT, PLAN_FILE, AMENDMENT_FILE, AMEND_NUM, IMPLEMENTATION_FILE,
-# IMPLEMENTATION_VAULT, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG,
-# MAX_HEAL_ATTEMPTS to be set.
-# Leaves HEAL_ATTEMPT set for the caller's summary logging.
+# IMPLEMENTATION_VAULT, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_DIR, TASK_SLUG
+# to be set. A staged run sets STAGE_LABELS, STAGE_COUNT and STAGE_NUM (stages
+# finished) and records them in run.json, so a resumed run (RESUME_STAGE_NUM,
+# lib/manifest.sh) starts after the last stage it finished.
+# run_auto_heal_loop is its own phase, sequenced by bin/migite after run_implement;
+# it expects MAX_HEAL_ATTEMPTS and leaves HEAL_ATTEMPT set for the summary and run.json.
 
 run_implement() {
   echo ""
@@ -45,7 +48,7 @@ $(cat "$PLAN_FILE")
     # amendment's in amend mode, since the plan's layers are already built.
     local STAGE_SOURCE="$PLAN_FILE"
     [[ "$AMEND_MODE" == "true" ]] && STAGE_SOURCE="$AMENDMENT_FILE"
-    local STAGE_LABELS=()
+    STAGE_LABELS=()
     while IFS= read -r line; do
       local label
       label=$(echo "$line" | sed 's/^### *//')
@@ -58,25 +61,58 @@ $(cat "$PLAN_FILE")
       STAGE_LABELS=("Full implementation")
     fi
 
-    local STAGE_COUNT=${#STAGE_LABELS[@]}
+    STAGE_COUNT=${#STAGE_LABELS[@]}
     log "Found $STAGE_COUNT stage(s): ${STAGE_LABELS[*]}"
 
-    local STAGE_NUM=0
-    local STAGE_NOTES_COMBINED=""
-    for STAGE_LABEL in "${STAGE_LABELS[@]}"; do
-      STAGE_NUM=$((STAGE_NUM + 1))
-      echo ""
-      log "Stage $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL"
+    # The notes of stages 1..N, from their implementation-stage-N.md files: the
+    # prior-stage context for the next stage, and the canonical notes at the end.
+    _stage_notes_through() {
+      local n
+      for (( n = 1; n <= $1; n++ )); do
+        printf '\n### Stage %s: %s\n%s' "$n" "${STAGE_LABELS[$((n - 1))]}" \
+          "$(cat "$RUN_SCRATCH_DIR/implementation-stage-${n}.md" 2>/dev/null || echo '(no notes)')"
+      done
+    }
 
-      local STAGE_OUTPUT_FILE="$RUN_SCRATCH_DIR/implementation-stage-${STAGE_NUM}.md"
-      local PRIOR_CONTEXT=""
-      if [[ -n "$STAGE_NOTES_COMBINED" ]]; then
-        PRIOR_CONTEXT="
+    # STAGE_NUM counts the stages finished. A resumed run starts after the last
+    # one run.json recorded, and re-opens that stage's checkpoint when the run
+    # stopped there (q).
+    STAGE_NUM=0
+    local REOPEN_CHECKPOINT=false
+    if [[ "${RESUME_STAGE_NUM:-0}" -gt 0 && "${RESUME_STAGE_NUM:-0}" -le "$STAGE_COUNT" ]]; then
+      STAGE_NUM=$RESUME_STAGE_NUM
+      log "Resuming after stage $STAGE_NUM/$STAGE_COUNT (run.json)"
+      [[ "${MANIFEST_ENTRY_STATUS:-}" == "pending_gate" ]] && REOPEN_CHECKPOINT=true
+    fi
+    local -a STAGE_MANIFEST_ARGS=(--set-json "phases.implement.stage_count=$STAGE_COUNT"
+                                  --set-json "phases.implement.stage_num=$STAGE_NUM"
+                                  --set-json "phases.implement.stage_labels=[]")
+    for STAGE_LABEL in "${STAGE_LABELS[@]}"; do
+      STAGE_MANIFEST_ARGS+=(--add "phases.implement.stage_labels=$STAGE_LABEL")
+    done
+    manifest_set "${STAGE_MANIFEST_ARGS[@]}"
+    local STAGE_NOTES_COMBINED
+    STAGE_NOTES_COMBINED=$(_stage_notes_through "$STAGE_NUM")
+    while true; do
+      if [[ "$REOPEN_CHECKPOINT" == "true" ]]; then
+        REOPEN_CHECKPOINT=false
+        STAGE_LABEL="${STAGE_LABELS[$((STAGE_NUM - 1))]}"
+      else
+        [[ $STAGE_NUM -lt $STAGE_COUNT ]] || break
+        STAGE_NUM=$((STAGE_NUM + 1))
+        STAGE_LABEL="${STAGE_LABELS[$((STAGE_NUM - 1))]}"
+        echo ""
+        log "Stage $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL"
+
+        local STAGE_OUTPUT_FILE="$RUN_SCRATCH_DIR/implementation-stage-${STAGE_NUM}.md"
+        local PRIOR_CONTEXT=""
+        if [[ -n "$STAGE_NOTES_COMBINED" ]]; then
+          PRIOR_CONTEXT="
 ## Work completed in prior stages
 ${STAGE_NOTES_COMBINED}"
-      fi
+        fi
 
-      local STAGE_PROMPT="$(_impl_base_prompt)
+        local STAGE_PROMPT="$(_impl_base_prompt)
 ${PRIOR_CONTEXT}
 
 ## Current stage: $STAGE_LABEL ($STAGE_NUM of $STAGE_COUNT)
@@ -84,11 +120,11 @@ Implement ONLY the files and logic belonging to the \"$STAGE_LABEL\" layer.
 Do not implement layers that come after this one — they will be handled in subsequent stages.
 When done, write notes on what you built to: $STAGE_OUTPUT_FILE"
 
-      run_phase "Stage $STAGE_NUM — $STAGE_LABEL" "$STAGE_OUTPUT_FILE" "$STAGE_PROMPT"
-      sync_artifact "$STAGE_OUTPUT_FILE" "$RUN_VAULT_DIR/implementation-stage-${STAGE_NUM}.md"
-      STAGE_NOTES_COMBINED="${STAGE_NOTES_COMBINED}
-### Stage $STAGE_NUM: $STAGE_LABEL
-$(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
+        run_phase "Stage $STAGE_NUM — $STAGE_LABEL" "$STAGE_OUTPUT_FILE" "$STAGE_PROMPT"
+        sync_artifact "$STAGE_OUTPUT_FILE" "$RUN_VAULT_DIR/implementation-stage-${STAGE_NUM}.md"
+        STAGE_NOTES_COMBINED=$(_stage_notes_through "$STAGE_NUM")
+        manifest_set --set-json "phases.implement.stage_num=$STAGE_NUM"
+      fi
 
       if [[ $STAGE_NUM -lt $STAGE_COUNT ]]; then
         echo ""
@@ -97,7 +133,8 @@ $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
         case "${GATE_CHOICE:-c}" in
           r|R)
             STAGE_NUM=$((STAGE_NUM - 1))
-            STAGE_NOTES_COMBINED=$(echo "$STAGE_NOTES_COMBINED" | head -n -$(($(cat "$STAGE_OUTPUT_FILE" 2>/dev/null | wc -l) + 2)) 2>/dev/null || echo "")
+            STAGE_NOTES_COMBINED=$(_stage_notes_through "$STAGE_NUM")
+            manifest_set --set-json "phases.implement.stage_num=$STAGE_NUM"
             continue
             ;;
           e|E)
@@ -113,7 +150,11 @@ $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
             # Store so next iteration can prepend to its prompt (via a temp file)
             printf '%s' "$EXTRA_INSTRUCTIONS" > "$LOG_DIR/$TIMESTAMP-stage-${STAGE_NUM}-extra.txt"
             ;;
-          q|Q) warn "Workflow aborted"; exit 0 ;;
+          q|Q)
+            manifest_boundary implement pending_gate --set-json "phases.implement.stage_num=$STAGE_NUM"
+            warn "Workflow aborted - run the same command again to come back to this checkpoint"
+            exit 0
+            ;;
           *) : ;;  # c or enter — continue
         esac
       fi
@@ -135,8 +176,6 @@ $(cat "$STAGE_OUTPUT_FILE" 2>/dev/null || echo '(no notes)')"
   fi
 
   notify "Phase 2 — Implementation done" "Running rubocop + specs, then review"
-
-  run_auto_heal_loop
 }
 
 # ── Auto-heal loop ────────────────────────────────────────────────────────────

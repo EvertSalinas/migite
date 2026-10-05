@@ -22,7 +22,7 @@ as of 2026-09-24, and this file wins where the two differ.
 ```
 migite/                       ← wherever you clone this repo
 ├── bin/                      ← the only directory that goes on PATH
-│   ├── migite                ← entrypoint (bash): config load, arg parsing, phase sequencing, EXIT trap
+│   ├── migite                ← entrypoint (bash): config load, arg parsing, resume, phase sequencing, EXIT trap
 │   ├── migite-ticket         ← tickets from the command line (parse / fetch / sources)
 │   ├── migite-explore        ← standalone: initiative feasibility
 │   ├── migite-blueprint      ← standalone: new-project definition
@@ -36,11 +36,12 @@ migite/                       ← wherever you clone this repo
 │   ├── vault.sh              ← slugify, stamp_file / sync_artifact / sync_json, resume_from_vault
 │   ├── intake.sh             ← attachments block, knowledge injection, fill_intake_field
 │   ├── gate.sh               ← gate banner, review_verdict, show_commit_context
+│   ├── manifest.sh           ← run.json: phase boundaries, finding the run to resume, restoring it
 │   ├── doctor.sh             ← `migite doctor`
 │   └── phases/
 │       ├── amend.sh          ← --amend mode
 │       ├── plan.sh           ← Phase 1 (+ ticket context, plan gate) and Phase 1.5
-│       ├── implement.sh      ← Phase 2 (single or --staged) and the Phase 2.5 heal loop
+│       ├── implement.sh      ← Phase 2 (single or --staged) and the Phase 2.5 heal loop (its own phase)
 │       ├── review.sh         ← Phase 3, the commit gate, strict-policy blockers
 │       └── deliver.sh        ← Phases 3.5, 4, 4.5
 ├── migite/                   ← the Python package; bash runs it as `python -m migite.<module>`
@@ -49,6 +50,7 @@ migite/                       ← wherever you clone this repo
 │   ├── agent_cli.py          ← bash's door to the gateway: ask, session, info, check
 │   ├── tickets.py            ← ticket parse / fetch / sources; picks the source from tracker.provider
 │   ├── paths.py              ← vault path resolver: org detection, base branch, slugify, run-dir lookup
+│   ├── runstate.py           ← the run manifest (run.json): schema, atomic writes, shell export, find
 │   ├── agents/               ← one adapter per agent CLI: the ONLY place a CLI's flags, output format, or model ids appear
 │   │   ├── base.py           ← the interface: AgentInfo, AskRequest, SessionRequest, Launch, AskResult, permission words, scopes
 │   │   ├── claude.py         ← Claude Code
