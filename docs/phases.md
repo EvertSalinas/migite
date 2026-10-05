@@ -92,7 +92,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
 | `f` | Give feedback - migite prompts for text, refines the plan in place with one headless call (the `plan_refine` role, standard tier) that returns exact edits rather than a rewritten plan (`migite/doc_edits.py`; a full rewrite is the fallback when no usable edit comes back), shows a colored diff of what changed, then re-opens the gate |
 | `e` | Edit — opens `plan.md` directly in `$EDITOR` (default: vim) with zero latency |
 | `n` | Reject — re-runs the full `migite-plan` agent from scratch (fresh exploration + synthesis + critic), shows a colored diff after |
-| `q` | Abort the workflow |
+| `q` | Abort the workflow. `run.json` records the gate as pending: running the same command again comes straight back here |
 
 `f` is right when the plan needs a targeted AI correction. `e` is right when the change is surgical and you know exactly what to write. `n` is for when the exploration found the wrong files or the structure is fundamentally off. After `f` or `n`, a colored unified diff highlights what changed so you can verify the delta at a glance.
 
@@ -126,9 +126,11 @@ Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=ab
 
 Use `--staged` for large tasks where you want to verify correctness at each architectural boundary before proceeding.
 
-**Known limitations in the current implementation:** `r` decrements the stage counter, but the underlying loop (a bash `for` over the stage list) always advances to the next array element regardless — it doesn't actually re-run the current layer's session yet. And the extra instructions typed under `e` are saved to a log file but nothing feeds them back into the next stage's prompt yet. Both are open bugs, not intentional behavior.
+Each finished stage is recorded in `run.json` (`phases.implement.stage_num`), so a staged run that stops resumes after the last stage it finished; a `q` at a checkpoint re-opens that checkpoint.
 
-No gate after Phase 2 — migite moves directly to the heal loop.
+**Known limitation in the current implementation:** the extra instructions typed under `e` are saved to a log file but nothing feeds them back into the next stage's prompt yet. It is an open bug, not intentional behavior.
+
+No gate after Phase 2 — migite moves directly to the heal loop. The heal loop is its own phase in `run.json`, so a run interrupted while healing resumes there without replaying the implement session.
 
 <a id="phase-2-5-heal"></a>
 ### Phase 2.5 — Auto-heal loop
@@ -248,7 +250,7 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 | `f` | Claude fixes: opens an interactive session with the full review findings + the current plan (and any amendment it doesn't reflect yet) as context. Claude addresses every Critical and Warning. On `/exit`, migite re-runs rubocop + rspec + `migite-review` automatically and shows the gate again |
 | `e` | Edit — opens `review.md` directly in `$EDITOR` so you can annotate, dismiss, or restructure findings before deciding |
 | `n` | Manual fix — migite pauses and waits for you to press Enter when ready, then re-runs checks and re-review |
-| `q` | Abort the workflow |
+| `q` | Abort the workflow. `run.json` records the gate as pending: running the same command again re-runs lint and specs and re-opens the gate, reusing `review.md` when the code is unchanged since it was written |
 
 Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-review afterwards through the same helper, and there's no cap on how many times you can loop through this.
 

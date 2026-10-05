@@ -33,12 +33,13 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │           │   ├── gate-overrides.md             ← only with gates.commit.policy: strict, on a `Y`
 │           │   ├── summary.md                    ← what the run did and why, written at its end
 │           │   ├── testing-plan.md               ← the testing plan as the run left it
+│           │   ├── run.json                      ← the run manifest: how far the run got, for resuming
 │           │   └── usage.json  +  usage.jsonl    ← every headless model call in the run, across resumes
 │           ├── 01-amend-<slug>/                  ← one per --amend; <slug> is the feedback's first words
 │           │   ├── amendment.md                  ← the scoped delta
 │           │   ├── implementation.md
 │           │   ├── fix-rN.md, review.md + review.json, gate-overrides.md, summary.md,
-│           │   ├── testing-plan.md, usage.json + usage.jsonl
+│           │   ├── testing-plan.md, usage.json + usage.jsonl, run.json
 │           │   └── implementation-stage-N.md     ← --staged only
 │           ├── 02-amend-<slug>/
 │           ├── audit-<timestamp>.md              ← migite-audit --jira <ticket>

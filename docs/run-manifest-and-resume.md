@@ -1,7 +1,39 @@
 # Run manifest and resume
 
-Status: planned (implementation not started). Companion roadmap item: non-interactive
-`--yes` mode — designed here, to land separately (see "Non-goals").
+Status: the run manifest and resume are implemented (`migite/runstate.py`, `lib/manifest.sh`;
+user-facing behaviour in [migite.md](./migite.md#resuming-a-run)). Companion roadmap item:
+non-interactive `--yes` mode - designed here, to land separately (see "Non-goals").
+
+Where the implementation departs from the design below:
+
+- **`run.json` lives in the run folder** (`scratchpad/<task>/00-build/run.json`,
+  `NN-amend-<slug>/run.json`), not at the top of the task folder, so an amend run never overwrites
+  the build's manifest - the run-folder rule that no run overwrites another's files. Implicit
+  discovery looks only at `00-build/` manifests; `--resume` sees every run.
+- **Most boundaries are written by `bin/migite`'s dispatch** (`manifest_enter` before a phase,
+  `manifest_boundary <phase> done` after it), not inside each phase file. The phase files write
+  only what happens inside a phase: the first manifest (`manifest_init` in `run_plan` /
+  `run_amend_mode`), the layout after a slug rename, stage checkpoints, and `pending_gate` on a `q`.
+- **`next_phase` and `status` are derived** by `runstate.py` from the phase statuses on every
+  write, never set by bash, so they can't disagree with the phases.
+- **`failed` is written by migite's EXIT trap** on any non-zero exit (`manifest_on_exit`); the
+  phase it was in stays `running`, so the manifest says both what happened and what re-runs. A
+  resume sets the run back to `in_progress`.
+- **`find` lives in `runstate.py`** (matching JSON is easier there than in bash), and there is no
+  `field` subcommand: bash reads single values with the existing `json_field`. An audit run must
+  also match its report (`--audit`), since every audit without a task shares the task text
+  `audit-remediation`; the slug fallback is skipped for audits for the same reason.
+- **A commit gate left open re-runs lint and specs on resume**, then re-opens the gate. `review.md`
+  is reused only when the tree matches the one it reviewed (`phases.review.tree_fingerprint`,
+  taken after each review and recorded at the `q`); otherwise it is reviewed again. Lint and spec
+  logs are per-invocation, so re-opening the gate on the old results would show stale state.
+- **An amend run left at its gate re-opens that amendment** via `migite --resume <its run.json>`
+  instead of writing and numbering a new one; one that stopped before its amendment was written
+  can't resume. A plain `migite --amend` is always a new amendment.
+- **The staged loop was rewritten** as a loop over the stage number, so it can start mid-way; as a
+  side effect, `r` at a checkpoint now really re-runs that stage (the old `for` loop advanced to the
+  next label regardless), and stage notes are rebuilt from `implementation-stage-N.md` instead of
+  trimmed with GNU-only `head -n -N`.
 
 ## Why
 
@@ -16,7 +48,8 @@ state — by re-running the same command, or explicitly with `--resume`.
 
 ### `run.json` (schema_version 1)
 
-Lives at `scratchpad/<slug>/run.json`, mirrored to the vault `$TASK_DIR/run.json` via
+Lives at `scratchpad/<slug>/<run-slug>/run.json` (see the departures above), mirrored to the vault
+`$TASK_DIR/<run-slug>/run.json` via
 `sync_json` (same convention as `plan.json` / `review.json` / `usage.json`). Envelope
 follows `gateway.envelope_base` (`schema_version`, `generated_at`).
 
@@ -183,4 +216,4 @@ Designed now so the manifest schema fits; not implemented in this change:
 
 A plain re-run no longer redoes completed implement/review/deliver phases — it continues
 from the recorded position. To force a fresh run of an old task: delete
-`scratchpad/<slug>/run.json` (or use `migite --amend`).
+`scratchpad/<slug>/00-build/run.json` and its vault copy (or use `migite --amend`).

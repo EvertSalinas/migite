@@ -233,9 +233,9 @@ STAGE CHECKPOINT: 2/4 — controllers
 Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=abort):
 ```
 
-Use it on large tasks where you want to check each layer before the next one builds on it. Two
-known gaps: `r` doesn't yet re-run the current stage, and a note typed under `e` isn't yet passed to
-the next one ([phases.md](../phases.md#phase-2-implement)).
+Use it on large tasks where you want to check each layer before the next one builds on it. One
+known gap: a note typed under `e` isn't yet passed to the next stage
+([phases.md](../phases.md#phase-2-implement)).
 
 ### A repo that isn't Rails
 
@@ -257,17 +257,16 @@ migite --jira BB-1234
 ```
 
 ```text
-▶ Resuming existing intake: …/scratchpad/bb-1234/00-build/intake.md
+▶ Resuming bb-1234/00-build from …/scratchpad/bb-1234/00-build/run.json - next phase: review
+▶ Phase plan already finished in an earlier invocation (run.json) - skipping
 …
-────────────────────────────────────────
-  EXISTING PLAN FOUND
-  …/scratchpad/bb-1234/plan.md
-────────────────────────────────────────
-Use existing plan or redo? [u/r] (u=use existing plan, r=redo from scratch):
 ```
 
-`u` goes straight to the plan gate. Nothing is re-fetched or re-planned unless you ask. If the
-scratchpad is gone, migite restores the files from the vault mirror first.
+`run.json` in the run's folder records how far the run got. Finished phases are skipped, the gate
+you quit at re-opens, and a phase that was interrupted runs again. Nothing is re-fetched or
+re-planned unless you ask. If the scratchpad is gone, migite restores the files from the vault
+mirror first. `migite --resume` on its own picks up the newest unfinished run in the repo. See
+[resuming a run](../migite.md#resuming-a-run) for every case.
 
 ### A stricter commit gate for a team repo
 

@@ -30,7 +30,7 @@ export LOG_DIR
 unset MIGITE_USAGE_LEDGER
 
 # Every lib file except doctor.sh (a command, not helpers) and the phases.
-for _lib in config stack agent vault intake gate; do
+for _lib in config stack agent vault intake gate manifest; do
   # shellcheck disable=SC1090
   source "$REPO_ROOT/lib/$_lib.sh"
 done

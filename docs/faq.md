@@ -49,9 +49,14 @@ Only on the first run for that ticket. An existing `intake.md` is reused silentl
 `--intake` / `--audit` mode shows a `[y/e/q]` confirm prompt instead of an editor.
 
 **Can I resume a run I aborted or that crashed?**
-Yes. Re-run the same command. An existing intake is reused; an existing `plan.md` offers
-`[u]se existing` or `[r]edo`; a scratchpad that was deleted is restored from the vault mirror.
-See [resuming a run](./migite.md#resuming-a-run).
+Yes. Re-run the same command. `run.json` in the run's folder records which phases finished, so
+those are skipped, a gate you quit at (`q`) re-opens, and an interrupted phase runs again. A
+scratchpad that was deleted is restored from the vault mirror. `migite --resume` alone picks up
+the newest unfinished run. See [resuming a run](./migite.md#resuming-a-run).
+
+**How do I build a task again from scratch, not resume it?**
+Delete `scratchpad/<task>/00-build/run.json` (and its vault copy), then run the command again.
+For a change to a task that's already built, use `migite --amend` instead.
 
 **Why do the explorers read only a handful of files?**
 Cost and context. Each of the seven parallel explorers (eight when the task may touch the

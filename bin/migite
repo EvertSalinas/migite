@@ -60,6 +60,7 @@ source "$MIGITE_HOME/lib/agent.sh"
 source "$MIGITE_HOME/lib/vault.sh"
 source "$MIGITE_HOME/lib/intake.sh"
 source "$MIGITE_HOME/lib/gate.sh"
+source "$MIGITE_HOME/lib/manifest.sh"
 source "$MIGITE_HOME/lib/doctor.sh"
 source "$MIGITE_HOME/lib/phases/amend.sh"
 source "$MIGITE_HOME/lib/phases/plan.sh"
@@ -94,6 +95,8 @@ Task options:
   --attach <file>         fold a file into the planner's context (repeatable)
   --staged                one implement session per Scope sub-section, with a checkpoint between
   --stack <stack>         rails | generic (default: detected from the repo)
+  --resume [run.json]     continue an interrupted run from its run manifest; without a
+                          file, the newest unfinished run (or the one the options above name)
 
 Amend options:
   --amend ["feedback"]    the feedback inline, or typed when prompted
@@ -103,6 +106,8 @@ Amend options:
   -h, --help              show this help
 
 The run stops at two gates: after the plan, and before the commit. Nothing is committed for you.
+Running the same command again continues an interrupted run where it stopped (run.json in the
+run's folder); a finished one just prints where its files are.
 
 Related commands, each with --help:
   migite-ticket  migite-explore  migite-blueprint  migite-audit  migite-pr-review
@@ -110,6 +115,21 @@ Related commands, each with --help:
 Docs: docs/migite.md (commands), docs/phases.md (what each phase does),
       docs/configuration.md (every setting), docs/getting-started.md (a full first run)
 EOF
+}
+
+# print_run_files - where a run's documents are. After a run finishes, and when
+# a finished run is invoked again.
+print_run_files() {
+  echo ""
+  echo -e "  Scratchpad: ${CYAN}$SCRATCHPAD_DIR${RESET}"
+  echo -e "    plan.md                        → planning output"
+  echo -e "    pr-description.md              → ready to paste into GitHub"
+  echo -e "    $RUN_SLUG/implementation.md → implementation notes"
+  echo -e "    $RUN_SLUG/review.md         → review verdict"
+  echo -e "  Vault index: ${CYAN}$TASK_DIR/index.md${RESET}"
+  echo -e "    plan.json / review.json / usage.json / run.json → machine-readable envelopes"
+  echo -e "  Vault (read-only mirror): ${CYAN}$TASK_DIR${RESET}"
+  echo ""
 }
 
 case "${1:-}" in
@@ -168,6 +188,9 @@ AMEND_FEEDBACK=""
 AMEND_FEEDBACK_FILE=""
 STACK_OVERRIDE=""
 ATTACH_FILES=()
+RESUME_REQUESTED=false
+RESUME_FILE=""
+BASE_BRANCH=""
 
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
@@ -244,6 +267,20 @@ while [[ $# -gt 0 ]]; do
       [[ -z "$STACK_OVERRIDE" ]] && error "Provide a stack name after --stack"
       shift 2
       ;;
+    --resume)
+      # Optional run.json (or a run folder holding one); without it, discovery
+      # picks the newest unfinished run (lib/manifest.sh's manifest_discover).
+      RESUME_REQUESTED=true
+      if [[ -n "${2:-}" && "$2" != --* && ( "$2" == *.json || -d "$2" ) ]]; then
+        RESUME_FILE="$2"
+        [[ -d "$RESUME_FILE" ]] && RESUME_FILE="$RESUME_FILE/run.json"
+        [[ -f "$RESUME_FILE" ]] || error "Run manifest not found: $RESUME_FILE"
+        RESUME_FILE="$(resolve_path "$RESUME_FILE")"
+        shift 2
+      else
+        shift
+      fi
+      ;;
     --attach)
       # Repeatable. Each file's raw content is folded into task.md (see
       # run_plan in plan.sh) so migite-plan sees it as plain prompt text —
@@ -285,6 +322,9 @@ if [[ -n "$AUDIT_FILE" && -z "$TASK" && -z "$JIRA_TICKET" ]]; then
   TASK="audit-remediation"
 fi
 
+[[ "$RESUME_REQUESTED" == "true" && "$AMEND_MODE" == "true" ]] \
+  && error "--resume and --amend can't be combined; resume an amend run with: migite --resume <its run.json>"
+
 # A ticket browse URL passed as the plain task argument means --jira
 if [[ -z "$JIRA_TICKET" && -n "$TASK" && "$TASK" =~ ^https?://.*/browse/ ]]; then
   if _ticket_vars="$(ticket_cmd parse --shell "$TASK" 2>/dev/null)"; then
@@ -318,6 +358,24 @@ ORG="$("$MIGITE_PYTHON" -m migite.paths detect-org --repo-root "$REPO_ROOT")"
 # ── Load configuration (needs REPO_ROOT for <repo>/.migite.yml) ──────────────
 load_migite_config "$REPO_ROOT"
 mkdir -p "$LOG_DIR"
+
+# ── Resume: the run manifest (lib/manifest.sh) ───────────────────────────────
+# Before the ledger, the stack and the base branch: a resumed run restores all
+# three, along with its arguments and branch. A finished run stops here.
+MANIFEST_RESUMED=false
+MANIFEST_COMPLETE=false
+manifest_discover
+if [[ -n "$MANIFEST_PATH" ]]; then
+  manifest_restore "$MANIFEST_PATH"
+  if [[ "$MANIFEST_COMPLETE" == "true" ]]; then
+    echo ""
+    success "This run already finished ($MANIFEST_PATH)."
+    print_run_files
+    echo -e "  For a follow-up change: ${CYAN}migite --amend${RESET}. To build the task again from scratch, delete that run.json."
+    echo ""
+    exit 0
+  fi
+fi
 # Per-run usage ledger: one JSONL line per headless agent call
 # (tokens, cost, duration, model, label). Written by the gateway (migite/gateway.py)
 # for both the Python agents and bash's agent_ask; summarised at exit by
@@ -335,8 +393,11 @@ for _prompt in plan implement review architecture_critic; do
 done
 unset _prompt
 # On the way out (success, gate abort, or error alike): print what the run
-# spent, then refresh the task's index.md so it lists this run, even an aborted one.
+# spent, then refresh the task's index.md so it lists this run, even an aborted
+# one. An error also marks run.json failed (manifest_on_exit).
 _migite_exit() {
+  local rc=$?
+  manifest_on_exit "$rc"
   [[ "$(cfg budget.print_summary true)" == "true" ]] && print_usage_summary
   [[ -n "${TASK_DIR:-}" ]] && write_task_index "$TASK_DIR"
   return 0
@@ -355,31 +416,63 @@ log "Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
 log "Repo: $ORG/$REPO_NAME"
 
 # ── Detect base branch ────────────────────────────────────────────────────────
-BASE_BRANCH="$(detect_base_branch)"
+BASE_BRANCH="${BASE_BRANCH:-$(detect_base_branch)}"
 log "Base branch: $BASE_BRANCH"
 
+# ── Phases ────────────────────────────────────────────────────────────────────
+# plan → tdd → implement → heal → review → deliver, each recorded in run.json
+# (lib/manifest.sh): marked running as it begins and done once it returns. A
+# phase an earlier invocation finished is skipped; one left running (a crash)
+# or pending_gate (a q at its gate) runs again, re-opening its gate. run_plan
+# and run_amend_mode write the run's first manifest themselves, once its
+# folder exists.
 if [[ "$AMEND_MODE" == "true" ]]; then
   # ── Amend mode: locate the already-implemented task, scope a delta ──────────
-  run_amend_mode
+  if manifest_should_run plan; then
+    manifest_enter plan
+    run_amend_mode
+    manifest_boundary plan "done"
+    manifest_boundary tdd skipped
+  fi
 else
-  run_plan
-  run_tdd
+  if manifest_should_run plan; then
+    manifest_enter plan
+    run_plan
+    manifest_boundary plan "done" --set-json "phases.plan.gate_attempts=$PLAN_GATE_ATTEMPTS" --set "args.task_type=${TASK_TYPE:-}"
+  fi
+  if manifest_should_run tdd; then
+    manifest_enter tdd
+    run_tdd
+    if [[ "$TDD_DECIDED" == "true" ]]; then
+      manifest_boundary tdd "done" --set-json "phases.tdd.decided=true"
+    else
+      manifest_boundary tdd skipped --set-json "phases.tdd.decided=false"
+    fi
+  fi
 fi
 
-run_implement
-run_review
-run_deliver
+if manifest_should_run implement; then
+  manifest_enter implement
+  run_implement
+  manifest_boundary implement "done"
+fi
+if manifest_should_run heal; then
+  manifest_enter heal
+  run_auto_heal_loop
+  manifest_boundary heal "done" --set-json "phases.heal.heal_attempt=$HEAL_ATTEMPT"
+fi
+if manifest_should_run review; then
+  manifest_enter review
+  run_review
+  manifest_boundary review "done" --set-json "phases.review.gate_attempts=$COMMIT_GATE_ATTEMPTS"
+fi
+if manifest_should_run deliver; then
+  manifest_enter deliver
+  run_deliver
+  manifest_boundary deliver "done"
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 success "Workflow complete."
-echo ""
-echo -e "  Scratchpad: ${CYAN}$SCRATCHPAD_DIR${RESET}"
-echo -e "    plan.md                        → planning output"
-echo -e "    pr-description.md              → ready to paste into GitHub"
-echo -e "    $RUN_SLUG/implementation.md → implementation notes"
-echo -e "    $RUN_SLUG/review.md         → review verdict"
-echo -e "  Vault index: ${CYAN}$TASK_DIR/index.md${RESET}"
-echo -e "    plan.json / review.json / usage.json → machine-readable envelopes"
-echo -e "  Vault (read-only mirror): ${CYAN}$TASK_DIR${RESET}"
-echo ""
+print_run_files

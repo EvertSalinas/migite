@@ -37,6 +37,7 @@ migite --audit <report.md> [--jira KEY]     # remediation task generated from a 
 migite --attach <file> ...                  # fold reference material into the planner's context (repeatable)
 migite --staged                             # one implement session per Scope sub-section, checkpoint between
 migite --stack rails|generic                # override stack detection
+migite --resume [run.json]                  # continue an interrupted run; a plain re-run of the same command does too
 migite --amend ["feedback"] | --amend-file <file> [--jira KEY]   # scope a delta against a built task
 migite doctor [--repo <path>]               # read-only health check
 migite migrate-vault [--dry-run]            # move pre-run-folder task folders into run folders
@@ -240,6 +241,40 @@ Two principles that already govern how migite has evolved, written down as a cit
 
 <a id="resuming-a-run"></a>
 ## Resuming a run
+
+Every run keeps a run manifest, `run.json` in its run folder (`scratchpad/<task>/00-build/run.json`,
+mirrored to the vault), written at every phase boundary: the run's arguments, branch and folders,
+and the status of each phase (`plan`, `tdd`, `implement`, `heal`, `review`, `deliver`). Run the same
+command again and migite continues from the recorded position instead of starting over:
+
+| Recorded in `run.json` | On the next run |
+|---|---|
+| a phase `done` (or `tdd` / `skipped`) | Skipped, with a line saying so. A declined TDD question isn't asked again |
+| a phase `running` | It was interrupted (a crash, a closed terminal, an error): that phase runs again from its start |
+| plan `pending_gate` (`q` at the plan gate) | Straight back to the plan gate, without the use-or-redo question |
+| implement `pending_gate` / `running` with `--staged` | Starts after the last stage that finished (`stage_num`); a `q` at a checkpoint re-opens that checkpoint |
+| review `pending_gate` (`q` at the commit gate) | Lint and specs run again, then the gate re-opens. `review.md` is reused when the code is the same as the code it reviewed; any change, including edits you made after `n`, gets a new review |
+| deliver `running` | Phase 3.5 to 4.5 run again as one: the knowledge question and the PR session come back |
+| `status: complete` | Prints where the run's files are and exits 0. Use `migite --amend` for a follow-up |
+
+The run is found by its arguments, so a task whose intake `Title:` renamed its folder is still
+found from the original command: the newest manifest whose Jira key, intake file, or task text
+matches wins, in the scratchpad or, when the scratchpad copy is gone, the vault. `migite --resume`
+picks the newest unfinished run in the repo without any other arguments, and
+`migite --resume <run.json>` names one. A resumed run checks out the branch it was on, keeps its
+base branch and usage ledger (so the cost total spans the interruption), and pulls its documents
+back from the vault when the scratchpad lost them.
+
+`--amend` always scopes a new amendment. An amend run that stopped is picked up with
+`migite --resume <its run.json>` (`scratchpad/<task>/NN-amend-<slug>/run.json`); one that stopped at
+its amendment gate re-opens the same amendment.
+
+`run.json` records where the workflow got to, not the working tree: resuming assumes the code is
+as you left it. To build a task again from scratch, delete its `run.json` in both the scratchpad
+and the vault (the vault copy alone would be found and resumed). Design and schema:
+[run-manifest-and-resume.md](./run-manifest-and-resume.md) and [outputs.md](./outputs.md#run-json).
+
+Underneath, and for a task from before run manifests:
 
 | State | Behaviour |
 |-------|-----------|

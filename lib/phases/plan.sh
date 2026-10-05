@@ -12,7 +12,11 @@
 # PLAN_GATE_ATTEMPTS for the phases that run after it. The scratchpad copies are
 # the source of truth; the _VAULT siblings are synced mirrors under $TASK_DIR for
 # reading/browsing (e.g. in Obsidian) - never written to directly.
-# run_tdd expects PLAN_FILE, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_SLUG.
+# A fresh run writes the run's first run.json here (manifest_init); a resumed one
+# (MANIFEST_RESUMED, lib/manifest.sh) keeps its task folder, and when it stopped
+# at the plan gate (MANIFEST_ENTRY_STATUS=pending_gate) goes straight back to it.
+# run_tdd expects PLAN_FILE, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_SLUG,
+# and sets TDD_DECIDED (true when specs were written first).
 
 run_plan() {
   echo ""
@@ -20,7 +24,12 @@ run_plan() {
 
   # Derive a preliminary slug from args so dirs can be created before intake is opened
   local PRELIMINARY_SLUG
-  if [[ -n "$JIRA_TICKET" ]]; then
+  local RESUME_PLAN_GATE=false
+  [[ "${MANIFEST_ENTRY_STATUS:-}" == "pending_gate" ]] && RESUME_PLAN_GATE=true
+  if [[ "${MANIFEST_RESUMED:-false}" == "true" && -n "${TASK_SLUG:-}" ]]; then
+    # The folder run.json was found in, which the intake's Title may have renamed
+    PRELIMINARY_SLUG="$TASK_SLUG"
+  elif [[ -n "$JIRA_TICKET" ]]; then
     PRELIMINARY_SLUG=$(slugify "$JIRA_TICKET")
   elif [[ -n "$TASK" ]]; then
     PRELIMINARY_SLUG=$(slugify "$TASK")
@@ -35,6 +44,7 @@ run_plan() {
   # the resume checks below find its files in 00-build/.
   migrate_task_if_flat "$SCRATCHPAD_DIR" "$TASK_DIR"
   set_run_paths "$BUILD_RUN_SLUG"
+  [[ "${MANIFEST_RESUMED:-false}" == "true" ]] || manifest_init
 
   # Falls back to when Title: can't be derived from the intake below (line ~120).
   # Stays PRELIMINARY_SLUG unless --intake overrides it with the file's own name.
@@ -212,6 +222,7 @@ run_plan() {
 
   # Work on the branch the intake names, creating it from the base branch if missing
   ensure_task_branch "$(intake_branch "$INTAKE_FILE")" "$BASE_BRANCH"
+  manifest_refresh_layout
 
   # PLAN_FILE, TESTING_PLAN_FILE, IMPLEMENTATION_FILE, REVIEW_FILE and their
   # _VAULT siblings come from set_run_paths above.
@@ -238,7 +249,10 @@ run_plan() {
   local ATTACH_BLOCK
   ATTACH_BLOCK="$(build_attachments_block)"
 
-  if [[ -n "$INTAKE_FILE_ARG" ]]; then
+  if [[ "$RESUME_PLAN_GATE" == "true" ]]; then
+    # Asked before the plan was written; the answer is already on disk.
+    [[ -f "$RUN_SCRATCH_DIR/task.md" ]] && TASK_FILE="$RUN_SCRATCH_DIR/task.md"
+  elif [[ -n "$INTAKE_FILE_ARG" ]]; then
     echo ""
     local task_file_choice
     read -r -p "$(echo -e "${YELLOW}Add supplementary details in a separate task.md before planning? [y/N]: ${RESET}")" task_file_choice
@@ -317,7 +331,9 @@ run_plan() {
     cp "$PLAN_FILE" "$hist_dir/plan-$(date +%Y%m%d-%H%M%S).md"
   }
 
-  if [[ -f "$PLAN_FILE" ]]; then
+  if [[ -f "$PLAN_FILE" && "$RESUME_PLAN_GATE" == "true" ]]; then
+    success "Back at the plan gate where this run stopped: $PLAN_FILE"
+  elif [[ -f "$PLAN_FILE" ]]; then
     echo ""
     echo -e "${BOLD}────────────────────────────────────────${RESET}"
     echo -e "${BOLD}  EXISTING PLAN FOUND${RESET}"
@@ -362,7 +378,8 @@ run_plan() {
   # f - give feedback, refine plan in place (no re-exploration, one headless agent call)
   # n — full redo (re-run all 7 explorers + synthesis + critic)
   # q — abort
-  PLAN_GATE_ATTEMPTS=0
+  # Carries on from run.json when a resumed run re-opens this gate
+  PLAN_GATE_ATTEMPTS="${PLAN_GATE_ATTEMPTS:-0}"
   # Guards the "f" (feedback) refine call below: it's a one-shot headless call
   # asked to "output only the revised plan document", but it can instead return a
   # narrative recap of the changes it made. Since the instructions tell it to keep
@@ -485,7 +502,8 @@ run_plan() {
         show_critic
         ;;
       q|Q)
-        warn "Workflow aborted"
+        manifest_boundary plan pending_gate --set-json "phases.plan.gate_attempts=$PLAN_GATE_ATTEMPTS" --set "args.task_type=${TASK_TYPE:-}"
+        warn "Workflow aborted - run the same command again to come back to this gate"
         exit 0
         ;;
       *)
@@ -495,11 +513,15 @@ run_plan() {
   done
 }
 
+# SC2034: TDD_DECIDED is read by bin/migite, which records it in run.json.
+# shellcheck disable=SC2034
 run_tdd() {
   echo ""
   local tdd_choice
+  TDD_DECIDED=false
   read -r -p "$(echo -e "${YELLOW}Phase 1.5 (TDD): Write spec files before implementation? [y/N]: ${RESET}")" tdd_choice
   if [[ "$tdd_choice" =~ ^[Yy]$ ]]; then
+    TDD_DECIDED=true
     log "Phase 1.5/4 — Writing specs (TDD red phase)"
 
     local SPEC_IMPL_FILE="$RUN_SCRATCH_DIR/spec-implementation.md"

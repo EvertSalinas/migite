@@ -18,6 +18,12 @@
 # files kept slipping past lint/test/review. Tooling failures come from
 # tooling_failed for the same reason.
 #
+# A run resumed at the commit gate (MANIFEST_ENTRY_STATUS=pending_gate, see
+# lib/manifest.sh) re-runs the checks, then reuses review.md instead of reviewing
+# again when the code is the same as the code it reviewed (RESUME_REVIEW_FINGERPRINT:
+# REVIEWED_FINGERPRINT, the tree_fingerprint taken after each review, which a q
+# at the gate records in run.json).
+#
 # When $STACK == "generic" (no recognized stack profile matched — see
 # detect_stack in lib/stack.sh), rubocop/rspec are skipped entirely, both here
 # and in the commit-gate re-run loop; the LangGraph review still runs against
@@ -269,14 +275,21 @@ run_review() {
   # the first review of a run always runs every dimension, so an old copy goes first.
   local REVIEW_DIMS_JSON
   REVIEW_DIMS_JSON="$(dirname "$REVIEW_FILE")/review-dimensions.json"
-  rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON" "$REVIEW_DIMS_JSON"
-  spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
-    ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
-  sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
-  [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
-  sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
-  sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
-  success "Review written to $REVIEW_FILE"
+  if [[ "${MANIFEST_ENTRY_STATUS:-}" == "pending_gate" && -s "$REVIEW_FILE" && -n "${RESUME_REVIEW_FINGERPRINT:-}" \
+        && "$RESUME_REVIEW_FINGERPRINT" == "$(tree_fingerprint "$BASE_BRANCH")" ]]; then
+    success "Code unchanged since this run stopped at the commit gate - reusing $REVIEW_FILE"
+    REVIEWED_FINGERPRINT="$RESUME_REVIEW_FINGERPRINT"
+  else
+    rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON" "$REVIEW_DIMS_JSON"
+    spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+      ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
+    sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
+    [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
+    sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
+    sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
+    success "Review written to $REVIEW_FILE"
+    REVIEWED_FINGERPRINT=$(tree_fingerprint "$BASE_BRANCH")
+  fi
 
   # migite-review only reads — it doesn't touch files — so the rubocop sweep
   # above is still current. Reuse it instead of re-invoking rubocop.
@@ -289,7 +302,17 @@ run_review() {
   notify "Phase 3 - Review ready" "Approve, fix with $(agent_field display_name), fix manually, or abort"
 
   # Commit gate - [y] commit / [f] the agent fixes / [n] you fix / [q] abort
-  COMMIT_GATE_ATTEMPTS=0
+  # Carries on from run.json when a resumed run re-opens this gate
+  COMMIT_GATE_ATTEMPTS="${COMMIT_GATE_ATTEMPTS:-0}"
+  # q: run.json records the gate as pending and the tree the review saw (not the
+  # tree now: after n, your edits aren't reviewed yet), so the next invocation
+  # comes back here without reviewing unchanged code again.
+  _commit_gate_abort() {
+    manifest_boundary review pending_gate --set-json "phases.review.gate_attempts=$COMMIT_GATE_ATTEMPTS" \
+      --set "phases.review.tree_fingerprint=$REVIEWED_FINGERPRINT"
+    warn "Workflow aborted - run the same command again to come back to this gate"
+    exit 0
+  }
   _rerun_checks_and_review() {
     if [[ "$STACK" == "generic" ]]; then
       log "Generic stack — no lint/test tooling to re-run"
@@ -338,6 +361,7 @@ run_review() {
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
     sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
     sync_json "$REVIEW_JSON" "${REVIEW_VAULT%.md}.json"
+    REVIEWED_FINGERPRINT=$(tree_fingerprint "$BASE_BRANCH")
     # Reuse the sweep above instead of re-running rubocop a second time.
     RUBOCOP_FINAL_LOG="$RUBOCOP_LOG"
     RUBOCOP_FINAL_OFFENSES=0
@@ -512,12 +536,11 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
         echo -e "${YELLOW}  Make your fixes, then press Enter to re-run checks and re-review.${RESET}"
         local manual_ready
         read -r -p "$(echo -e "${YELLOW}  Ready to re-run checks? [Enter/q] (Enter=continue, q=abort): ${RESET}")" manual_ready
-        [[ "${manual_ready:-}" =~ ^[qQ]$ ]] && { warn "Workflow aborted"; exit 0; }
+        [[ "${manual_ready:-}" =~ ^[qQ]$ ]] && _commit_gate_abort
         _rerun_checks_and_review
         ;;
       q|Q)
-        warn "Workflow aborted"
-        exit 0
+        _commit_gate_abort
         ;;
       *)
         warn "Invalid input — use y / f / e / n / q"

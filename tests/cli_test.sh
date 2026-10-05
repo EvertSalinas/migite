@@ -37,6 +37,12 @@ check "migite --help documents every flag the entrypoint parses (missing:${missi
 out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --jria BB-1 2>&1); rc=$?
 check "migite: an unknown option is an error that points at --help" \
   bash -c '[[ "$1" != 0 && "$2" == *"Unknown option: --jria"*"migite --help"* ]]' _ "$rc" "$out"
+out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --resume --amend 2>&1); rc=$?
+check "migite --resume --amend: refused, with how to resume an amend run" \
+  bash -c '[[ "$1" != 0 && "$2" == *"can'"'"'t be combined"*"migite --resume <its run.json>"* ]]' _ "$rc" "$out"
+out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --resume missing/run.json 2>&1); rc=$?
+check "migite --resume <file>: a manifest that doesn't exist is an error" \
+  bash -c '[[ "$1" != 0 && "$2" == *"Run manifest not found: missing/run.json"* ]]' _ "$rc" "$out"
 out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" config --bogus 2>&1); rc=$?
 check "migite config: an unknown option exits 1 and shows the help" \
   bash -c '[[ "$1" == 1 && "$2" == *"Unknown option: --bogus"*"migite config --edit"* ]]' _ "$rc" "$out"

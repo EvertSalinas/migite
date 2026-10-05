@@ -13,8 +13,22 @@
 # mirror if the scratchpad copy is missing (e.g. amending an older task on a fresh
 # clone or after the branch's scratchpad was cleaned), and earlier runs are read
 # from whichever of the two still has them.
+# The amendment's run folder gets its own run.json (manifest_init) as soon as it
+# exists. Every --amend scopes a new amendment, so only `migite --resume` picks an
+# amend run back up: one that stopped at its amendment gate re-opens that same
+# amendment (_amend_gate) instead of writing and numbering a new one.
 
 run_amend_mode() {
+  # Resumed (lib/manifest.sh restored the task, run folder, AMEND_NUM and the
+  # written amendment): straight back to the gate.
+  if [[ "${MANIFEST_RESUMED:-false}" == "true" ]]; then
+    local AMENDMENT_VAULT="$RUN_VAULT_DIR/amendment.md" AMEND_DIFF
+    AMEND_DIFF=$(prompt_diff "$BASE_BRANCH")
+    log "Re-opening the gate for amendment $AMEND_NUM, where this run stopped"
+    _amend_gate
+    return 0
+  fi
+
   log "Amend mode — locating task to amend"
 
   local REPO_VAULT_DIR="$DEV_LOG_BASE/$ORG/$REPO_NAME"
@@ -135,6 +149,7 @@ $(cat "$_amend_f")
   AMENDMENT_FILE="$RUN_SCRATCH_DIR/amendment.md"
   local AMENDMENT_VAULT="$RUN_VAULT_DIR/amendment.md"
   log "Run folder: $RUN_SLUG"
+  manifest_init
 
   # --stat plus the diff capped at ui.prompt_diff_max_bytes (prompt_diff, lib/stack.sh).
   local AMEND_DIFF
@@ -184,6 +199,14 @@ Output ONLY this document — no preamble, no meta-commentary."
   [[ -s "$AMENDMENT_FILE" ]] || error "Amendment generation returned empty output"
   sync_artifact "$AMENDMENT_FILE" "$AMENDMENT_VAULT"
   success "Amendment written to $AMENDMENT_FILE"
+
+  _amend_gate
+}
+
+# _amend_gate - the amendment's review gate, and the testing-plan update an
+# approval triggers. Expects run_amend_mode's AMENDMENT_VAULT and AMEND_DIFF, plus
+# AMEND_NUM, AMENDMENT_FILE and the set_run_paths variables.
+_amend_gate() {
 
   # Brings testing-plan.md in line with the post-amendment behaviour. Exact edits
   # first (edit_document): a few hundred output tokens instead of re-emitting a
@@ -290,6 +313,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
         success "Amendment saved — review again"
         ;;
       q|Q)
+        manifest_boundary plan pending_gate
         warn "Workflow aborted"
         exit 0
         ;;
