@@ -235,6 +235,42 @@ set_run_paths() {
   REVIEW_VAULT="$RUN_VAULT_DIR/review.md"
 }
 
+# relocate_task_dir <src> <dest> — move a preliminary task folder to its final
+# slug. `mv src dest` nests src inside dest when dest already exists (a re-run
+# whose intake title matches an existing task), so that path merges without
+# clobbering and then deletes src. Dest missing: a plain rename.
+relocate_task_dir() {
+  local src="$1" dest="$2"
+  [[ -n "$src" && -n "$dest" && "$src" != "$dest" ]] || return 0
+  [[ -d "$src" ]] || return 0
+  if [[ ! -e "$dest" ]]; then
+    mkdir -p "$(dirname "$dest")"
+    mv "$src" "$dest"
+    return 0
+  fi
+  [[ -d "$dest" ]] || return 1
+  _merge_dir_no_clobber "$src" "$dest"
+  rm -rf "$src"
+}
+
+# _merge_dir_no_clobber <src> <dest> — move each child of src into dest; a
+# name dest already has is left alone (directories are merged recursively).
+_merge_dir_no_clobber() {
+  local src="$1" dest="$2" child name
+  mkdir -p "$dest"
+  for child in "$src"/* "$src"/.[!.]*; do
+    [[ -e "$child" || -L "$child" ]] || continue
+    name=$(basename "$child")
+    if [[ -d "$child" && ! -L "$child" && -d "$dest/$name" ]]; then
+      _merge_dir_no_clobber "$child" "$dest/$name"
+    elif [[ -e "$dest/$name" || -L "$dest/$name" ]]; then
+      continue
+    else
+      mv "$child" "$dest/$name"
+    fi
+  done
+}
+
 # amendment_feedback <amendment.md> - the first non-blank line of its
 # "## Feedback" section.
 amendment_feedback() {

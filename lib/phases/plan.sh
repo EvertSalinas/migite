@@ -211,13 +211,17 @@ run_plan() {
   if [[ "$TASK_SLUG" != "$PRELIMINARY_SLUG" ]]; then
     local NEW_TASK_DIR="$DEV_LOG_BASE/$ORG/$REPO_NAME/$TASK_SLUG"
     local NEW_SCRATCHPAD_DIR="$REPO_ROOT/scratchpad/$TASK_SLUG"
-    mv "$TASK_DIR" "$NEW_TASK_DIR"
-    mv "$SCRATCHPAD_DIR" "$NEW_SCRATCHPAD_DIR"
+    if [[ -d "$NEW_TASK_DIR" || -d "$NEW_SCRATCHPAD_DIR" ]]; then
+      log "Reusing existing task dir: $TASK_SLUG"
+    else
+      log "Dirs renamed to: $TASK_SLUG"
+    fi
+    relocate_task_dir "$TASK_DIR" "$NEW_TASK_DIR"
+    relocate_task_dir "$SCRATCHPAD_DIR" "$NEW_SCRATCHPAD_DIR"
     TASK_DIR="$NEW_TASK_DIR"
     SCRATCHPAD_DIR="$NEW_SCRATCHPAD_DIR"
     set_run_paths "$BUILD_RUN_SLUG"
     INTAKE_FILE="$RUN_SCRATCH_DIR/intake.md"
-    log "Dirs renamed to: $TASK_SLUG"
   fi
 
   # Work on the branch the intake names, creating it from the base branch if missing

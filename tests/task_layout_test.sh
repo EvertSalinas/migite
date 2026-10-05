@@ -176,4 +176,30 @@ check "write_task_index: an amend row says what the amendment asked for" \
 check "write_task_index: lists other files, not the current documents again" \
   bash -c '[[ "$1" == *"## Other files"*"[audit-20260901.md](audit-20260901.md)"* && "$1" != *"[plan.md]"* ]]' _ "$_tl_index"
 
-unset _tl_sync _tl_scratch _tl_vault _tl_expected _tl_root _tl_ms _tl_mv _tl_d _tl_out _tl_amend _tl_index
+# ── relocate_task_dir ────────────────────────────────────────────────────────
+_tl_rel=$(mktemp -d); CLEANUP_DIRS+=("$_tl_rel")
+mkdir -p "$_tl_rel/from/00-build"
+echo intake > "$_tl_rel/from/00-build/intake.md"
+relocate_task_dir "$_tl_rel/from" "$_tl_rel/to"
+check "relocate_task_dir: dest missing, src becomes dest" \
+  test -f "$_tl_rel/to/00-build/intake.md" -a ! -e "$_tl_rel/from"
+
+mkdir -p "$_tl_rel/task-ts/00-build" "$_tl_rel/existing/00-build"
+echo new > "$_tl_rel/task-ts/00-build/intake.md"
+echo old > "$_tl_rel/existing/00-build/intake.md"
+echo keep > "$_tl_rel/existing/plan.md"
+echo extra > "$_tl_rel/task-ts/00-build/jira-context.md"
+touch "$_tl_rel/task-ts/.plan.done"
+relocate_task_dir "$_tl_rel/task-ts" "$_tl_rel/existing"
+check "relocate_task_dir: dest exists, src is not nested inside it" \
+  test ! -e "$_tl_rel/existing/task-ts" -a ! -e "$_tl_rel/task-ts"
+check "relocate_task_dir: dest exists, existing files are kept" \
+  test "$(cat "$_tl_rel/existing/00-build/intake.md")" = "old"
+check "relocate_task_dir: dest exists, files dest lacks are moved in" \
+  test "$(cat "$_tl_rel/existing/00-build/jira-context.md")" = "extra"
+check "relocate_task_dir: dest exists, dest-only files stay" \
+  test "$(cat "$_tl_rel/existing/plan.md")" = "keep"
+check "relocate_task_dir: dest exists, hidden files dest lacks are moved in" \
+  test -f "$_tl_rel/existing/.plan.done"
+
+unset _tl_sync _tl_scratch _tl_vault _tl_expected _tl_root _tl_ms _tl_mv _tl_d _tl_out _tl_amend _tl_index _tl_rel
