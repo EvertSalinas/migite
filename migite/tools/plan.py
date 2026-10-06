@@ -26,6 +26,7 @@ from langgraph.types import Send
 from migite import gateway
 from migite import config
 from migite import doc_edits
+from migite import testing_plan as testing_plan_lib
 from migite import knowledge as knowledge_lib
 from migite import paths
 
@@ -406,6 +407,7 @@ class PlanState(TypedDict):
     critic_usable: bool
     plan_final: str
     testing_plan: str
+    testing_plan_when: str  # plan.testing_plan_when: "review" = Phase 3 writes testing-plan.md, not this tool
     # Provenance for plan.json — how many stub retries synthesis needed, and
     # what refine_plan did with the critic findings.
     synth_retries: int
@@ -762,49 +764,12 @@ Output only the revised plan document."""
 
 
 def generate_testing_plan(state: PlanState) -> dict:
+    if state.get("testing_plan_when") == "review":
+        print("  ▶ Testing plan left to Phase 3 (plan.testing_plan_when: review)", flush=True)
+        return {"testing_plan": ""}
     print("  ▶ Generating testing plan", flush=True)
-    frontend_steps = (
-        "\n<This plan touches the frontend: for every UI step give the page path on the local dev "
-        "server, the exact action (click, fill, submit), and what should change on the page, "
-        "including whether Turbo should update it in place without a full page reload. Add a step "
-        "to check the browser console for JavaScript errors. These steps are written so a person, "
-        "or an agent driving a browser, can follow them literally.>"
-        if state.get("frontend") else ""
-    )
-    prompt = f"""You are writing a standalone QA/dev verification document for the implementation
-plan below — the concrete steps a human runs by hand, after the code is built, to confirm it
-actually works. This document lives on its own (not inside the plan) precisely so it can be
-regenerated in full whenever the implementation changes, without touching the plan's history.
-
-## Implementation plan
-{state['plan_final']}
-
-## Instructions
-Output ONLY the document below, no preamble, no meta-commentary. Use exactly this structure:
-
-# Testing Plan
-
-### Prerequisites — seed records (Rails console)
-```ruby
-<a runnable Rails console script that seeds whatever records this plan's verification needs.
-Use only generic emails (test.user@example.com, admin.qa@example.com) — never real addresses.>
-```
-
-### Verification steps
-<numbered steps — curl commands or browser/UI actions that exercise this plan's scope. Cover the
-happy path and the key error/edge cases called out in the plan. Include at least one step naming
-a log line to `grep` for as evidence the code path actually ran.>{frontend_steps}
-
-### Teardown
-```ruby
-<a runnable Rails console script that removes exactly the seed records created above>
-```
-
-If the plan involves no endpoints or user-facing behaviour to verify by hand (e.g. a pure internal
-refactor with only spec coverage), say so explicitly under each section and state what to verify
-instead (e.g. "run the full spec suite for X") rather than inventing steps that don't apply."""
-
-    testing_plan = call_agent(prompt, label="generate_testing_plan", role="testing_plan")
+    prompt = testing_plan_lib.build_prompt(state["plan_final"], frontend=bool(state.get("frontend")))
+    testing_plan = call_agent(prompt, label=testing_plan_lib.LABEL, role=testing_plan_lib.ROLE)
     return {"testing_plan": testing_plan}
 
 
@@ -823,9 +788,13 @@ def write_outputs(state: PlanState) -> dict:
     print(f"    ✔ architecture-critic.md → {critic_path}", flush=True)
 
     testing_plan_path = Path(state["testing_plan_output"])
-    testing_plan_path.parent.mkdir(parents=True, exist_ok=True)
-    testing_plan_path.write_text(state["testing_plan"])
-    print(f"    ✔ testing-plan.md → {testing_plan_path}", flush=True)
+    testing_plan_deferred = state.get("testing_plan_when") == "review"
+    if testing_plan_deferred:
+        print("    ◦ testing-plan.md left to Phase 3 (plan.testing_plan_when: review)", flush=True)
+    else:
+        testing_plan_path.parent.mkdir(parents=True, exist_ok=True)
+        testing_plan_path.write_text(state["testing_plan"])
+        print(f"    ✔ testing-plan.md → {testing_plan_path}", flush=True)
 
     # plan.json — the machine-readable envelope beside plan.md. Everything here
     # is derived deterministically from the documents already written, so it can
@@ -860,6 +829,7 @@ def write_outputs(state: PlanState) -> dict:
         "refine_status": state.get("refine_status", ""),
         "refine_rejected": state.get("refine_rejected") or [],
         "refine_unverified": state.get("refine_unverified") or [],
+        "testing_plan_when": state.get("testing_plan_when") or "plan",
         "explorers": {
             "count": len(state["explorations"]),
             "failed": failed_explorers,
@@ -867,7 +837,7 @@ def write_outputs(state: PlanState) -> dict:
         "outputs": {
             "plan": str(plan_path),
             "critic": str(critic_path),
-            "testing_plan": str(testing_plan_path),
+            "testing_plan": None if testing_plan_deferred else str(testing_plan_path),
         },
         "usage": gateway.summarize(own_records)["total"] if own_records else None,
     }
@@ -995,6 +965,7 @@ def main() -> None:
             "critic_usable":  True,
             "plan_final":     "",
             "testing_plan":   "",
+            "testing_plan_when": str(cfg.get("plan.testing_plan_when") or "plan"),
             "synth_retries":  0,
             "refine_status":  "",
             "refine_rejected": [],

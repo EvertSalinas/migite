@@ -29,6 +29,46 @@
 # and in the commit-gate re-run loop; the LangGraph review still runs against
 # the plan + diff, just without tooling logs.
 
+# ensure_testing_plan - plan.testing_plan_when: review. migite-plan left testing-plan.md
+# out; this writes it from plan.md and the change as built, before the browser check and
+# the reviewers read it. The change is the diff capped at ui.prompt_diff_max_bytes
+# (prompt_diff) plus the name of every changed file, since the diff leaves untracked new
+# files out. A testing plan that exists is kept (it carries amendment and fix-round
+# edits), so a resume, an amend run and a re-review never write over one. A failed or
+# empty call warns and goes on without it: the testing-plan reviewer reports it missing,
+# and the next re-review tries again. Needs MIGITE_PYTHON, PLAN_FILE, BASE_BRANCH,
+# TESTING_PLAN_FILE and TESTING_PLAN_VAULT; reads CHANGED_FRONTEND when run_review set it.
+ensure_testing_plan() {
+  [[ "$(cfg plan.testing_plan_when plan)" == "review" ]] || return 0
+  [[ -s "$TESTING_PLAN_FILE" ]] && return 0
+  if [[ ! -s "$PLAN_FILE" ]]; then
+    warn "plan.testing_plan_when is review but there is no plan.md to write the testing plan from"
+    return 0
+  fi
+  local change_file out rc=0
+  change_file=$(mktemp)
+  out=$(mktemp)
+  {
+    prompt_diff "$BASE_BRANCH"
+    printf '\nFiles changed (tracked and new):\n'
+    changed_all_files "$BASE_BRANCH" || true
+  } > "$change_file"
+  local -a args=(--plan "$PLAN_FILE" --out "$out" --diff "$change_file")
+  [[ -n "${CHANGED_FRONTEND:-}" ]] && args+=(--frontend)
+  log "Writing the testing plan from the plan and the diff (plan.testing_plan_when: review)..."
+  "$MIGITE_PYTHON" -m migite.testing_plan --repo-root "${REPO_ROOT:-$PWD}" "${args[@]}" || rc=$?
+  if [[ $rc -eq 0 && -s "$out" ]]; then
+    mv "$out" "$TESTING_PLAN_FILE"
+    sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+    success "testing-plan.md written to $TESTING_PLAN_FILE"
+  else
+    rm -f "$out"
+    warn "The testing plan could not be written; reviewing without it"
+  fi
+  rm -f "$change_file"
+  return 0
+}
+
 # run_browser_check - Phase 3.1, opt-in via frontend.browser_check (off | ask |
 # on). Only when the diff touches the frontend and a testing plan exists: an
 # interactive session in which the agent walks the testing plan's browser steps
@@ -228,6 +268,7 @@ run_review() {
     fi
   fi
 
+  ensure_testing_plan
   run_browser_check
 
   local REVIEW_SENTINEL="$SCRATCHPAD_DIR/.review.done"
@@ -242,7 +283,6 @@ run_review() {
     --sentinel         "$REVIEW_SENTINEL"
     --base-branch      "$BASE_BRANCH"
   )
-  [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
   # Amendments are approved scope; the reviewer needs the ones plan.md doesn't
   # reflect yet (this run's, until Phase 3.8 folds it in, and any whose fold was
   # skipped). Without them it graded amended code against the plan and reported
@@ -255,6 +295,12 @@ run_review() {
   # Frontend inputs for migite-review, rebuilt before every review run: a fix
   # round can add or remove view/JavaScript changes. Empty on a backend-only
   # diff, which is what keeps the frontend reviewer from running.
+  local -a TESTING_PLAN_REVIEW_ARGS=()
+  _testing_plan_review_args() {
+    TESTING_PLAN_REVIEW_ARGS=()
+    [[ -f "$TESTING_PLAN_FILE" ]] && TESTING_PLAN_REVIEW_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
+    return 0
+  }
   local -a FRONTEND_REVIEW_ARGS=()
   _frontend_review_args() {
     FRONTEND_REVIEW_ARGS=()
@@ -266,6 +312,7 @@ run_review() {
     return 0
   }
   _frontend_review_args
+  _testing_plan_review_args
 
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
@@ -282,6 +329,7 @@ run_review() {
   else
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON" "$REVIEW_DIMS_JSON"
     spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+      ${TESTING_PLAN_REVIEW_ARGS[@]+"${TESTING_PLAN_REVIEW_ARGS[@]}"} \
       ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
     sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
@@ -353,8 +401,11 @@ run_review() {
     fi
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
+    ensure_testing_plan
     _frontend_review_args
+    _testing_plan_review_args
     spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+      ${TESTING_PLAN_REVIEW_ARGS[@]+"${TESTING_PLAN_REVIEW_ARGS[@]}"} \
       ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"} \
       --previous "$REVIEW_DIMS_JSON"
     sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"

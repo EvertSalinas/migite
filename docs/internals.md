@@ -58,6 +58,7 @@ migite/                       ← wherever you clone this repo
 │   │   ├── kimi.py           ← Kimi Code
 │   │   └── opencode.py       ← OpenCode
 │   ├── trackers/             ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
+│   ├── testing_plan.py       ← the testing-plan.md prompt shared by migite-plan and Phase 3, and a CLI bash calls (no langgraph)
 │   ├── verify.py             ← evidence gate and refuter for reviewer findings, shared by review.py and pr_review.py
 │   └── tools/                ← the LangGraph tools
 │       ├── plan.py           ← the planner ("migite-plan"), called by Phase 1
@@ -121,6 +122,8 @@ migite-plan \
 ```
 
 `--task-file` injects supplementary details from [migite's intake mode](./migite.md#intake-mode)'s "add a separate task.md" prompt into `synthesize_plan` as authoritative context alongside the intake — it's optional and only ever set when that prompt produced a file.
+
+`--testing-plan-output` is where `testing-plan.md` goes. With `plan.testing_plan_when: review` (config only, no flag) `migite-plan` makes no testing-plan call and writes nothing there: Phase 3 does, through `python -m migite.testing_plan --plan P --out O [--diff F] [--frontend]` (the same prompt, plus the diff; exit 0 writes `--out`, 1 failed call, 2 empty reply, and `--out` is untouched on a non-zero exit).
 
 `--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria), fetched in `plan.sh` by `migite-ticket` whenever `--jira` is used (Jira REST, or the agent's Atlassian MCP tools as a fallback; see [tickets.md](./tickets.md)), cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context) and the 7 explorers' keyword extraction. `migite-plan` itself never fetches anything - it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
 
@@ -213,6 +216,7 @@ Claude Code versions that predate them, and in ledgers written before they were 
 | `critic.clean`, `critic.critical/warning/note` | Whether the architecture critic returned the clean signal, and its 🔴/🟡/🟢 counts |
 | `open_questions` | Number of `### N.` entries under `## Open questions` |
 | `plan_headings` | The plan's `## ` headings, in order |
+| `testing_plan_when` | `plan` or `review`: when the testing plan is written. Under `review`, `outputs.testing_plan` is `null` and Phase 3 writes the file |
 | `synth_retries` | 0 or 1 — whether synthesis needed the stub retry |
 | `refine_status` | `no_concerns` / `applied_as_edits` / `no_edits_needed` (the critic's findings applied as exact edits, or none needed) / `applied` / `applied_after_retry` / `kept_draft` (the full-rewrite fallback) |
 | `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports. Listed at the end of `architecture-critic.md` |
@@ -251,6 +255,7 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
   "open_questions": 2,
   "plan_headings": ["## Summary", "## Scope", "## Approach", "## Test plan", "## Performance considerations",
                     "## cURL examples", "## Risks", "## Out of scope", "## Open questions"],
+  "testing_plan_when": "plan",
   "synth_retries": 0,
   "refine_status": "applied",
   "explorers": { "count": 7, "failed": [] },

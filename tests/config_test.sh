@@ -45,6 +45,8 @@ _cfg_reset_env() {
     test "$MIGITE_CFG_MODEL_TESTING_PLAN" = "claude-sonnet-5"
   check "cfg: the testing-plan reviewer is on by default" \
     test "$(cfg review.dimensions.testing_plan)" = "on"
+  check "cfg: the testing plan is written in Phase 1 by default (plan.testing_plan_when: plan)" \
+    test "$(cfg plan.testing_plan_when)" = "plan"
   check "resolved effort: none configured → empty" \
     test -z "$MIGITE_CFG_EFFORT_KNOWLEDGE"
   check "load_migite_config: caches the agent's description (claude by default)" \
@@ -66,6 +68,7 @@ cat > "$cfg_dir/repo/.migite.json" <<'EOF'
  "heal": {"max_attempts": 7, "full_suite_fallback": false},
  "gates": {"commit": {"policy": "strict"}},
  "review": {"dimensions": {"testing_plan": "off"}},
+ "plan": {"testing_plan_when": "review"},
  "permissions": {"headless": "acceptEdits", "interactive": "acceptEdits"},
  "prompts": {"dir": ".migite/prompts"},
  "ui": {"editor": "nano", "tmux": "off", "notify": "off"},
@@ -100,6 +103,8 @@ echo "custom plan prompt" > "$cfg_dir/repo/.migite/prompts/plan.md"
     test "$(cfg gates.commit.policy)" = "strict"
   check "cfg: review.dimensions.testing_plan: off read back" \
     test "$(cfg review.dimensions.testing_plan)" = "off"
+  check "cfg: plan.testing_plan_when: review read back" \
+    test "$(cfg plan.testing_plan_when)" = "review"
   check "cfg: boolean false exported as the string 'false'" \
     test "$(cfg heal.full_suite_fallback)" = "false"
   check "resolved model: tier change reaches every role in the tier (critic → file-strong)" \
@@ -155,6 +160,10 @@ echo '{"review": {"dimensions": {"testing_plan": "sometimes"}}}' > "$cfg_dir/rep
 rc=0
 ( _cfg_reset_env; REPO_ROOT="$cfg_dir/repo"; load_migite_config "$REPO_ROOT" >/dev/null 2>&1 ) || rc=$?
 check "load_migite_config: review.dimensions.testing_plan other than on|off aborts (exit 1)" test "$rc" = "1"
+echo '{"plan": {"testing_plan_when": "never"}}' > "$cfg_dir/repo/.migite.json"
+rc=0
+( _cfg_reset_env; REPO_ROOT="$cfg_dir/repo"; load_migite_config "$REPO_ROOT" >/dev/null 2>&1 ) || rc=$?
+check "load_migite_config: plan.testing_plan_when other than plan|review aborts (exit 1)" test "$rc" = "1"
 
 # ── run_config_command (`migite config`) ─────────────────────────────────────
 echo '{"models": {"strong": "shown-strong"}}' > "$cfg_dir/repo/.migite.json"

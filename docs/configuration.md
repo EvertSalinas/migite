@@ -19,6 +19,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [heal](#heal)
   - [frontend](#frontend)
   - [knowledge](#knowledge)
+  - [plan](#plan)
   - [review](#review)
   - [prompts, templates](#prompts)
   - [budget](#budget)
@@ -275,7 +276,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `plan_fold` | standard | `migite` Phase 3.8, the exact edits that keep `plan.md` current after each run |
 | `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
 | `amend`, `plan_refine`, `jira` | standard | `migite` amend mode, plan-gate refine, Jira fetch |
-| `testing_plan` | standard | `migite-plan`'s `generate_testing_plan`, and the testing-plan edits and regeneration in amend and fix rounds. It writes a checklist document from the finished plan, so it does not need the strong tier |
+| `testing_plan` | standard | `generate_testing_plan` (in `migite-plan`, or in Phase 3 with `plan.testing_plan_when: review`), and the testing-plan edits and regeneration in amend and fix rounds. It writes a checklist document from the finished plan, so it does not need the strong tier |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
 | `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description |
 | `lens` | standard | `migite-explore` lenses |
@@ -319,7 +320,8 @@ role wins). Set a generous value when a reasoning backend routinely runs long â€
 The testing plan used to run on the strong tier, so its generation had `thinking_timeout_seconds`
 (900s). On the standard tier it gets `timeout_seconds` (600s). A long testing plan on a slow
 backend can need more: `models.roles_timeouts.testing_plan: 900`. A timeout while `migite-plan`
-generates it fails the whole plan run, so raise it if you see one.
+generates it fails the whole plan run (with `plan.testing_plan_when: review` it only costs the
+testing plan, see [plan](#plan)), so raise it if you see one.
 
 <a id="stack"></a>
 ### `stack`
@@ -446,6 +448,32 @@ knowledge:
 newest entries first, up to this many bytes, with a note naming the file for the rest. They used
 to get the whole file, and the planner's explorers got its first 800 characters, which were the
 header and the oldest lessons.
+
+<a id="plan"></a>
+### `plan`
+
+```yaml
+plan:
+  testing_plan_when: plan     # plan | review
+```
+
+`plan` (the default) writes `testing-plan.md` in Phase 1, from the finished plan. `review` leaves
+it out of Phase 1 and writes it at the start of Phase 3, from `plan.md` and the change as built
+(the diff capped at `ui.prompt_diff_max_bytes`, plus the name of every changed file, since a diff
+leaves new untracked files out), before the browser check and the reviewers read it. It then
+describes what was built rather than what was planned, and a plan you redo no longer pays for a
+testing plan nobody reads.
+
+- A testing plan that already exists is kept: a resume, an `--amend` run, a fix round and a
+  re-review never write over one.
+- Redoing the plan of a task that already has a testing plan (`r` on an existing plan) sets the old
+  testing plan aside in `scratchpad/<task>/.plan-history/` and removes both copies, so Phase 3
+  writes a new one for the new plan.
+- A failed or empty call only warns, and the review runs without it: the testing-plan reviewer
+  reports it missing (unless `review.dimensions.testing_plan` is `off`), and the next re-review
+  tries again. With `plan` timing a failed call fails `migite-plan` as a whole.
+- `plan.json` records `testing_plan_when`, and `outputs.testing_plan` is `null` under `review`.
+- The ledger shows the same `generate_testing_plan` call, role `testing_plan`, at either moment.
 
 <a id="review"></a>
 ### `review`

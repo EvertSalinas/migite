@@ -8,6 +8,7 @@ where langgraph isn't installed (the tool imports it at module load).
 Run: python3 -m unittest tests/test_plan.py"""
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -160,6 +161,62 @@ class TestingPlanTierTest(unittest.TestCase):
         out = self.plan.generate_testing_plan(base_state())
         self.assertEqual(out, {"testing_plan": "# Testing Plan"})
         self.assertEqual(self.calls, [{"role": "testing_plan", "thinking": False, "label": "generate_testing_plan"}])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class TestingPlanWhenTest(unittest.TestCase):
+    """plan.testing_plan_when: review - Phase 3 writes testing-plan.md, so migite-plan makes no call,
+    writes no file, and plan.json says where the testing plan is not."""
+
+    def setUp(self):
+        self.plan = load_tool()
+        self.calls = []
+
+        def fake_call_agent(prompt, role="think", thinking=False, label=""):
+            self.calls.append(label)
+            return "# Testing Plan\n1. check it"
+        self.plan.call_agent = fake_call_agent
+
+    def write(self, **state):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            self.plan.write_outputs({
+                "plan_output": str(tmp / "plan.md"), "critic_output": str(tmp / "critic.md"),
+                "testing_plan_output": str(tmp / "tp.md"), "sentinel": str(tmp / ".done"),
+                "plan_final": "# Plan\n## Approach\nx\n", "explorations": [], "base_branch": "main",
+                "critic_findings": "✅ No architectural concerns found.", **state})
+            return (json.loads((tmp / "plan.json").read_text()), (tmp / "tp.md").exists(),
+                    (tmp / "tp.md").read_text() if (tmp / "tp.md").exists() else None, str(tmp / "tp.md"))
+
+    def test_review_timing_makes_no_call_and_returns_no_document(self):
+        out = self.plan.generate_testing_plan(base_state(testing_plan_when="review"))
+        self.assertEqual(out, {"testing_plan": ""})
+        self.assertEqual(self.calls, [])
+
+    def test_plan_timing_is_what_it_always_was(self):
+        for when in ("plan", None):
+            self.calls.clear()
+            state = base_state() if when is None else base_state(testing_plan_when=when)
+            self.assertEqual(self.plan.generate_testing_plan(state), {"testing_plan": "# Testing Plan\n1. check it"})
+            self.assertEqual(self.calls, ["generate_testing_plan"])
+
+    def test_review_timing_writes_no_testing_plan_file_and_plan_json_says_so(self):
+        envelope, exists, _, _ = self.write(testing_plan="", testing_plan_when="review")
+        self.assertFalse(exists)
+        self.assertIsNone(envelope["outputs"]["testing_plan"])
+        self.assertEqual(envelope["testing_plan_when"], "review")
+
+    def test_plan_timing_writes_the_file_and_plan_json_points_at_it(self):
+        envelope, exists, text, path = self.write(testing_plan="# Testing Plan\n1. check it", testing_plan_when="plan")
+        self.assertTrue(exists)
+        self.assertEqual(text, "# Testing Plan\n1. check it")
+        self.assertEqual(envelope["outputs"]["testing_plan"], path)
+        self.assertEqual(envelope["testing_plan_when"], "plan")
+
+    def test_a_state_without_the_key_is_plan_timing(self):
+        envelope, exists, _, _ = self.write(testing_plan="# Testing Plan")
+        self.assertTrue(exists)
+        self.assertEqual(envelope["testing_plan_when"], "plan")
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")

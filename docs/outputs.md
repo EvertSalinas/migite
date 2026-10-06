@@ -37,7 +37,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 |------|----------|
 | `plan.md` | The living plan: the design as it now stands, updated at the end of every run ([Phase 3.8](./phases.md#phase-3-8-plan-update)), with a `## Revision history` line per run |
 | `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status and the findings it rejected, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
-| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
+| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Written in Phase 1, or at the start of Phase 3 with `plan.testing_plan_when: review`. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
 | `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
 | `browser-check.md` | Only with `frontend.browser_check: ask` / `on` and a diff that touches views or JavaScript: the agent's PASS / FAIL / SKIPPED walk through the testing plan in a real browser, read by the `frontend` reviewer. See [Frontend](./phases.md#frontend) |
 | `.plan.done` | Sentinel written by migite-plan on success |
@@ -191,7 +191,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 
 The QA/dev verification steps (seed script, curls or browser actions, teardown) live in their own `testing-plan.md`, not inside `plan.md`. This is deliberate: `plan.md` is only updated at the end of a run, through edits you approve, while the testing plan is regenerated whenever behaviour changes (every amendment and fix round) and describes how to verify the code **as it exists right now**. Kept inside `plan.md`, its steps would lag until the run's plan update, or be lost if you declined it.
 
-`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan. Every `--amend` run (at the amendment gate, and again at [Phase 3.8](./phases.md#phase-3-8-plan-update) from what was actually built) and every commit-gate fix round then updates it with exact edits (`migite/doc_edits.py`): steps the change invalidates are rewritten or dropped, new behaviour gets new steps, and everything else stays as it was. That costs a few thousand output tokens instead of re-emitting the whole document. When no usable edit comes back, it is regenerated in full from the current testing plan, the change and the diff, as before. `migite-review`'s `testing_plan` specialist (skipped when `review.dimensions.testing_plan` is `off`) reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
+`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan (with `plan.testing_plan_when: review` it leaves that to the start of Phase 3, which writes it from the plan and the diff, before the browser check and the reviewers read it; see [configuration](./configuration.md#plan)). Every `--amend` run (at the amendment gate, and again at [Phase 3.8](./phases.md#phase-3-8-plan-update) from what was actually built) and every commit-gate fix round then updates it with exact edits (`migite/doc_edits.py`): steps the change invalidates are rewritten or dropped, new behaviour gets new steps, and everything else stays as it was. That costs a few thousand output tokens instead of re-emitting the whole document. When no usable edit comes back, it is regenerated in full from the current testing plan, the change and the diff, as before. `migite-review`'s `testing_plan` specialist (skipped when `review.dimensions.testing_plan` is `off`) reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
 
 Required shape:
 
@@ -217,7 +217,7 @@ User.find_by(email: "test.user@example.com")&.destroy
 
 Only generic emails (`test.user@example.com`, `admin.qa@example.com`) — never real addresses.
 
-One gap worth knowing: updates only happen on `--amend`, on commit-gate fix rounds, and on a full plan `n`-redo at the Phase 1 gate. The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
+One gap worth knowing: updates only happen on `--amend`, on commit-gate fix rounds, and on a full plan `n`-redo at the Phase 1 gate (with `review` timing there is nothing to redo at that gate, and a redo of an existing task's plan sets its old testing plan aside). The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
 
 ---
 

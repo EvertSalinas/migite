@@ -55,9 +55,9 @@ load_context
          │
     refine_plan   (Opus 5.5, incorporates critic findings)
          │
-    generate_testing_plan   (Sonnet 5, role `testing_plan`, standalone QA/dev verification doc)
+    generate_testing_plan   (Sonnet 5, standalone QA/dev verification doc; skipped when `plan.testing_plan_when: review`)
          │
-    write_outputs   → plan.md + architecture-critic.md + testing-plan.md + sentinel
+    write_outputs   → plan.md + architecture-critic.md + testing-plan.md (not with `review` timing) + sentinel
 ```
 
 An eighth explorer, `views_frontend` (views, components, helpers, Stimulus controllers, the
@@ -199,7 +199,8 @@ the pre-config behaviour. Set it to `false` in `.migite.yml` to make Phase 3 con
 <a id="phase-3-review"></a>
 ### Phase 3 — Review (LangGraph)
 
-`migite-review` runs after the authoritative rubocop and rspec pass:
+`migite-review` runs after the authoritative rubocop and rspec pass. With `plan.testing_plan_when: review`, Phase 3 first writes `testing-plan.md` from `plan.md` and the diff (`ensure_testing_plan`), so the browser check and the `testing_plan` reviewer below read a testing plan that describes what was built; an existing one is kept, and a failed call only warns. See [configuration](./configuration.md#plan).
+
 
 ```
 load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, testing-plan.md)

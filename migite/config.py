@@ -134,6 +134,11 @@ DEFAULTS: dict[str, Any] = {
     "knowledge": {
         "inject_max_bytes": 8000,            # newest knowledge.md entries put into plan/implement/fix/amend prompts
     },
+    "plan": {
+        # plan = migite-plan writes testing-plan.md from the finished plan (Phase 1).
+        # review = Phase 3 writes it from the plan and the diff, before the reviewers read it.
+        "testing_plan_when": "plan",         # plan | review
+    },
     "review": {
         "dimensions": {
             "testing_plan": "on",            # on | off: the testing-plan reviewer in Phase 3 (the document is still written)
@@ -264,6 +269,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.system_specs": ("on", "off"),
     "frontend.browser_check": ("off", "ask", "on"),
     "review.dimensions.testing_plan": ("on", "off"),
+    "plan.testing_plan_when": ("plan", "review"),
     "permissions.headless_tools": ("isolated", "default"),
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
@@ -355,6 +361,8 @@ frontend:                    # views + Stimulus/Turbo; each runs only when the d
 knowledge:
   inject_max_bytes: 8000     # newest knowledge.md entries put into plan/implement/fix/amend prompts
 
+# plan:
+#   testing_plan_when: plan  # plan | review: review = Phase 3 writes testing-plan.md from the plan and the diff, not Phase 1 from the plan
 # review:
 #   dimensions:
 #     testing_plan: on       # on | off: the testing-plan reviewer in Phase 3 (testing-plan.md is still written)

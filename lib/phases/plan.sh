@@ -18,6 +18,24 @@
 # run_tdd expects PLAN_FILE, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_SLUG,
 # and sets TDD_DECIDED (true when specs were written first).
 
+# defer_testing_plan - plan.testing_plan_when: review. migite-plan leaves testing-plan.md
+# to Phase 3 (ensure_testing_plan, lib/phases/review.sh), which only writes a missing one.
+# A testing plan left over from an earlier plan describes a plan that no longer exists, so
+# it is set aside in .plan-history and both copies are removed: the vault copy too, or
+# resume_from_vault would bring it back. The run folders' snapshots keep the history.
+# Called after every migite-plan run; a no-op for plan.testing_plan_when: plan.
+defer_testing_plan() {
+  [[ "$(cfg plan.testing_plan_when plan)" == "review" ]] || return 0
+  if [[ -s "$TESTING_PLAN_FILE" ]]; then
+    local hist_dir="$SCRATCHPAD_DIR/.plan-history"
+    mkdir -p "$hist_dir"
+    cp "$TESTING_PLAN_FILE" "$hist_dir/testing-plan-$(date +%Y%m%d-%H%M%S).md"
+    warn "Setting aside the testing plan from the earlier plan; Phase 3 writes a new one from the new plan and the diff"
+  fi
+  rm -f "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+  return 0
+}
+
 run_plan() {
   echo ""
   log "Phase 1/4 — Planning"
@@ -353,7 +371,8 @@ run_plan() {
         spawn_langgraph "Planning" "plan" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
-        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        defer_testing_plan
+        [[ -f "$TESTING_PLAN_FILE" ]] && sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
         sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
         sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
         success "Plan written to $PLAN_FILE"
@@ -368,7 +387,8 @@ run_plan() {
     spawn_langgraph "Planning" "plan" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
     [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
     sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
-    sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+    defer_testing_plan
+    [[ -f "$TESTING_PLAN_FILE" ]] && sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
     sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
     sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
     success "Plan written to $PLAN_FILE"
@@ -499,7 +519,8 @@ run_plan() {
         spawn_langgraph "Revising plan" "plan-r${PLAN_GATE_ATTEMPTS}" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || warn "migite-plan revision may not have completed — check agent log in $LOG_DIR"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
-        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        defer_testing_plan
+        [[ -f "$TESTING_PLAN_FILE" ]] && sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
         sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
         sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
         _show_plan_diff "$_rerun_prev"

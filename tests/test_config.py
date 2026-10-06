@@ -494,6 +494,21 @@ class TestingPlanConfigTest(_Isolated):
         (self.repo / ".migite.yml").write_text("review:\n  dimensions:\n    testing_plan: off\n")
         self.assertEqual(self.load().get("review.dimensions.testing_plan"), "off")
 
+    def test_the_testing_plan_is_written_in_phase_1_by_default(self):
+        self.assertEqual(self.load().get("plan.testing_plan_when"), "plan")
+
+    def test_it_can_be_left_to_phase_3(self):
+        self.write_repo({"plan": {"testing_plan_when": "review"}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("plan.testing_plan_when"), "review")
+        self.assertEqual(cfg.warnings, [])
+
+    def test_any_other_timing_is_an_error_naming_the_key(self):
+        self.write_repo({"plan": {"testing_plan_when": "never"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("plan.testing_plan_when", str(cm.exception))
+
     def test_the_testing_plan_role_stays_on_the_standard_tier_and_its_model(self):
         self.assertEqual(config.ROLE_TIERS["testing_plan"], "standard")
         self.assertEqual(self.load().model("testing_plan"), "claude-sonnet-5")
