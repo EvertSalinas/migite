@@ -19,6 +19,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [heal](#heal)
   - [frontend](#frontend)
   - [knowledge](#knowledge)
+  - [review](#review)
   - [prompts, templates](#prompts)
   - [budget](#budget)
   - [ui](#ui)
@@ -264,7 +265,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | Role | Default tier | Where |
 |---|---|---|
 | `explore` | fast | `migite-plan` — the 7 parallel codebase explorers, 8 when the task may touch the frontend (grounding, capped at 14 files each) |
-| `think` | **strong** | `migite-plan` — synthesis, refine, testing plan: the highest-leverage text in the run |
+| `think` | **strong** | `migite-plan` — synthesis and refine: the highest-leverage text in the run |
 | `critic` | strong | `migite-plan` — architecture critic |
 | `review_correctness`, `review_security` | **strong** | `migite-review` — the two reviewers where a miss costs the most |
 | `review_test_coverage`, `review_testing_plan` | standard | `migite-review` — checklist dimensions |
@@ -273,7 +274,8 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
 | `plan_fold` | standard | `migite` Phase 3.8, the exact edits that keep `plan.md` current after each run |
 | `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
-| `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
+| `amend`, `plan_refine`, `jira` | standard | `migite` amend mode, plan-gate refine, Jira fetch |
+| `testing_plan` | standard | `migite-plan`'s `generate_testing_plan`, and the testing-plan edits and regeneration in amend and fix rounds. It writes a checklist document from the finished plan, so it does not need the strong tier |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
 | `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description |
 | `lens` | standard | `migite-explore` lenses |
@@ -313,6 +315,11 @@ tier always gets the longer limit. To size a specific model or call, override pe
 `models.timeouts.<fast|standard|strong>` or per role with `models.roles_timeouts.<role>` (the
 role wins). Set a generous value when a reasoning backend routinely runs long — e.g.
 `models.timeouts.strong: 1800`. `migite config` prints each role's resolved `timeout=`.
+
+The testing plan used to run on the strong tier, so its generation had `thinking_timeout_seconds`
+(900s). On the standard tier it gets `timeout_seconds` (600s). A long testing plan on a slow
+backend can need more: `models.roles_timeouts.testing_plan: 900`. A timeout while `migite-plan`
+generates it fails the whole plan run, so raise it if you see one.
 
 <a id="stack"></a>
 ### `stack`
@@ -439,6 +446,23 @@ knowledge:
 newest entries first, up to this many bytes, with a note naming the file for the rest. They used
 to get the whole file, and the planner's explorers got its first 800 characters, which were the
 header and the oldest lessons.
+
+<a id="review"></a>
+### `review`
+
+```yaml
+review:
+  dimensions:
+    testing_plan: on     # on | off: the testing-plan reviewer in Phase 3
+```
+
+`migite-review` runs four reviewers (correctness, security, test coverage, testing plan), plus
+the frontend one when the diff touches views or JavaScript. `testing_plan: off` drops the
+testing-plan reviewer: three reviewers run, the verdict is told the dimension did not run and
+treats the testing-plan checklist item as N/A, and a re-review never carries or re-runs it.
+`testing-plan.md` is still written, and still read by the browser check and the PR
+description; the key only skips grading it. Turning it back on makes the next re-review run the
+dimension, because the last review never did.
 
 <a id="prompts"></a>
 ### `prompts`, `templates`

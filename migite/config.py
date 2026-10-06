@@ -134,6 +134,11 @@ DEFAULTS: dict[str, Any] = {
     "knowledge": {
         "inject_max_bytes": 8000,            # newest knowledge.md entries put into plan/implement/fix/amend prompts
     },
+    "review": {
+        "dimensions": {
+            "testing_plan": "on",            # on | off: the testing-plan reviewer in Phase 3 (the document is still written)
+        },
+    },
     "prompts": {
         "dir": None,                         # per-project overrides for prompts/<name>.md (relative to repo root)
     },
@@ -161,7 +166,7 @@ DEFAULTS: dict[str, Any] = {
 ROLE_TIERS: dict[str, str] = {
     # migite-plan
     "explore": "fast",            # 7 parallel explorers: grounding, capped at 14 files each
-    "think": "strong",            # plan synthesis + refine + testing plan: highest-leverage text in the run
+    "think": "strong",            # plan synthesis + refine: highest-leverage text in the run
     "critic": "strong",           # architecture critic
     # migite-review — one role per dimension, plus the verdict
     "review_correctness": "strong",
@@ -258,6 +263,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.lint": ("auto", "off"),
     "frontend.system_specs": ("on", "off"),
     "frontend.browser_check": ("off", "ask", "on"),
+    "review.dimensions.testing_plan": ("on", "off"),
     "permissions.headless_tools": ("isolated", "default"),
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
@@ -348,6 +354,10 @@ frontend:                    # views + Stimulus/Turbo; each runs only when the d
 
 knowledge:
   inject_max_bytes: 8000     # newest knowledge.md entries put into plan/implement/fix/amend prompts
+
+# review:
+#   dimensions:
+#     testing_plan: on       # on | off: the testing-plan reviewer in Phase 3 (testing-plan.md is still written)
 
 # prompts:
 #   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md

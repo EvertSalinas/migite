@@ -473,5 +473,31 @@ class FrontendConfigTest(_Isolated):
         self.assertIn("frontend.lint", str(cm.exception))
 
 
+class TestingPlanConfigTest(_Isolated):
+    def test_the_testing_plan_reviewer_is_on_by_default(self):
+        self.assertEqual(self.load().get("review.dimensions.testing_plan"), "on")
+
+    def test_it_can_be_turned_off(self):
+        self.write_repo({"review": {"dimensions": {"testing_plan": "off"}}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("review.dimensions.testing_plan"), "off")
+        self.assertEqual(cfg.warnings, [])
+
+    def test_any_other_value_is_an_error_naming_the_key(self):
+        self.write_repo({"review": {"dimensions": {"testing_plan": "sometimes"}}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("review.dimensions.testing_plan", str(cm.exception))
+
+    @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+    def test_bare_yaml_off_is_read_as_the_word(self):
+        (self.repo / ".migite.yml").write_text("review:\n  dimensions:\n    testing_plan: off\n")
+        self.assertEqual(self.load().get("review.dimensions.testing_plan"), "off")
+
+    def test_the_testing_plan_role_stays_on_the_standard_tier_and_its_model(self):
+        self.assertEqual(config.ROLE_TIERS["testing_plan"], "standard")
+        self.assertEqual(self.load().model("testing_plan"), "claude-sonnet-5")
+
+
 if __name__ == "__main__":
     unittest.main()

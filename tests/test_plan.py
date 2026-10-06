@@ -143,6 +143,26 @@ class FrontendPlanningTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class TestingPlanTierTest(unittest.TestCase):
+    """The testing plan is a checklist document, not the plan: it asks for the `testing_plan` role
+    (standard tier, see test_config.py), and the ledger label stays generate_testing_plan."""
+
+    def setUp(self):
+        self.plan = load_tool()
+        self.calls = []
+
+        def fake_call_agent(prompt, role="think", thinking=False, label=""):
+            self.calls.append({"role": role, "thinking": thinking, "label": label})
+            return "# Testing Plan"
+        self.plan.call_agent = fake_call_agent
+
+    def test_generation_asks_for_the_testing_plan_role_not_the_default_strong_one(self):
+        out = self.plan.generate_testing_plan(base_state())
+        self.assertEqual(out, {"testing_plan": "# Testing Plan"})
+        self.assertEqual(self.calls, [{"role": "testing_plan", "thinking": False, "label": "generate_testing_plan"}])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
 class CriticOutputGuardTest(unittest.TestCase):
     def setUp(self):
         self.plan = load_tool()

@@ -55,7 +55,7 @@ load_context
          │
     refine_plan   (Opus 5.5, incorporates critic findings)
          │
-    generate_testing_plan   (Opus 5.5, standalone QA/dev verification doc)
+    generate_testing_plan   (Sonnet 5, role `testing_plan`, standalone QA/dev verification doc)
          │
     write_outputs   → plan.md + architecture-critic.md + testing-plan.md + sentinel
 ```
@@ -64,7 +64,7 @@ An eighth explorer, `views_frontend` (views, components, helpers, Stimulus contr
 importmap), joins the seven when the task may touch the frontend. See
 [Frontend: views, Turbo and Stimulus](#frontend) for how that's decided.
 
-Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis, refinement, and the testing plan use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation — and runs read-only (`Read`, `Grep`, `Glob`) so it can verify the plan's claims against the repo. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
+Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis and refinement use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The testing plan is a checklist document written from the finished plan, so `generate_testing_plan` runs on the standard tier (Sonnet 5 by default, role `testing_plan`), which also gives it the standard tier's 600s timeout (see [timeouts](./configuration.md#models)). The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation — and runs read-only (`Read`, `Grep`, `Glob`) so it can verify the plan's claims against the repo. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
 
 **Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into both `synthesize_plan` and the explorers' keyword extraction. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
 
@@ -207,7 +207,7 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
     ├── review: correctness      (logic vs plan, scope creep, acceptance criteria)
     ├── review: security         (auth, N+1, SQL injection, raw params, scopes)
     ├── review: test_coverage    (unit + request specs, factories, context wording)
-    ├── review: testing_plan     (testing-plan.md completeness — see below)
+    ├── review: testing_plan     (testing-plan.md completeness — see below; `review.dimensions.testing_plan: off` skips it)
     └── review: frontend         (only when the diff touches views or JavaScript - see Frontend)
          │
     verify_findings      → a second agent tries to disprove each Critical (see below)
@@ -254,7 +254,7 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 
 Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-review afterwards through the same helper, and there's no cap on how many times you can loop through this.
 
-A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs every active dimension: the four core ones, plus frontend when the diff touches views or JavaScript. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
+A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs every active dimension: the four core ones (three with `review.dimensions.testing_plan: off`, see [configuration](./configuration.md#review)), plus frontend when the diff touches views or JavaScript. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
 
 The reviewers run with read-only tools (`Read`, `Grep`, `Glob`), no MCP servers or plugins, and a per-call cost cap (`budget.review_call_max_usd`); see [`permissions.headless_tools`](./configuration.md#permissions).
 

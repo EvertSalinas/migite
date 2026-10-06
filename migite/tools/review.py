@@ -2,8 +2,9 @@
 # migite.tools.review (migite-review) — autonomous LangGraph review agent
 #
 # Reads plan.md, any amendments, implementation notes, rubocop/rspec logs, and git diff.
-# Fans out 4 parallel specialist reviewers (5 when the diff touches views or
-# JavaScript: see FRONTEND_DIMENSION), has a second agent try to disprove their
+# Fans out 4 parallel specialist reviewers (3 with review.dimensions.testing_plan
+# off, 5 when the diff touches views or JavaScript: see FRONTEND_DIMENSION), has
+# a second agent try to disprove their
 # Criticals (migite/verify.py), synthesises a verdict, and writes
 # review.md + sentinel. Called by migite's spawn_langgraph().
 #
@@ -22,7 +23,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, Mapping, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -238,6 +239,7 @@ class ReviewState(TypedDict):
     repo_root: str
     base_branch: str
     testing_plan: str
+    testing_plan_enabled: bool  # review.dimensions.testing_plan; False = no testing-plan reviewer
     frontend_files: list[str]   # changed views/JS; empty = no frontend reviewer
     frontend_lint_log: str
     system_specs: bool          # the repo has spec/system
@@ -284,9 +286,10 @@ def load_inputs(state: ReviewState) -> dict:
     return {"git_diff": diff}
 
 
-def active_dimensions(state: ReviewState) -> list[tuple[str, str]]:
-    """REVIEW_DIMENSIONS, plus the frontend reviewer when the diff touches views or JS."""
-    dims = list(REVIEW_DIMENSIONS)
+def active_dimensions(state: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """REVIEW_DIMENSIONS without the testing-plan reviewer when review.dimensions.testing_plan
+    is off, plus the frontend reviewer when the diff touches views or JS."""
+    dims = [d for d in REVIEW_DIMENSIONS if d[0] != "testing_plan" or state.get("testing_plan_enabled", True)]
     if state.get("frontend_files"):
         dims.append((FRONTEND_DIMENSION[0], frontend_criteria(state.get("system_specs", False))))
     return dims
@@ -422,6 +425,15 @@ def synth_frontend_block(state: ReviewState) -> str:
     return block
 
 
+def synth_testing_plan_block(state: ReviewState) -> str:
+    """The verdict synthesis has no tools and review.md tells it a missing testing plan is a
+    NEEDS FIXES; when the reviewer was switched off, say so instead of leaving it to guess."""
+    if state.get("testing_plan_enabled", True):
+        return ""
+    return ("\n## Testing plan\nThe testing-plan reviewer did not run (review.dimensions.testing_plan is off). "
+            "Mark the testing-plan checklist item N/A and do not base the verdict on the testing plan.\n")
+
+
 def synthesize_verdict(state: ReviewState) -> dict:
     print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
     findings_text = "\n\n".join(reviewed(state))
@@ -440,7 +452,7 @@ def synthesize_verdict(state: ReviewState) -> dict:
 
 ## RSpec
 {state['rspec_log'][:800]}
-{synth_frontend_block(state)}
+{synth_frontend_block(state)}{synth_testing_plan_block(state)}
 Synthesise these findings into a single review document following the format above.
 De-duplicate overlapping findings. Assign the final verdict:
 - READY TO COMMIT — no critical issues
@@ -620,7 +632,9 @@ def main() -> None:
     amendments     = [read_or_empty(a) for a in args.amendment]
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
-    dim_names = [d for d, _ in REVIEW_DIMENSIONS] + ([FRONTEND_DIMENSION[0]] if frontend_files else [])
+    testing_plan_enabled = str(cfg.get("review.dimensions.testing_plan", "on")) != "off"
+    dim_names = [d for d, _ in active_dimensions({"frontend_files": frontend_files,
+                                                  "testing_plan_enabled": testing_plan_enabled})]
     dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d in dim_names)
     rerun = list(dim_names)
     carried: list[str] = []
@@ -646,6 +660,7 @@ def main() -> None:
             "repo_root": args.repo_root,
             "base_branch": base_branch,
             "testing_plan": testing_plan,
+            "testing_plan_enabled": testing_plan_enabled,
             "frontend_files": frontend_files,
             "frontend_lint_log": frontend_lint_log,
             "system_specs": args.system_specs,

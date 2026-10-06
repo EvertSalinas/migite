@@ -804,7 +804,7 @@ If the plan involves no endpoints or user-facing behaviour to verify by hand (e.
 refactor with only spec coverage), say so explicitly under each section and state what to verify
 instead (e.g. "run the full spec suite for X") rather than inventing steps that don't apply."""
 
-    testing_plan = call_agent(prompt, label="generate_testing_plan")
+    testing_plan = call_agent(prompt, label="generate_testing_plan", role="testing_plan")
     return {"testing_plan": testing_plan}
 
 
