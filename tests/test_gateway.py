@@ -73,6 +73,26 @@ class CallClaudeTest(_FakeClaude):
         self.assertEqual(recs[0]["tool"], "migite-plan")
         self.assertEqual(recs[0]["turns"], 1)                     # fake-claude reports num_turns 1
 
+    def test_cache_write_split_and_session_reach_the_ledger(self):
+        self.mode("envelope")
+        r = gateway.call_agent("x", "knowledge", model="m", ledger=self.ledger)
+        self.assertEqual((r.usage.cache_creation_5m_input_tokens, r.usage.cache_creation_1h_input_tokens,
+                          r.usage.session_id), (20000, 3624, "fake"))
+        rec = gateway.read_ledger(self.ledger)[0]
+        self.assertEqual((rec["cache_creation_5m_input_tokens"], rec["cache_creation_1h_input_tokens"],
+                          rec["session_id"]), (20000, 3624, "fake"))
+
+    def test_an_older_envelope_has_no_cache_split_or_session(self):
+        claude = agents.get("claude")
+        usage = {"input_tokens": 10, "output_tokens": 39, "cache_creation_input_tokens": 23624}
+        for extra in ({}, {"cache_creation": None}):
+            with self.subTest(extra=extra):
+                env = json.dumps({"type": "result", "result": "ok", "is_error": False, "usage": {**usage, **extra}})
+                r = claude.parse(env, 0, agents.AskRequest(prompt="x", model="m"))
+                self.assertEqual((r.input_tokens, r.output_tokens, r.cache_creation_input_tokens), (10, 39, 23624))
+                self.assertEqual((r.cache_creation_5m_input_tokens, r.cache_creation_1h_input_tokens, r.session_id),
+                                 (0, 0, ""))
+
     def test_ledger_env_var_is_honoured(self):
         self.mode("envelope")
         os.environ[gateway.LEDGER_ENV] = self.ledger
@@ -284,6 +304,37 @@ class HelpersTest(unittest.TestCase):
         self.assertIn("$0.51", table)
         self.assertIn("1 call(s) failed", table)
         self.assertIn("cache-creation tokens: 1,000", table)
+
+    def test_a_ledger_mixing_old_and_new_records_summarizes_the_cache_share(self):
+        old = {"ts": "t", "tool": "migite-plan", "label": "synthesize_plan", "model": "opus", "input_tokens": 100,
+               "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 900,
+               "cost_usd": 0.30, "duration_ms": 1000, "ok": True}            # no turns, no cache split, no session
+        new = {"ts": "t", "tool": "migite-plan", "label": "refine_plan", "model": "opus", "input_tokens": 100,
+               "output_tokens": 10, "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 900,
+               "cache_creation_5m_input_tokens": 900, "cache_creation_1h_input_tokens": 0, "cost_usd": 0.20,
+               "duration_ms": 1000, "ok": True, "turns": 1, "session_id": "s-1"}
+        haiku = {**new, "label": "explore", "model": "haiku", "input_tokens": 100, "cache_read_input_tokens": 900,
+                 "cache_creation_input_tokens": 0, "cache_creation_5m_input_tokens": 0, "cost_usd": 0.10,
+                 "session_id": "s-2"}
+        no_usage = {**new, "tool": "migite", "label": "knowledge", "model": "", "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                    "cache_creation_5m_input_tokens": 0, "cost_usd": 0.0, "turns": 0, "session_id": ""}
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.jsonl"
+            ledger.write_text("".join(json.dumps(r) + "\n" for r in (old, new, haiku, no_usage)))
+            recs = gateway.read_ledger(ledger)
+        self.assertEqual(len(recs), 4)
+        loaded = [gateway.UsageRecord(**r) for r in recs]           # old lines still load as records
+        self.assertEqual((loaded[0].cache_creation_5m_input_tokens, loaded[0].session_id), (0, ""))
+        s = gateway.summarize(recs)
+        self.assertEqual((s["by_model"]["opus"]["input_tokens"], s["by_model"]["opus"]["cache_read_input_tokens"]),
+                         (5000, 3000))
+        self.assertEqual(s["by_tool"]["migite-plan"]["cache_read_input_tokens"], 3900)
+        table = gateway.format_summary(s)
+        self.assertRegex(table, r"opus\s+2\s+1\s+5,000\s+60%\s")             # 3,000 of 5,000 read from cache
+        self.assertRegex(table, r"haiku\s+1\s+1\s+1,000\s+90%\s")
+        self.assertRegex(table, r"\(unknown\)\s+1\s+-\s+0\s+-\s")           # no tokens reported: no share
+        self.assertRegex(table, r"total\s+4\s+2\s+6,000\s+65%\s")           # 3,900 of 6,000
 
     def test_format_summary_empty(self):
         self.assertIn("No headless model calls", gateway.format_summary(gateway.summarize([])))

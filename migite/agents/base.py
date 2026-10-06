@@ -117,8 +117,11 @@ class AskResult:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation_5m_input_tokens: int = 0   # cache writes split by TTL; 0 when the CLI doesn't say
+    cache_creation_1h_input_tokens: int = 0
     cost_usd: float = 0.0
     turns: int = 0                    # agent turns the call took; 0 when the CLI doesn't say
+    session_id: str = ""              # the CLI's session id; "" when the CLI doesn't say
     raw: dict = field(default_factory=dict)
     is_envelope: bool = True          # False when stdout wasn't the CLI's machine format
 

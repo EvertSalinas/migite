@@ -207,10 +207,13 @@ class UsageRecord:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation_5m_input_tokens: int = 0   # cache writes split by TTL; absent in older ledgers
+    cache_creation_1h_input_tokens: int = 0
     cost_usd: float = 0.0
     duration_ms: int = 0
     ok: bool = True
     turns: int = 0            # agent turns; more than 1 means the call used tools
+    session_id: str = ""      # the agent CLI's session id; "" when it doesn't report one
 
 
 def _now() -> str:
@@ -324,8 +327,10 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         input_tokens=parsed.input_tokens, output_tokens=parsed.output_tokens,
         cache_read_input_tokens=parsed.cache_read_input_tokens,
         cache_creation_input_tokens=parsed.cache_creation_input_tokens,
+        cache_creation_5m_input_tokens=parsed.cache_creation_5m_input_tokens,
+        cache_creation_1h_input_tokens=parsed.cache_creation_1h_input_tokens,
         cost_usd=parsed.cost_usd, duration_ms=parsed.duration_ms or elapsed, ok=parsed.ok,
-        turns=parsed.turns,
+        turns=parsed.turns, session_id=parsed.session_id,
     )
     record(usage, ledger)
     print(f"      ✔ {agent.name} returned in {elapsed / 1000:.1f}s (exit {proc.returncode}"
@@ -428,12 +433,14 @@ def summarize(records: list[dict]) -> dict:
         for k in _TOKEN_KEYS:
             total[k] += int(r.get(k) or 0)
         for bucket, key in ((by_model, r.get("model") or "(unknown)"), (by_tool, r.get("tool") or "(unknown)")):
-            b = bucket.setdefault(key, {"calls": 0, "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
-                                        "duration_ms": 0, "turns": 0})
+            b = bucket.setdefault(key, {"calls": 0, "cost_usd": 0.0, "input_tokens": 0, "cache_read_input_tokens": 0,
+                                        "output_tokens": 0, "duration_ms": 0, "turns": 0})
             b["calls"] += 1
             b["turns"] += int(r.get("turns") or 0)
             b["cost_usd"] += float(r.get("cost_usd") or 0)
+            # input_tokens here is input + cache reads + cache writes; cache_read_input_tokens is its cached part.
             b["input_tokens"] += int(r.get("input_tokens") or 0) + int(r.get("cache_read_input_tokens") or 0) + int(r.get("cache_creation_input_tokens") or 0)
+            b["cache_read_input_tokens"] += int(r.get("cache_read_input_tokens") or 0)
             b["output_tokens"] += int(r.get("output_tokens") or 0)
             b["duration_ms"] += int(r.get("duration_ms") or 0)
     total["cost_usd"] = round(total["cost_usd"], 4)
@@ -449,12 +456,18 @@ def format_summary(summary: dict) -> str:
     # turns: "-" when the ledger predates turn counts or the agent CLI doesn't report them.
     def _turns(n: int) -> str:
         return f"{n:,}" if n else "-"
-    lines.append(f"  {'model':<34} {'calls':>5} {'turns':>5} {'in+cache tok':>13} {'out tok':>8} {'time':>7} {'cost':>8}")
+    # cached: the share of all input tokens (input + cache writes + cache reads) read from the
+    # cache; "-" when the agent CLI reports no input tokens.
+    def _cached(read: int, total_in: int) -> str:
+        return f"{read / total_in:.0%}" if total_in else "-"
+    lines.append(f"  {'model':<34} {'calls':>5} {'turns':>5} {'in+cache tok':>13} {'cached':>6} {'out tok':>8} {'time':>7} {'cost':>8}")
     for model, b in sorted(summary["by_model"].items(), key=lambda kv: -kv[1]["cost_usd"]):
-        lines.append(f"  {model:<34} {b['calls']:>5} {_turns(b.get('turns', 0)):>5} {b['input_tokens']:>13,} {b['output_tokens']:>8,} "
+        lines.append(f"  {model:<34} {b['calls']:>5} {_turns(b.get('turns', 0)):>5} {b['input_tokens']:>13,} "
+                     f"{_cached(b.get('cache_read_input_tokens', 0), b['input_tokens']):>6} {b['output_tokens']:>8,} "
                      f"{b['duration_ms'] / 1000:>6.0f}s {'$' + format(b['cost_usd'], '.2f'):>8}")
-    lines.append(f"  {'total':<34} {t['calls']:>5} {_turns(t.get('turns', 0)):>5} "
-                 f"{t['input_tokens'] + t['cache_read_input_tokens'] + t['cache_creation_input_tokens']:>13,} "
+    total_in = t["input_tokens"] + t["cache_read_input_tokens"] + t["cache_creation_input_tokens"]
+    lines.append(f"  {'total':<34} {t['calls']:>5} {_turns(t.get('turns', 0)):>5} {total_in:>13,} "
+                 f"{_cached(t['cache_read_input_tokens'], total_in):>6} "
                  f"{t['output_tokens']:>8,} {t['duration_ms'] / 1000:>6.0f}s {'$' + format(t['cost_usd'], '.2f'):>8}")
     if t["cache_creation_input_tokens"]:
         lines.append(f"  cache-creation tokens: {t['cache_creation_input_tokens']:,} "

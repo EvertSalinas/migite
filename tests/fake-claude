@@ -26,7 +26,8 @@ envelope() {
   cat <<EOF
 {"type":"result","subtype":"success","is_error":false,"duration_ms":1407,"duration_api_ms":1265,"num_turns":1,
  "result":"$1","session_id":"fake","total_cost_usd":0.0475,
- "usage":{"input_tokens":10,"cache_creation_input_tokens":23624,"cache_read_input_tokens":0,"output_tokens":39},
+ "usage":{"input_tokens":10,"cache_creation_input_tokens":23624,"cache_read_input_tokens":0,"output_tokens":39,
+          "cache_creation":{"ephemeral_5m_input_tokens":20000,"ephemeral_1h_input_tokens":3624}},
  "modelUsage":{"$model":{"inputTokens":10,"outputTokens":39,"costUSD":0.0475}}$2}
 EOF
 }

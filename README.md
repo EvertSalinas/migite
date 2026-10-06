@@ -134,11 +134,11 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 ✔ Workflow complete.
 
 ── Usage ───────────────────────────────────────
-  model                              calls  in+cache tok  out tok    time     cost
-  claude-opus-5-5                        6       241,318    9,204    212s    $2.41
-  claude-haiku-4-5-20251001              7       165,438    2,710     41s    $0.33
-  claude-sonnet-5                        5        98,120    4,411     64s    $0.44
-  total                                 18       504,876   16,325    317s    $3.18
+  model                              calls turns  in+cache tok cached  out tok    time     cost
+  claude-opus-5-5                        6     9       241,318    52%    9,204    212s    $2.41
+  claude-haiku-4-5-20251001              7    41       165,438    71%    2,710     41s    $0.33
+  claude-sonnet-5                        5    12        98,120    48%    4,411     64s    $0.44
+  total                                 18    62       504,876    57%   16,325    317s    $3.18
 ```
 
 `y` at the commit gate does not commit. It ends the review loop; the commit is yours to make, and

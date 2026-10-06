@@ -105,6 +105,8 @@ class ClaudeAgent(Agent):
         if not isinstance(d, dict) or ("result" not in d and d.get("type") != "result"):
             return plain_text_result(stdout, returncode, req.model or "")
         usage = d.get("usage") or {}
+        # The TTL split of the cache writes; older CLIs don't send it.
+        cache_creation = usage.get("cache_creation") or {}
         model_usage = d.get("modelUsage") or {}
         # Prefer what was asked for; an alias or an unset model resolves to the id the CLI reports.
         model = req.model or (next(iter(model_usage)) if len(model_usage) == 1 else "")
@@ -120,7 +122,10 @@ class ClaudeAgent(Agent):
             output_tokens=int(usage.get("output_tokens") or 0),
             cache_read_input_tokens=int(usage.get("cache_read_input_tokens") or 0),
             cache_creation_input_tokens=int(usage.get("cache_creation_input_tokens") or 0),
-            cost_usd=float(d.get("total_cost_usd") or 0.0), turns=int(d.get("num_turns") or 0), raw=d,
+            cache_creation_5m_input_tokens=int(cache_creation.get("ephemeral_5m_input_tokens") or 0),
+            cache_creation_1h_input_tokens=int(cache_creation.get("ephemeral_1h_input_tokens") or 0),
+            cost_usd=float(d.get("total_cost_usd") or 0.0), turns=int(d.get("num_turns") or 0),
+            session_id=str(d.get("session_id") or ""), raw=d,
         )
 
     def session_launch(self, req: SessionRequest) -> Launch:

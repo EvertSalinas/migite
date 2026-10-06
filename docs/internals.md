@@ -189,7 +189,8 @@ the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `durat
 ```json
 {"ts": "...", "tool": "migite-plan", "label": "explore:models", "model": "claude-haiku-4-5-20251001",
  "input_tokens": 10, "output_tokens": 39, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 23624,
- "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1}
+ "cache_creation_5m_input_tokens": 23624, "cache_creation_1h_input_tokens": 0,
+ "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1, "session_id": "3f9c..."}
 ```
 
 If the CLI doesn't return the envelope (older version, plain-text error) the wrapper passes stdout
@@ -198,6 +199,12 @@ used tools. Note the `cache_creation_input_tokens`: with `permissions.headless_t
 every headless call re-sends Claude Code's own system context (~23k tokens in testing), a large
 share of a run's cost and why the summary prints it. The default, `isolated`, drops that context
 for every role that doesn't need it (see [configuration.md](./configuration.md#permissions)).
+
+`cache_creation_5m_input_tokens` and `cache_creation_1h_input_tokens` split
+`cache_creation_input_tokens` by how long the written cache entry lives (Claude Code's
+`usage.cache_creation`), and `session_id` is the CLI session the call ran in. They are there to
+diagnose why a call missed the cache. They are 0 and `""` on CLIs that don't report them, on
+Claude Code versions that predate them, and in ledgers written before they were recorded.
 
 **`plan.json`** (beside `plan.md`, written by `migite-plan`):
 
@@ -273,7 +280,10 @@ A `review.json` example, including `findings[]`, is in
 Each ledger line also records `turns`, the number of agent turns the call took (Claude Code's
 `num_turns`; 0 when a CLI doesn't report it). One turn is a plain answer; more means the call
 used tools, which is what `permissions.headless_tools` keeps in check. The usage table shows a
-`turns` column.
+`turns` column, and a `cached` column: the share of each model's input tokens that was read from
+the cache, `cache_read / (input + cache_creation + cache_read)`, or `-` when the CLI reports no
+tokens. `usage.json` keeps each model's and tool's `cache_read_input_tokens` beside its
+`input_tokens` (which there already includes cache reads and writes) so the share can be recomputed.
 
 **`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
 report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`). It summarises `usage.jsonl`
