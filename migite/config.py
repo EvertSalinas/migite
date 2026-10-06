@@ -132,7 +132,9 @@ DEFAULTS: dict[str, Any] = {
         "browser_check": "off",              # Phase 3.1: the agent walks the testing plan in a browser. off | ask | on
     },
     "knowledge": {
-        "inject_max_bytes": 8000,            # newest knowledge.md entries put into plan/implement/fix/amend prompts
+        "inject_max_bytes": 8000,            # knowledge.md entries put into plan/implement/fix/amend prompts, up to this many bytes
+        # relevant = entries sharing the most words with the intake and Jira ticket first; recent = newest first
+        "select": "relevant",                # relevant | recent
     },
     "plan": {
         # plan = migite-plan writes testing-plan.md from the finished plan (Phase 1).
@@ -270,6 +272,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.browser_check": ("off", "ask", "on"),
     "review.dimensions.testing_plan": ("on", "off"),
     "plan.testing_plan_when": ("plan", "review"),
+    "knowledge.select": ("relevant", "recent"),
     "permissions.headless_tools": ("isolated", "default"),
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
@@ -359,7 +362,8 @@ frontend:                    # views + Stimulus/Turbo; each runs only when the d
   browser_check: off         # off | ask | on: the agent walks the testing plan in a browser before review
 
 knowledge:
-  inject_max_bytes: 8000     # newest knowledge.md entries put into plan/implement/fix/amend prompts
+  inject_max_bytes: 8000     # knowledge.md entries put into plan/implement/fix/amend prompts, up to this many bytes
+  select: relevant           # relevant | recent: entries sharing the most words with the intake and ticket first, or newest first
 
 # plan:
 #   testing_plan_when: plan  # plan | review: review = Phase 3 writes testing-plan.md from the plan and the diff, not Phase 1 from the plan

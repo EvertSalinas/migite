@@ -514,5 +514,22 @@ class TestingPlanConfigTest(_Isolated):
         self.assertEqual(self.load().model("testing_plan"), "claude-sonnet-5")
 
 
+class KnowledgeSelectConfigTest(_Isolated):
+    def test_entries_are_picked_by_relevance_by_default(self):
+        self.assertEqual(self.load().get("knowledge.select"), "relevant")
+
+    def test_newest_first_can_be_kept(self):
+        self.write_repo({"knowledge": {"select": "recent"}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("knowledge.select"), "recent")
+        self.assertEqual(cfg.warnings, [])
+
+    def test_any_other_value_is_an_error_naming_the_key(self):
+        self.write_repo({"knowledge": {"select": "all"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("knowledge.select", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

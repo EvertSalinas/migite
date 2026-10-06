@@ -58,6 +58,8 @@ migite/                       ← wherever you clone this repo
 │   │   ├── kimi.py           ← Kimi Code
 │   │   └── opencode.py       ← OpenCode
 │   ├── trackers/             ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
+│   ├── knowledge.py          ← the knowledge.md entries a prompt gets: recent, or relevant to the task (no langgraph)
+│   ├── keywords.py           ← extract_keywords: the task words migite-plan's explorers and knowledge.py match on
 │   ├── testing_plan.py       ← the testing-plan.md prompt shared by migite-plan and Phase 3, and a CLI bash calls (no langgraph)
 │   ├── verify.py             ← evidence gate and refuter for reviewer findings, shared by review.py and pr_review.py
 │   └── tools/                ← the LangGraph tools

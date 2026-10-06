@@ -144,6 +144,39 @@ class FrontendPlanningTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class ExplorerKnowledgeTest(unittest.TestCase):
+    """Each explorer gets knowledge.md's entries picked for the task at EXPLORER_KNOWLEDGE_BYTES
+    (migite/knowledge.py), whole. The old `[:800]` slice cut into the newest entry and dropped the
+    note naming the file for the rest."""
+
+    def setUp(self):
+        self.plan = load_tool()
+        self.prompts = []
+
+        def fake_call_agent(prompt, role="think", thinking=False, label=""):
+            self.prompts.append(prompt)
+            return "findings"
+        self.plan.call_agent = fake_call_agent
+
+    def test_explorers_and_knowledge_selection_share_one_keyword_extractor(self):
+        from migite import keywords
+        self.assertIs(self.plan.extract_keywords, keywords.extract_keywords)
+
+    def test_every_explorer_is_sent_the_explorer_excerpt_not_the_synthesis_one(self):
+        sends = self.plan.route_to_explorers(base_state(knowledge="FOR SYNTHESIS", explore_knowledge="FOR EXPLORERS"))
+        self.assertEqual({send.arg["knowledge"] for send in sends}, {"FOR EXPLORERS"})
+
+    def test_the_explorer_prompt_holds_the_whole_excerpt_note_included(self):
+        excerpt = ("## 2026-10-06 — bb-1\n- " + "lesson " * 110
+                   + "\n\n(23 other entries not shown; all of them are in knowledge.md)")
+        self.assertGreater(len(excerpt), 800)
+        with tempfile.TemporaryDirectory() as repo:
+            self.plan.explore({"area": "models", "glob_patterns": ["app/models/**/*.rb"], "intake": "",
+                               "knowledge": excerpt, "jira_context": "", "repo_root": repo, "base_branch": "main"})
+        self.assertIn(excerpt, self.prompts[0])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
 class TestingPlanTierTest(unittest.TestCase):
     """The testing plan is a checklist document, not the plan: it asks for the `testing_plan` role
     (standard tier, see test_config.py), and the ledger label stays generate_testing_plan."""

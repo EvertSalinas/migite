@@ -91,9 +91,10 @@ run_amend_mode() {
   log "Amending: $TASK_DIR"
   log "Scratchpad: $SCRATCHPAD_DIR"
 
-  # Inject knowledge.md — same as the normal-mode Phase 1 injection
+  # Inject knowledge.md - same as the normal-mode Phase 1 injection, keyed on the
+  # build's intake and ticket (jira-context.md sits next to the intake)
   KNOWLEDGE_FILE="$DEV_LOG_BASE/$ORG/$REPO_NAME/knowledge.md"
-  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE")
+  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE" "$INTAKE_FILE" "$(dirname "$INTAKE_FILE")/jira-context.md")
 
   # Gather feedback: inline arg, file, or $EDITOR
   local AMEND_FEEDBACK_TEXT

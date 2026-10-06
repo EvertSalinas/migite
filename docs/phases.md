@@ -66,7 +66,7 @@ importmap), joins the seven when the task may touch the frontend. See
 
 Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis and refinement use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The testing plan is a checklist document written from the finished plan, so `generate_testing_plan` runs on the standard tier (Sonnet 5 by default, role `testing_plan`), which also gives it the standard tier's 600s timeout (see [timeouts](./configuration.md#models)). The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation — and runs read-only (`Read`, `Grep`, `Glob`) so it can verify the plan's claims against the repo. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
 
-**Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into both `synthesize_plan` and the explorers' keyword extraction. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
+**Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into `synthesize_plan`, the explorers' keyword extraction, and the choice of [knowledge.md entries](#active-memory-injection) the prompts get. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
 
 After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. If the critic returns no usable findings (leaked tool-call syntax or an empty reply), `migite-plan` retries once and then writes a 🟡 warning marking the plan un-critiqued rather than aborting. The gate then opens:
 
@@ -404,11 +404,23 @@ Before Phase 1 (Plan), Phase 1.5 (TDD specs), and Phase 2 (Implement), migite re
 
 ```
 ## Repository conventions and past lessons
-<newest knowledge.md entries, up to knowledge.inject_max_bytes>
-(N older entries not shown; all of them are in knowledge.md)
+<the knowledge.md entries closest to the task, up to knowledge.inject_max_bytes, newest first>
+(N other entries not shown; all of them are in knowledge.md)
 ```
 
-Entries go in newest first, up to [`knowledge.inject_max_bytes`](./configuration.md#knowledge) (default 8000); the last line appears only when older entries were left out. This means every new task starts with the most recent lessons from previous tasks in the same repo. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
+The entries are picked by [`knowledge.select`](./configuration.md#knowledge):
+
+- `relevant` (the default) ranks every entry by how many of the task's words its lessons use and fills [`knowledge.inject_max_bytes`](./configuration.md#knowledge) (default 8000) in that order.
+  - Ties go to the newer entry. An entry too big for the room left is skipped so a smaller one can use it.
+  - The task's words come from `intake.md` and, when `--jira` was used, `jira-context.md`.
+  - Template scaffolding doesn't count: front matter, `<!-- -->` hints, links, headings, the `**Type:**` line, `**Label:**` markers and empty labels. A `--jira` intake is usually the bare template, so the ticket supplies the words.
+  - Nor do an entry's dated `##` heading or its `[[wikilinks]]`.
+  - When no entry shares a word with the task (a bare intake with no ticket, say), the selection falls back to `recent`.
+- `recent` takes the newest entries first. The last line then reads "N older entries".
+
+Either way the picked entries print newest first, and the last line appears only when entries were left out. A two-year-old lesson about the code a ticket touches can reach the prompt, while the latest lessons still fill whatever room is left. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
+
+The amend and resume paths pick the same way from the build's `intake.md` and `jira-context.md`. Inside `migite-plan`, synthesis gets the same selection, and each explorer gets one at 800 bytes (`EXPLORER_KNOWLEDGE_BYTES`).
 
 ---
 

@@ -111,7 +111,7 @@ ONE Sonnet call ── reads plan.md + each run's implementation.md
                    (summary.md for runs plan.md already reflects)
                    + unfolded amendments + latest review.md
                    + git diff --stat + diff capped at ui.prompt_diff_max_bytes
-                   + recent knowledge.md entries + your feedback
+                   + the knowledge.md entries closest to the task + your feedback
       │
 NN-amend-<slug>/amendment.md → gate [y/f/e/q]
       │ (on y)

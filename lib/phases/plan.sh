@@ -309,9 +309,10 @@ run_plan() {
     success "Attachment(s) saved to $TASK_FILE"
   fi
 
-  # Inject knowledge.md so Plan and Implement phases inherit repo-level memory
+  # Inject knowledge.md so Plan and Implement phases inherit repo-level memory,
+  # the entries closest to the intake and the ticket first
   KNOWLEDGE_FILE="$DEV_LOG_BASE/$ORG/$REPO_NAME/knowledge.md"
-  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE")
+  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE" "$INTAKE_FILE" "$JIRA_CONTEXT_FILE")
 
   # LangGraph plan script args — built once, reused in the gate loop on rejection
   local PLAN_SENTINEL="$SCRATCHPAD_DIR/.plan.done"

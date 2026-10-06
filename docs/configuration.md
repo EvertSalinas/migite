@@ -441,13 +441,22 @@ each check does, is in [docs/phases.md](./phases.md#frontend).
 
 ```yaml
 knowledge:
-  inject_max_bytes: 8000      # newest knowledge.md entries put into prompts
+  inject_max_bytes: 8000      # knowledge.md entries put into prompts, up to this many bytes
+  select: relevant            # relevant | recent
 ```
 
-`knowledge.md` gains an entry every run. The plan, implement, fix and amend prompts get its
-newest entries first, up to this many bytes, with a note naming the file for the rest. They used
-to get the whole file, and the planner's explorers got its first 800 characters, which were the
-header and the oldest lessons.
+`knowledge.md` gains an entry every run. The plan, implement, fix and amend prompts get up to
+`inject_max_bytes` of its entries, printed newest first, with a note naming the file for the
+rest. They used to get the whole file, and the planner's explorers got its first 800 characters,
+which were the header and the oldest lessons.
+
+- `select: relevant` fills the budget with the entries that share the most words with the task
+  first: the intake, plus the Jira ticket when `--jira` was used. The template's own text doesn't
+  count. When no entry shares a word, it behaves like `recent`.
+- `select: recent` fills it with the newest entries.
+
+Each planner explorer gets the same kind of selection at 800 bytes. How words are matched is in
+[docs/phases.md](./phases.md#active-memory-injection).
 
 <a id="plan"></a>
 ### `plan`

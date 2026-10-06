@@ -29,6 +29,7 @@ from migite import doc_edits
 from migite import testing_plan as testing_plan_lib
 from migite import knowledge as knowledge_lib
 from migite import paths
+from migite.keywords import extract_keywords
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 # Calls name a role, never a model: explore (fast tier) for file analysis, think
@@ -98,13 +99,9 @@ EXCLUDE_DIR_COMPONENTS = {
     "coverage", "tmp", "log", "__pycache__", ".next", ".cache", ".git",
 }
 
-STOP_WORDS = {
-    "this", "that", "with", "from", "have", "been", "will", "when", "where", "what",
-    "which", "their", "there", "they", "also", "into", "more", "some", "than", "then",
-    "type", "name", "each", "such", "well", "just", "only", "should", "would", "could",
-    "these", "those", "about", "after", "before", "other", "first", "class", "return",
-    "method", "endpoint", "rails", "ruby", "model", "controller", "service",
-}
+# Each explorer's share of knowledge.md; synthesis gets knowledge.inject_max_bytes.
+# Both are picked by migite/knowledge.py, the same way (knowledge.select).
+EXPLORER_KNOWLEDGE_BYTES = 800
 
 
 # ── Audit condensation ─────────────────────────────────────────────────────────
@@ -199,11 +196,6 @@ def critic_is_usable(text: str) -> bool:
 
 
 # ── File discovery helpers ──────────────────────────────────────────────────────
-
-def extract_keywords(text: str) -> set[str]:
-    words = re.findall(r"\b[A-Za-z][a-zA-Z]{3,}\b", text)
-    return {w.lower() for w in words} - STOP_WORDS
-
 
 def camelize(name: str) -> str:
     return "".join(part.capitalize() for part in re.split(r"[-_]", name) if part)
@@ -385,6 +377,7 @@ def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: 
 class PlanState(TypedDict):
     intake: str
     knowledge: str
+    explore_knowledge: str  # the same selection at EXPLORER_KNOWLEDGE_BYTES, for each explorer
     audit: str
     blueprint: str
     task_file: str
@@ -443,7 +436,7 @@ def route_to_explorers(state: PlanState) -> list[Send]:
             "area": area,
             "glob_patterns": patterns,
             "intake": state["intake"],
-            "knowledge": state["knowledge"],
+            "knowledge": state.get("explore_knowledge", ""),
             "jira_context": state.get("jira_context", ""),
             "repo_root": state["repo_root"],
             "base_branch": state["base_branch"],
@@ -461,7 +454,7 @@ def explore(state: ExploreInput) -> dict:
     if gem_context:
         context += f"\n\n{gem_context}"
     knowledge_block = (
-        f"Repository lessons (apply these):\n{state['knowledge'][:800]}\n\n"
+        f"Repository lessons (apply these):\n{state['knowledge']}\n\n"
         if state.get("knowledge") else ""
     )
     gem_instruction = (
@@ -912,14 +905,19 @@ def main() -> None:
     CRITIC_CMD_PATH = cfg.prompt_path("architecture_critic", MIGITE_HOME, args.repo_root)
 
     intake     = Path(args.intake).read_text()
-    # Newest entries first, capped: the whole file grows every run (migite/knowledge.py).
-    knowledge  = (knowledge_lib.recent(Path(args.knowledge).read_text(), int(cfg.get("knowledge.inject_max_bytes") or 8000),
-                                       source=args.knowledge)
-                  if args.knowledge and Path(args.knowledge).exists() else "")
+    knowledge_md = Path(args.knowledge).read_text() if args.knowledge and Path(args.knowledge).exists() else ""
     audit      = Path(args.audit).read_text()       if args.audit      and Path(args.audit).exists()      else ""
     blueprint  = Path(args.blueprint).read_text()   if args.blueprint  and Path(args.blueprint).exists()  else ""
     task_file  = Path(args.task_file).read_text()   if args.task_file  and Path(args.task_file).exists()  else ""
     jira_context = Path(args.jira_context).read_text() if args.jira_context and Path(args.jira_context).exists() else ""
+    # The knowledge.md entries that share the most words with the task, capped: the
+    # whole file grows every run (migite/knowledge.py). knowledge.select: recent = newest first.
+    knowledge_keywords = (knowledge_lib.task_keywords(intake) | knowledge_lib.task_keywords(jira_context)
+                          if cfg.get("knowledge.select") == "relevant" else set())
+    knowledge  = knowledge_lib.relevant(knowledge_md, knowledge_keywords,
+                                        int(cfg.get("knowledge.inject_max_bytes") or 8000), source=args.knowledge)
+    explore_knowledge = knowledge_lib.relevant(knowledge_md, knowledge_keywords, EXPLORER_KNOWLEDGE_BYTES,
+                                               source=args.knowledge)
     plan_cmd   = read_prompt(PLAN_CMD_PATH)
     critic_cmd = read_prompt(CRITIC_CMD_PATH)
     base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
@@ -943,6 +941,7 @@ def main() -> None:
         graph.invoke({
             "intake":     intake,
             "knowledge":  knowledge,
+            "explore_knowledge": explore_knowledge,
             "audit":      audit,
             "blueprint":  blueprint,
             "task_file":  task_file,
