@@ -14,7 +14,8 @@ does the same work for every agent:
     a pointer to a file, for headless calls and interactive sessions alike;
   * starts the process, applies the timeout, and turns every failure, including a
     CLI that is not installed, into AgentError;
-  * appends one usage line per headless call to $MIGITE_USAGE_LEDGER.
+  * appends one usage line per headless call to $MIGITE_USAGE_LEDGER, and, on an
+    agent that can report it, one per model for each interactive session.
 
 What a CLI's flags and output look like is the adapter's business, in
 migite/agents/<name>.py. This module never names a flag or a model.
@@ -36,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -219,6 +221,7 @@ class UsageRecord:
     ok: bool = True
     turns: int = 0            # agent turns; more than 1 means the call used tools
     session_id: str = ""      # the agent CLI's session id; "" when it doesn't report one
+    kind: str = "call"        # "session" for a run_phase session, else "call"; absent in older ledgers
 
 
 def _now() -> str:
@@ -354,6 +357,7 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         cache_creation_1h_input_tokens=parsed.cache_creation_1h_input_tokens,
         cost_usd=parsed.cost_usd, duration_ms=parsed.duration_ms or elapsed, ok=parsed.ok,
         turns=parsed.turns, session_id=parsed.session_id,
+        kind="session" if role == "session" else "call",   # --automata runs run_phase's sessions headless
     )
     record(usage, ledger)
     print(f"      ✔ {agent.name} returned in {elapsed / 1000:.1f}s (exit {proc.returncode}"
@@ -374,14 +378,17 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
 
 
 def session_launch(prompt: str, *, role: str = "session", permission: str | None = None,
-                   prompt_file: str | None = None) -> agents.Launch:
+                   prompt_file: str | None = None, named: bool = False) -> agents.Launch:
     """The command that opens an interactive session on the active agent with `prompt`
     as its first message. Sessions always take the prompt as an argument, so a long
     one becomes a pointer to `prompt_file`. Unset permission = permissions.interactive.
 
     The session runs on the model `role` resolves to, the same way a headless call
     does: without it the CLI picks its own — opencode, for one, resumes whatever
-    model its last session in this directory used, whatever the config says."""
+    model its last session in this directory used, whatever the config says.
+
+    `named` gives the session a fresh id when the agent's command line can take one
+    (Launch.session_id, "" otherwise), so record_session_usage can find it afterwards."""
     if permission is None:
         permission = (CONFIG.get("permissions.interactive") if CONFIG is not None else None) or "auto"
     word = agents.normalize_permission(permission)
@@ -392,7 +399,51 @@ def session_launch(prompt: str, *, role: str = "session", permission: str | None
         # No caller-owned file to point at: keep the temp file, the session reads it later.
         print(f"      ⚠ prompt kept at {tmp} for the session to read", file=sys.stderr, flush=True)
     return AGENT.session_launch(agents.SessionRequest(prompt=text, permission=word,
-                                                      model=model_for(role) or None))
+                                                      model=model_for(role) or None,
+                                                      session_id=str(uuid.uuid4()) if named else ""))
+
+
+def record_session_usage(label: str, *, since: float, session_id: str = "", cwd: str | None = None,
+                         tool: str = "migite", ledger: str | None = None) -> list[UsageRecord]:
+    """Append what an interactive session that ended just now spent to the ledger: one
+    line per model it used, labelled `label`, kind "session". `since` is when it started
+    (epoch seconds), `session_id` the id its Launch reported ("" when none), `cwd` the
+    directory it ran in. A session costs money whether or not it is metered, so this
+    never raises: an agent that can't report sessions, a session it has no record of,
+    or a model it has no price for gets a notice instead."""
+    if not AGENT.supports("session_usage"):
+        print(f"      ⚠ the {AGENT.name} backend can't report an interactive session's usage; "
+              f"{label} is not metered", file=sys.stderr, flush=True)
+        return []
+    try:
+        results = AGENT.session_usage(session_id, cwd or os.getcwd(), since)
+    except Exception as e:   # a transcript in a shape it doesn't expect must not fail the run
+        print(f"      ⚠ could not read {label}'s usage: {e}", file=sys.stderr, flush=True)
+        return []
+    if not results:
+        print(f"      ⚠ found no record of {label}'s usage (session id {session_id or 'unknown'}); "
+              f"it is not metered", file=sys.stderr, flush=True)
+        return []
+    records = []
+    for r in results:
+        rec = UsageRecord(
+            ts=_now(), tool=tool, label=label, model=r.model,
+            input_tokens=r.input_tokens, output_tokens=r.output_tokens,
+            cache_read_input_tokens=r.cache_read_input_tokens,
+            cache_creation_input_tokens=r.cache_creation_input_tokens,
+            cache_creation_5m_input_tokens=r.cache_creation_5m_input_tokens,
+            cache_creation_1h_input_tokens=r.cache_creation_1h_input_tokens,
+            cost_usd=r.cost_usd, duration_ms=r.duration_ms, turns=r.turns, session_id=r.session_id,
+            kind="session",
+        )
+        record(rec, ledger)
+        records.append(rec)
+        if _unpriced(asdict(rec)):
+            print(f"      ⚠ no price for {r.model} in the {AGENT.name} adapter; "
+                  f"its {label} tokens are recorded at $0", file=sys.stderr, flush=True)
+    parts = ", ".join(f"{r.model} {r.turns} turns ${r.cost_usd:.2f}" for r in records)
+    print(f"      ✔ {label} metered: {parts}", file=sys.stderr, flush=True)
+    return records
 
 
 # ── Envelope helpers shared by the agents ─────────────────────────────────────
@@ -440,12 +491,19 @@ def read_ledger(path: str | Path) -> list[dict]:
 _TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
+def _unpriced(r: dict) -> bool:
+    """A session line with tokens but no cost: the adapter had no price for its model."""
+    return r.get("kind") == "session" and not r.get("cost_usd") and any(r.get(k) for k in _TOKEN_KEYS)
+
+
 def summarize(records: list[dict]) -> dict:
     total: dict[str, Any] = {"calls": 0, "failed": 0, "cost_usd": 0.0, "duration_ms": 0, "turns": 0}
     for k in _TOKEN_KEYS:
         total[k] = 0
     by_model: dict[str, dict] = {}
     by_tool: dict[str, dict] = {}
+    by_kind: dict[str, dict] = {}
+    unpriced: set[str] = set()
     for r in records:
         total["calls"] += 1
         if not r.get("ok", True):
@@ -455,27 +513,38 @@ def summarize(records: list[dict]) -> dict:
         total["turns"] += int(r.get("turns") or 0)   # absent in ledgers from before turns were recorded
         for k in _TOKEN_KEYS:
             total[k] += int(r.get(k) or 0)
-        for bucket, key in ((by_model, r.get("model") or "(unknown)"), (by_tool, r.get("tool") or "(unknown)")):
+        if _unpriced(r):
+            unpriced.add(r.get("model") or "(unknown)")
+        # kind: absent in ledgers from before sessions were metered, which held calls only.
+        for bucket, key in ((by_model, r.get("model") or "(unknown)"), (by_tool, r.get("tool") or "(unknown)"),
+                            (by_kind, r.get("kind") or "call")):
             b = bucket.setdefault(key, {"calls": 0, "cost_usd": 0.0, "input_tokens": 0, "cache_read_input_tokens": 0,
-                                        "output_tokens": 0, "duration_ms": 0, "turns": 0})
+                                        "cache_creation_input_tokens": 0, "output_tokens": 0, "duration_ms": 0,
+                                        "turns": 0})
             b["calls"] += 1
             b["turns"] += int(r.get("turns") or 0)
             b["cost_usd"] += float(r.get("cost_usd") or 0)
-            # input_tokens here is input + cache reads + cache writes; cache_read_input_tokens is its cached part.
+            # input_tokens here is input + cache reads + cache writes; cache_read_input_tokens and
+            # cache_creation_input_tokens are its cached and cache-written parts.
             b["input_tokens"] += int(r.get("input_tokens") or 0) + int(r.get("cache_read_input_tokens") or 0) + int(r.get("cache_creation_input_tokens") or 0)
             b["cache_read_input_tokens"] += int(r.get("cache_read_input_tokens") or 0)
+            b["cache_creation_input_tokens"] += int(r.get("cache_creation_input_tokens") or 0)
             b["output_tokens"] += int(r.get("output_tokens") or 0)
             b["duration_ms"] += int(r.get("duration_ms") or 0)
     total["cost_usd"] = round(total["cost_usd"], 4)
-    return {"total": total, "by_model": by_model, "by_tool": by_tool,
-            "note": "Headless agent calls only; interactive sessions (implement, fix, PR description) are not metered."}
+    return {"total": total, "by_model": by_model, "by_tool": by_tool, "by_kind": by_kind,
+            "unpriced_models": sorted(unpriced),
+            "note": "Headless agent calls (kind: call), and interactive sessions (kind: session: implement, "
+                    "fixes, PR description), one line per model. An interactive session is read from the agent "
+                    "CLI's transcript and priced from its adapter's price table, on agents that keep one; on the "
+                    "others it is not metered. Under --automata the sessions are headless calls."}
 
 
 def format_summary(summary: dict) -> str:
     t = summary["total"]
     if t["calls"] == 0:
-        return "  No headless model calls recorded."
-    lines = ["  Model calls (headless only — interactive sessions not metered)", ""]
+        return "  No model calls recorded."
+    lines = ["  Model calls and sessions", ""]
     # turns: "-" when the ledger predates turn counts or the agent CLI doesn't report them.
     def _turns(n: int) -> str:
         return f"{n:,}" if n else "-"
@@ -492,9 +561,18 @@ def format_summary(summary: dict) -> str:
     lines.append(f"  {'total':<34} {t['calls']:>5} {_turns(t.get('turns', 0)):>5} {total_in:>13,} "
                  f"{_cached(t['cache_read_input_tokens'], total_in):>6} "
                  f"{t['output_tokens']:>8,} {t['duration_ms'] / 1000:>6.0f}s {'$' + format(t['cost_usd'], '.2f'):>8}")
-    if t["cache_creation_input_tokens"]:
-        lines.append(f"  cache-creation tokens: {t['cache_creation_input_tokens']:,} "
+    session = summary.get("by_kind", {}).get("session")
+    if session:
+        lines.append(f"  of which sessions: {session['calls']} line(s), {session['turns']:,} turns, "
+                     f"{session['input_tokens']:,} in+cache tok, {'$' + format(session['cost_usd'], '.2f')}")
+    # Headless calls only: a session's cache writes are its own growing conversation.
+    call_writes = summary.get("by_kind", {}).get("call", {}).get("cache_creation_input_tokens", 0)
+    if call_writes:
+        lines.append(f"  cache-creation tokens: {call_writes:,} "
                      f"(each headless call re-sends the agent CLI's system context)")
+    if summary.get("unpriced_models"):
+        lines.append(f"  ⚠ session tokens on {', '.join(summary['unpriced_models'])} are counted at $0 "
+                     f"(no price in the agent's adapter)")
     if t["failed"]:
         lines.append(f"  ⚠ {t['failed']} call(s) failed or timed out")
     return "\n".join(lines)

@@ -47,7 +47,7 @@ migite/                       ← wherever you clone this repo
 ├── migite/                   ← the Python package; bash runs it as `python -m migite.<module>`
 │   ├── config.py             ← layered config resolver; role → tier → the agent's model
 │   ├── gateway.py            ← the gateway: role → model and effort, capability fallbacks, prompt pointer, process, AgentError, usage ledger
-│   ├── agent_cli.py          ← bash's door to the gateway: ask, session, info, check
+│   ├── agent_cli.py          ← bash's door to the gateway: ask, session, session-usage, info, check
 │   ├── tickets.py            ← ticket parse / fetch / sources; picks the source from tracker.provider
 │   ├── paths.py              ← vault path resolver: org detection, base branch, slugify, run-dir lookup
 │   ├── runstate.py           ← the run manifest (run.json): schema, atomic writes, shell export, find
@@ -205,7 +205,7 @@ the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `durat
 {"ts": "...", "tool": "migite-plan", "label": "explore:models", "model": "claude-haiku-4-5-20251001",
  "input_tokens": 10, "output_tokens": 39, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 23624,
  "cache_creation_5m_input_tokens": 23624, "cache_creation_1h_input_tokens": 0,
- "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1, "session_id": "3f9c..."}
+ "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1, "session_id": "3f9c...", "kind": "call"}
 ```
 
 If the CLI doesn't return the envelope (older version, plain-text error) the wrapper passes stdout
@@ -222,6 +222,38 @@ diagnose why a call missed the cache. They are 0 and `""` on CLIs that don't rep
 Claude Code versions that predate them, and in ledgers written before they were recorded. The
 calls on a [`plan.chain_sessions`](./configuration.md#plan-chain-sessions) chain share one
 `session_id`.
+
+`kind` is `call` for a headless call and `session` for a `run_phase` session (implement, staged
+stages, TDD specs, the browser check, gate fixes, the PR description). A line without it, from a
+ledger written before sessions were metered, is a call.
+
+**Interactive sessions.** The CLI reports nothing when an interactive session ends, so
+`run_phase` meters it afterwards. `agent_cli session --id-file` gives the session a fresh id when
+the agent's command line can take one (Claude Code's `--session-id <uuid>`) and writes it to
+`$LOG_DIR/<ts>-session-id-<label>.txt`. When the session ends, `meter_session` runs
+`agent_cli session-usage`. That reads the adapter's record of the session: on Claude Code, the
+transcript `~/.claude/projects/<dir>/<id>.jsonl` (or `$CLAUDE_CONFIG_DIR/projects/`) and its
+subagents' transcripts in `<id>/subagents/`. Without an id it uses the newest transcript for the
+working directory written since the session started. The usage is summed per model and appended
+as one line per model, labelled `session:<label>`, `kind: session`:
+
+- Only each line's model, message id, timestamp and `usage` block are read. Message content never
+  reaches the ledger or the log.
+- One API message is written as one line per content block, all repeating the same usage, so
+  lines are counted once per message id. Lines without usage, the CLI's `<synthetic>` messages,
+  turns from before the session started, and usage blocks in a shape it doesn't know are skipped.
+- `cost_usd` comes from `PRICES` in `migite/agents/claude.py`: input, output and cache-read rates
+  per model. Cache writes cost 1.25x input on the 5-minute TTL and 2x on the 1-hour one, and fast
+  mode costs 2x. On real headless calls the table reproduces the CLI's own `total_cost_usd`
+  exactly. A model with no row is recorded at $0 with a notice.
+- `turns` is the number of API messages on that model, and `duration_ms` runs from its first turn
+  to its last.
+- On an agent without the `session_usage` capability, `run_phase` prints one notice per run and
+  records nothing.
+- Metering never fails the run. A session that exits non-zero is metered before its status stops
+  the run.
+- Under `--automata` a session is a headless call on the `session` role. It is metered by `ask`,
+  labelled `session:<label>` with `kind: session`, and never read back a second time.
 
 **`plan.json`** (beside `plan.md`, written by `migite-plan`):
 
@@ -310,14 +342,19 @@ Each ledger line also records `turns`, the number of agent turns the call took (
 used tools, which is what `permissions.headless_tools` keeps in check. The usage table shows a
 `turns` column, and a `cached` column: the share of each model's input tokens that was read from
 the cache, `cache_read / (input + cache_creation + cache_read)`, or `-` when the CLI reports no
-tokens. `usage.json` keeps each model's and tool's `cache_read_input_tokens` beside its
-`input_tokens` (which there already includes cache reads and writes) so the share can be recomputed.
+tokens. `usage.json` keeps each model's and tool's `cache_read_input_tokens` and
+`cache_creation_input_tokens` beside its `input_tokens` (which there already includes cache reads
+and writes) so the share can be recomputed.
 
 **`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
 report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`). It summarises `usage.jsonl`
-beside it by model and by tool: this invocation's ledger lines appended to the run's earlier ones,
-exact repeats dropped, so a resumed or re-run build adds to the run's cost instead of replacing it. Interactive sessions (`run_phase`:
-implement, gate fixes, PR description) are not metered — the CLI only emits usage in `--print` mode.
-Under `--automata` they run as headless calls on the `session` role, so they are.
+beside it by model, by tool and by kind: this invocation's ledger lines appended to the run's earlier ones,
+exact repeats dropped, so a resumed or re-run build adds to the run's cost instead of replacing it.
+It includes the interactive sessions (`run_phase`: implement, gate fixes, PR description) on an
+agent that reports them, read back from the CLI's transcript as described above. `by_kind.call` is
+the headless calls alone, comparable with ledgers from before sessions were metered, and
+`by_kind.session` the sessions. `unpriced_models` lists models whose session tokens were recorded
+at $0. The table prints an `of which sessions` line, and its cache-creation line counts headless
+calls only.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

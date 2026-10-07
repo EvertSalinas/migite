@@ -74,8 +74,8 @@ json_field() {
 }
 
 # run_cost_so_far — "<N> calls, $X.XX" from the run's usage ledger, or exit 1
-# when there's no ledger yet. Headless calls only (interactive sessions aren't
-# metered — see print_usage_summary).
+# when there's no ledger yet. Headless calls, plus interactive sessions on an
+# agent that reports them (meter_session); a session counts once per model.
 run_cost_so_far() {
   [[ -n "${MIGITE_USAGE_LEDGER:-}" && -s "$MIGITE_USAGE_LEDGER" ]] || return 1
   local tmp calls cost
@@ -87,9 +87,10 @@ run_cost_so_far() {
   printf '%s calls, $%.2f' "$calls" "$cost"
 }
 
-# print_usage_summary - end-of-run table of every headless model call in this
-# invocation (by model: calls, tokens, time, cost). The calls are also appended to
-# usage.jsonl in the run's folder (the task's scratchpad dir before one is known),
+# print_usage_summary - end-of-run table of every model call in this invocation,
+# headless calls and metered sessions (by model: calls, tokens, time, cost). The
+# lines are also appended to usage.jsonl in the run's folder (the task's scratchpad
+# dir before one is known),
 # and usage.json there summarises that whole ledger, so a resumed or re-run build
 # adds to 00-build/usage.json instead of replacing it. Both are mirrored to the
 # vault. Runs from migite's EXIT trap so an aborted run still reports what it
@@ -134,6 +135,7 @@ write_prompt() {
 # model never overrides the config. A prompt too long
 # for one command-line argument (ui.prompt_inline_max) is passed as a pointer to
 # its prompt file; the gateway decides that, the same way for every agent.
+# When the session ends, meter_session adds what it spent to the usage ledger.
 # Under --automata the session runs headless instead (run_phase_headless).
 run_phase() {
   local label="$1"
@@ -146,10 +148,13 @@ run_phase() {
     run_phase_headless "$label" "$outfile" "$prompt_file" "$permission_mode"
     return 0
   fi
-  local agent_name exit_hint session_mode
+  local agent_name exit_hint session_mode safe_label id_file started rc=0
   agent_name="$(agent_field display_name || echo "the agent")"
   exit_hint="$(agent_field exit_hint || echo "exit the session")"
   session_mode="$(agent_field session_mode || echo interactive)"
+  # Strip everything except alphanumeric and dash — parens/spaces break tmux sh -c parsing
+  safe_label=$(printf '%s' "$label" | tr -cs 'a-zA-Z0-9' '-')
+  id_file="$LOG_DIR/$TIMESTAMP-session-id-${safe_label}.txt"
 
   echo ""
   echo -e "${CYAN}  Starting interactive ${agent_name} session: ${BOLD}$label${RESET}"
@@ -164,16 +169,15 @@ run_phase() {
   echo ""
 
   # One shell-quoted command line from the adapter: that CLI's flags for the
-  # permission word, the variables it must not inherit, and the first prompt.
+  # permission word, the variables it must not inherit, and the first prompt. The
+  # id it gives the session (when the CLI can take one) lands in $id_file.
   local session_cmd
   session_cmd="$("$MIGITE_PYTHON" -m migite.agent_cli --repo-root "${REPO_ROOT:-$PWD}" session \
-    --permission "$permission_mode" --prompt-file "$prompt_file")" \
+    --permission "$permission_mode" --prompt-file "$prompt_file" --id-file "$id_file")" \
     || error "Could not build the interactive session command for the configured agent"
+  started=$(date +%s)
 
   if use_tmux; then
-    # Strip everything except alphanumeric and dash — parens/spaces break tmux sh -c parsing
-    local safe_label
-    safe_label=$(printf '%s' "$label" | tr -cs 'a-zA-Z0-9' '-')
     local channel="migite-${TIMESTAMP}-${safe_label}"
     local wrapper="$LOG_DIR/$TIMESTAMP-wrapper-${safe_label}.sh"
     local orig_pane
@@ -199,22 +203,49 @@ run_phase() {
     while kill -0 "$_wait_pid" 2>/dev/null; do
       if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -q "^${session_pane}$"; then
         kill "$_wait_pid" 2>/dev/null || true
+        meter_session "$label" "$id_file" "$started"
         error "Interactive session pane for '$label' was closed — workflow aborted"
       fi
       sleep 1
     done
     wait "$_wait_pid" 2>/dev/null || true
     tmux select-pane -t "$orig_pane" 2>/dev/null || true
+    meter_session "$label" "$id_file" "$started"
     notify "$label" "Session done — continuing workflow"
   else
-    eval "$session_cmd"
+    # A session that exits non-zero still spent money: meter it, then hand back its
+    # status, which stops the run under set -e as before.
+    eval "$session_cmd" || rc=$?
+    meter_session "$label" "$id_file" "$started"
+    return "$rc"
   fi
+}
+
+# meter_session <label> <id_file> <started> - append what the interactive session
+# that just ended spent to the usage ledger, labelled session:<label>, one line
+# per model, read back from the agent CLI's own record of it (the id run_phase
+# wrote to <id_file>, the epoch second it started). An agent that can't report
+# sessions gets one notice per run. Never fails the run.
+meter_session() {
+  local label="$1" id_file="$2" started="$3" session_id=""
+  [[ -n "${MIGITE_USAGE_LEDGER:-}" ]] || return 0
+  if ! agent_supports session_usage; then
+    if [[ -z "${_SESSION_METER_WARNED:-}" ]]; then
+      warn "$(agent_field display_name || echo "This agent") can't report an interactive session's usage; sessions are not in the usage ledger"
+      _SESSION_METER_WARNED=1
+    fi
+    return 0
+  fi
+  [[ -s "$id_file" ]] && session_id="$(cat "$id_file")"
+  "$MIGITE_PYTHON" -m migite.agent_cli --repo-root "${REPO_ROOT:-$PWD}" session-usage \
+    --label "session:$label" --since "$started" --session-id "$session_id" --cwd "$PWD" || true
 }
 
 # run_phase_headless <label> <output_file> <prompt_file> <permission>
 # run_phase under --automata, on every agent: one headless call on the `session`
 # role (same model as the interactive session, the CLI's full toolset, a
-# models.roles_timeouts.session limit), so the session lands in the usage ledger.
+# models.roles_timeouts.session limit), so the session lands in the usage ledger
+# as session:<label>, the same label meter_session gives an interactive one.
 # Its final reply is kept under $LOG_DIR and printed; when the session didn't
 # write <output_file> itself, the reply becomes it. A failed session stops the
 # run, as an inline interactive session that exits non-zero does: run.json leaves
@@ -232,7 +263,7 @@ run_phase_headless() {
   echo -e "  ${CYAN}Reply: ${reply}${RESET}"
   echo ""
 
-  agent_ask "$label" session --permission "$permission_mode" < "$prompt_file" > "$reply" \
+  agent_ask "session:$label" session --permission "$permission_mode" < "$prompt_file" > "$reply" \
     || error "The '$label' session failed (see above). Run the same command with --automata to run this phase again"
   cat "$reply"
   echo ""

@@ -51,6 +51,7 @@ class ContractTest(unittest.TestCase):
             self.assertIsInstance(i.permission_flags, bool)
             self.assertIsInstance(i.resume, bool)
             self.assertIsInstance(i.plan_mode, bool)
+            self.assertIsInstance(i.session_usage, bool)
             self.assertGreater(i.max_arg_bytes, 0)
             json.dumps(agent.describe())                       # bash reads it as JSON
 
@@ -109,6 +110,21 @@ class ContractTest(unittest.TestCase):
             launch = agent.session_launch(agents.SessionRequest(prompt=PROMPT))
             self.assertEqual(launch.argv[0], agent.binary)
             self.assertEqual(sum(PROMPT in a for a in launch.argv), 1)
+
+    def test_a_session_id_reaches_the_command_line_exactly_when_the_launch_reports_it(self):
+        # run_phase reads a session back by the id its Launch reports; an id the CLI never
+        # saw would point at a transcript that doesn't exist.
+        for _, agent in self.each_agent():
+            launch = agent.session_launch(agents.SessionRequest(prompt=PROMPT, session_id="contract-sid"))
+            self.assertIn(launch.session_id, ("", "contract-sid"))
+            self.assertEqual("contract-sid" in launch.argv, launch.session_id == "contract-sid")
+            self.assertEqual(agent.session_launch(agents.SessionRequest(prompt=PROMPT)).session_id, "")
+
+    def test_an_agent_without_session_usage_reports_no_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for _, agent in self.each_agent():
+                if not agent.info.session_usage:
+                    self.assertEqual(agent.session_usage("contract-sid", tmp, 0.0), [])
 
     def test_plain_text_output_falls_back(self):
         for _, agent in self.each_agent():

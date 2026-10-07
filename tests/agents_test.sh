@@ -151,16 +151,53 @@ use_agent opencode; check "instruction files: opencode → AGENTS.md" test "$(ag
 use_agent kimi;     check "session mode: kimi → headless" test "$(agent_field session_mode)" = "headless"
                     check "instruction files: kimi → AGENTS.md" test "$(agent_field instruction_files)" = "AGENTS.md"
 
+# run_phase opens a named interactive session (inline here: TMUX unset), and when it ends
+# what it spent is read back from the CLI's transcript into the ledger as session:<label>.
+# fake-claude writes one Opus turn on two lines: 10 in, 500 out, 1,000 cache read, 2,000
+# written for 1h = $0.02624, counted once.
+_ag_claude_config="${CLAUDE_CONFIG_DIR-unset}"
+export CLAUDE_CONFIG_DIR="$ag_dir/claude-config"
+use_agent claude
+ip_ledger="$ag_dir/interactive-usage.jsonl" ip_argv="$ag_dir/interactive-argv.txt"
+ip_id_file="$LOG_DIR/$TIMESTAMP-session-id-Implementing.txt"
+shown=$(cd "$REPO_ROOT" && TMUX='' MIGITE_USAGE_LEDGER="$ip_ledger" FAKE_CLAUDE_ARGV="$ip_argv" \
+  run_phase "Implementing" "$ag_dir/ip-notes.md" "build the thing" 2>&1 < /dev/null)
+check "run_phase: the session is named, and the id on its command line is the one handed back" \
+  bash -c '[[ -s "$1" ]] && grep -q -- "--session-id $(cat "$1") -- " "$2"' _ "$ip_id_file" "$ip_argv"
+check "run_phase: the ended session is in the usage ledger as session:<label>, kind session" \
+  bash -c 'grep "\"label\": \"session:Implementing\"" "$1" | grep -q "\"kind\": \"session\""' _ "$ip_ledger"
+check "run_phase: the session's tokens are counted once and priced (\$0.02624)" \
+  bash -c 'grep -q "\"output_tokens\": 500,.*\"cost_usd\": 0.02624,.*\"turns\": 1," "$1"' _ "$ip_ledger"
+check "run_phase: says the session was metered" bash -c '[[ "$1" == *"session:Implementing metered"* ]]' _ "$shown"
+rc=0; ( cd "$REPO_ROOT" && TMUX='' MIGITE_USAGE_LEDGER="$ip_ledger" FAKE_CLAUDE_SESSION_EXIT=3 \
+  run_phase "Implementing" "$ag_dir/ip-notes.md" "build the thing" >/dev/null 2>&1 < /dev/null ) || rc=$?
+check "run_phase: a session that exits non-zero is still metered, and its status comes back" \
+  bash -c '[[ "$1" == 3 && "$(grep -c "session:Implementing" "$2")" == 2 ]]' _ "$rc" "$ip_ledger"
+use_agent cursor
+shown=$( { TMUX='' MIGITE_USAGE_LEDGER="$ag_dir/cursor-usage.jsonl" run_phase "Implementing" "$ag_dir/ip-notes.md" "x"
+           TMUX='' MIGITE_USAGE_LEDGER="$ag_dir/cursor-usage.jsonl" run_phase "PR description" "$ag_dir/ip-pr.md" "x"; } 2>&1 < /dev/null)
+check "run_phase: an agent that can't report sessions says so once per run" \
+  test "$(grep -c "can't report an interactive session's usage" <<< "$shown")" = 1
+check "run_phase: ...and records no session line" not test -e "$ag_dir/cursor-usage.jsonl"
+check "commit gate banner: the running cost says it leaves sessions out on such an agent" \
+  grep -q "so far (headless calls only)" <<< "$(MIGITE_USAGE_LEDGER="$ip_ledger" show_commit_context 2>&1)"
+use_agent claude
+check "commit gate banner: ...and that it includes them on one that reports them" \
+  grep -q "so far (headless calls and sessions)" <<< "$(MIGITE_USAGE_LEDGER="$ip_ledger" show_commit_context 2>&1)"
+if [[ "$_ag_claude_config" == unset ]]; then unset CLAUDE_CONFIG_DIR; else export CLAUDE_CONFIG_DIR="$_ag_claude_config"; fi
+unset ip_ledger ip_argv ip_id_file _ag_claude_config
+
 # run_phase under --automata: every backend's session is one headless ask on the
 # session role, with the CLI's full toolset, in the usage ledger
 use_agent claude
-ap_argv="$ag_dir/claude-argv.txt" ap_out="$ag_dir/impl-notes.md"
-shown=$(MIGITE_AUTOMATA=true FAKE_CLAUDE_MODE=envelope FAKE_CLAUDE_ARGV="$ap_argv" run_phase "Implementing" "$ap_out" "build the thing" 2>&1)
+ap_argv="$ag_dir/claude-argv.txt" ap_out="$ag_dir/impl-notes.md" ap_ledger="$ag_dir/automata-usage.jsonl"
+shown=$(MIGITE_USAGE_LEDGER="$ap_ledger" MIGITE_AUTOMATA=true FAKE_CLAUDE_MODE=envelope FAKE_CLAUDE_ARGV="$ap_argv" run_phase "Implementing" "$ap_out" "build the thing" 2>&1)
 check "run_phase --automata: claude runs headless on the session role (--print, bypassPermissions, the strong model)" \
   grep -q -- "--print --output-format json --model claude-opus-5-5 --permission-mode bypassPermissions" "$ap_argv"
 check "run_phase --automata: the session keeps the CLI's full toolset (not an isolated call)" \
   not grep -qE -- "--safe-mode|--tools" "$ap_argv"
-check "run_phase --automata: the session is in the usage ledger" grep -q '"label": "Implementing"' "$MIGITE_USAGE_LEDGER"
+check "run_phase --automata: the session is in the usage ledger once, as session:<label>, kind session" \
+  bash -c '[[ "$(grep -c "\"label\": \"session:Implementing\"" "$1")" == 1 ]] && grep -q "\"kind\": \"session\"" "$1"' _ "$ap_ledger"
 check "run_phase --automata: a session that wrote no output file leaves its reply there" \
   bash -c '[[ "$(cat "$1")" == echo:build\ the\ thing* && "$2" == *"its final reply is saved there"* ]]' _ "$ap_out" "$shown"
 check "run_phase --automata: says it runs headless, with no exit hint to type" \
@@ -175,7 +212,7 @@ use_agent kimi; : > "$FAKE_AGENT_ARGV"
 MIGITE_AUTOMATA=true FAKE_AGENT_MODE=ok run_phase "Implementing" "$ag_dir/kimi-notes.md" "build the thing" >/dev/null 2>&1
 check "run_phase --automata: kimi goes through its headless ask too (-p ... --output-format stream-json)" \
   grep -q -- "-p build the thing --output-format stream-json" "$FAKE_AGENT_ARGV"
-unset ap_argv ap_out
+unset ap_argv ap_out ap_ledger
 
 # doctor names the backend and runs the adapter's health check
 export MIGITE_AGENT=opencode

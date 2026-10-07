@@ -135,7 +135,7 @@ After the plan gate, migite asks whether to write spec files before implementati
 <a id="phase-2-implement"></a>
 ### Phase 2 — Implement (interactive)
 
-Claude implements the approved plan in an interactive session (under [`--automata`](#automata-answers), one headless call on the `session` role instead). Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written.
+Claude implements the approved plan in an interactive session (under [`--automata`](#automata-answers), one headless call on the `session` role instead). Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written. When the session ends, what it spent goes in the usage ledger as `session:Implementing`, read back from Claude Code's transcript (every `run_phase` session is metered the same way; other agents print one notice and record nothing).
 
 **Staged implementation (`--staged`):** If you pass `--staged`, migite parses the `### ` sub-sections from the plan's Scope section and treats each as an implementation layer. Claude runs one interactive session per layer. Between layers, migite shows a `git diff --stat` and opens a checkpoint gate:
 

@@ -68,8 +68,8 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
 | `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary). A later `--amend` reads it in place of `implementation.md` once `plan.md` reflects this run |
 | `testing-plan.md` | The task's testing plan as this run left it. The top-level `testing-plan.md` is updated by every amend and fix round, so these copies are its history |
-| `usage.jsonl` | Every headless model call the run made, one JSON line each, across all of its invocations: a resumed or re-run build appends to it rather than starting over |
-| `usage.json` | Summary of `usage.jsonl` (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
+| `usage.jsonl` | Every headless model call the run made, one JSON line each, and one line per model for each interactive session (`session:<label>`, `kind: session`), across all of its invocations: a resumed or re-run build appends to it rather than starting over |
+| `usage.json` | Summary of `usage.jsonl` (by model, by tool, and by kind: calls, tokens, time, cost). `by_kind.call` is the headless calls alone, `by_kind.session` the sessions. Sessions are metered on Claude Code only |
 | `gate-overrides.md` | One entry per approval over blockers, listing what was overridden: a capital `Y` (the only way past them with `gates.commit.policy: strict`), or an `--automata` run under `lenient` |
 | `run.json` | The run manifest: how far the run got, written at every phase boundary, so running the same command again resumes it. See [below](#run-json) |
 
@@ -154,7 +154,8 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | `<ts>-<ticket>-improvements.txt` | Raw self-improvement notes |
 | `<ts>-prompt-<label>.txt` | Every prompt sent to interactive phases |
 | `<ts>-wrapper-<label>.sh` | tmux wrapper scripts |
-| `<ts>-usage.jsonl` | The run's usage ledger - one JSON line per headless agent call (tool, label, model, tokens, cost, duration, ok). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
+| `<ts>-usage.jsonl` | The run's usage ledger - one JSON line per headless agent call, and one per model for each interactive session (tool, label, model, tokens, cost, duration, ok, kind). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
+| `<ts>-session-id-<label>.txt` | The id `run_phase` gave an interactive session, so its usage can be read back afterwards; empty when the agent CLI can't take one |
 
 ---
 
@@ -180,7 +181,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | FE lint | erb_lint / eslint result, only when the diff touches views or JavaScript and the repo configures a linter |
 | Browser | The `Result:` line of `browser-check.md`, when the browser check ran |
 | Findings / Reason | From `review.json`: critical / warning / note counts and the one-line reason the verdict was decided. Only shown when the envelope exists (i.e. not after a hand-edit of `review.md`) |
-| Cost | Running total of headless model calls from the usage ledger — interactive sessions aren't metered |
+| Cost | Running total from the usage ledger: headless calls, and the interactive sessions so far on an agent that reports them (Claude Code) |
 
 | Key | Action |
 |-----|--------|

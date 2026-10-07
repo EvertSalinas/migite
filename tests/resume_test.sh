@@ -97,7 +97,7 @@ check "automata run 1: run.json records mode automata, plan done, TDD skipped an
   test "$(json_field "$au_manifest" mode)|$(json_field "$au_manifest" phases.plan.status)|$(json_field "$au_manifest" phases.tdd.status)|$(json_field "$au_manifest" phases.tdd.decided)" = "automata|done|skipped|false"
 check "automata run 1: the implement session ran headless on the session role (--print, bypassPermissions, the strong model)" \
   bash -c 'grep -q -- "--print" "$1" && grep -q -- "--permission-mode bypassPermissions" "$1" && grep -q -- "--model claude-opus-5-5" "$1" && ! grep -q -- "--safe-mode" "$1"' _ "$rs_dir/claude-argv.txt"
-check "automata run 1: the session is in the run's usage ledger" grep -q '"label": "Implementing"' "$au_scratch/00-build/usage.jsonl"
+check "automata run 1: the session is in the run's usage ledger" grep -q '"label": "session:Implementing"' "$au_scratch/00-build/usage.jsonl"
 check "automata run 1: a failed session stops the run with exit 1, implement left running, the run failed" \
   test "$rc|$(json_field "$au_manifest" phases.implement.status)|$(json_field "$au_manifest" status)" = "1|running|failed"
 

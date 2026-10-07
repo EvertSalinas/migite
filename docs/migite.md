@@ -337,7 +337,8 @@ run the same command with `--automata` again: lint and tests run again, and the 
 the PR description each become one headless call on the `session` role, on every backend. The call
 uses the model an interactive session gets, `permissions.interactive` (`auto` unless you changed
 it), and the CLI's full toolset. Because it is a headless call, the session is metered in the
-usage ledger like every other call. The trade-offs:
+usage ledger like every other call, as `session:<label>`, the label an interactive session gets
+too. The trade-offs:
 
 - Nothing streams while it works. The log shows the session starting, then its final reply.
 - It is capped by `models.roles_timeouts.session` (3600s by default), where an interactive session

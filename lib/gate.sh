@@ -202,10 +202,12 @@ show_commit_context() {
     esac
   fi
 
-  # Running total from the usage ledger (headless calls only), with the soft budget cap
-  local cost_line
+  # Running total from the usage ledger (headless calls, and the sessions so far on an agent
+  # that reports them), with the soft budget cap
+  local cost_line covers="headless calls only"
   if cost_line=$(run_cost_so_far); then
-    echo -e "  Cost:    ${cost_line} so far (headless calls only)"
+    agent_supports session_usage && covers="headless calls and sessions"
+    echo -e "  Cost:    ${cost_line} so far (${covers})"
     local cap="${MIGITE_CFG_BUDGET_MAX_USD_PER_RUN:-}"
     if [[ -n "$cap" ]]; then
       local spent="${cost_line##*\$}"

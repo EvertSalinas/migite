@@ -407,9 +407,10 @@ if [[ -n "$MANIFEST_PATH" ]]; then
     exit 0
   fi
 fi
-# Per-run usage ledger: one JSONL line per headless agent call
-# (tokens, cost, duration, model, label). Written by the gateway (migite/gateway.py)
-# for both the Python agents and bash's agent_ask; summarised at exit by
+# Per-run usage ledger: one JSONL line per headless agent call, and one per model
+# for each interactive session (tokens, cost, duration, model, label, kind). Written
+# by the gateway (migite/gateway.py) for the Python agents, bash's agent_ask, and
+# run_phase's meter_session; summarised at exit by
 # print_usage_summary into <scratchpad>/usage.json. Exported so the agents
 # (and the tmux wrapper scripts, which re-export it) inherit it.
 MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"

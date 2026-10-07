@@ -312,7 +312,9 @@ Changing a tier moves every role in it; pinning a role moves only that call. An 
 name under `roles:` or `roles_effort:` is an error.
 
 **Interactive sessions.** `run_phase` (implement, spec writing, gate fixes, PR description) opens
-the agent's own interface, so it is neither metered nor a headless call — but it runs on the
+the agent's own interface, so it is not a headless call. On Claude Code it is still metered: when
+the session ends, its transcript is read back into the usage ledger as `session:<label>` (see
+[internals.md](./internals.md#machine-readable-envelopes-and-the-usage-ledger)). It runs on the
 `session` role's model, passed to the CLI as its model for that run. Without it, the CLI decides
 on its own: opencode resumes whatever model its last session in this directory used, whatever
 `models:` says. Pin `models.roles.session` to move interactive work without touching a tier.
@@ -788,7 +790,9 @@ budget:
 ```
 
 The run cap is **soft**: once the run's usage ledger passes it, every gate banner shows a red
-over-budget line. Nothing is aborted mid-graph. Interactive sessions aren't metered.
+over-budget line. Nothing is aborted mid-graph. The ledger includes the interactive sessions on
+Claude Code (implement, fixes, PR description), so they count toward the cap once they end; on
+other agents they aren't metered.
 
 `review_call_max_usd` is a **hard** cap on each read-only reviewer call (`--max-budget-usd`), a
 guard against a reviewer that keeps opening files. A reviewer that hits it is reported as a

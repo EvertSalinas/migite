@@ -23,7 +23,31 @@
 # $FAKE_CLAUDE_ROUTES ("<marker>=<mode>;<marker>=<mode>;...") picks the mode by the first marker
 # found in the prompt, else $FAKE_CLAUDE_MODE: a whole planner run, whose explorers call in
 # parallel, gets the right reply for each call without depending on the order they arrive in.
+# Without --print it stands in for an interactive session: it reads no stdin, and given
+# --session-id it writes a one-turn transcript where Claude Code keeps one,
+# ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<pwd -P, non-alphanumerics as "-">/<id>.jsonl, with
+# the turn on two lines as the real CLI writes it. It exits $FAKE_CLAUDE_SESSION_EXIT (0).
 set -u
+interactive=true
+for arg in "$@"; do
+  [[ "$arg" == "--" ]] && break
+  [[ "$arg" == "--print" ]] && interactive=false
+done
+if [[ "$interactive" == true ]]; then
+  [[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
+  sid=""
+  for ((i = 1; i <= $#; i++)); do
+    [[ "${!i}" == "--session-id" ]] && { j=$((i + 1)); sid="${!j}"; }
+  done
+  if [[ -n "$sid" ]]; then
+    cwd="$(pwd -P)"
+    dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${cwd//[^A-Za-z0-9]/-}"
+    mkdir -p "$dir"
+    turn='{"type":"assistant","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"'","sessionId":"'"$sid"'","requestId":"req_fake","message":{"id":"msg_fake","model":"claude-opus-5-5","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":500,"cache_read_input_tokens":1000,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000}}}}'
+    printf '%s\n%s\n' "$turn" "$turn" > "$dir/$sid.jsonl"
+  fi
+  exit "${FAKE_CLAUDE_SESSION_EXIT:-0}"
+fi
 prompt="$(cat)"
 [[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
 [[ -n "${FAKE_CLAUDE_ARGV_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_CLAUDE_ARGV_LOG"

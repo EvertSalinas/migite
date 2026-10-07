@@ -11,10 +11,12 @@ or OpenCode via `agent.backend`) and uses that CLI's own login.
 
 **What does a run cost?**
 It is printed at the end of every run and written to `usage.json`; the commit-gate banner shows
-the running total. Only headless calls are metered (planner, reviewers, knowledge, amendments);
-the interactive implement and PR-description sessions are not, because the CLI reports usage
-only in `--print` mode. Expect roughly $3 to $5 in headless calls for a feature on the default
-tiering, less with `think` pinned to Sonnet. Set `budget.max_usd_per_run` for a soft cap.
+the running total. Headless calls (planner, reviewers, knowledge, amendments) are metered as they
+run. On Claude Code, so are the interactive implement, fix and PR-description sessions: the CLI
+reports nothing when one ends, so migite reads its transcript and prices the tokens. `usage.json`
+keeps the two apart under `by_kind`. Expect roughly $3 to $5 in headless calls for a feature on the
+default tiering, less with `think` pinned to Sonnet; the sessions come on top. Set
+`budget.max_usd_per_run` for a soft cap.
 
 **Why does every headless call show about 23k cache-creation tokens?**
 That is Claude Code's own system context being sent with each headless call. It is a

@@ -34,7 +34,7 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │           │   ├── summary.md                    ← what the run did and why, written at its end
 │           │   ├── testing-plan.md               ← the testing plan as the run left it
 │           │   ├── run.json                      ← the run manifest: how far the run got, for resuming
-│           │   └── usage.json  +  usage.jsonl    ← every headless model call in the run, across resumes
+│           │   └── usage.json  +  usage.jsonl    ← every model call and metered session in the run, across resumes
 │           ├── 01-amend-<slug>/                  ← one per --amend; <slug> is the feedback's first words
 │           │   ├── amendment.md                  ← the scoped delta
 │           │   ├── implementation.md

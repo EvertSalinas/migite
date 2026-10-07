@@ -122,7 +122,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
   Reason:  Implementation matches the plan; the one warning is a missing request spec for the 422 path.
   Specs:   all passed
   Rubocop: clean
-  Cost:    16 calls, $2.87 so far (headless calls only)
+  Cost:    16 calls, $2.87 so far (headless calls and sessions)
 ────────────────────────────────────────────
 Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort): y
 
@@ -292,7 +292,6 @@ feedback belongs in Issues, where it can be discussed and tracked.
 
 Roughly in the order they are likely to land:
 
-- **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode. Under `--automata` those sessions run headless, so they are metered.
 - **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
 - **One-line installer** to replace the clone-and-symlink block above.

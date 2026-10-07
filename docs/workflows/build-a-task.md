@@ -128,7 +128,7 @@ See [Phase 3](../phases.md#phase-3-review).
   Reason:  The 422 path for an invoice without line items is unhandled and untested.
   Specs:   all passed
   Rubocop: clean
-  Cost:    17 calls, $2.94 so far (headless calls only)
+  Cost:    17 calls, $2.94 so far (headless calls and sessions)
 ────────────────────────────────────────────
 Proceed? [y/f/e/n/q] (y=commit, f=Claude Code fixes, e=edit directly, n=fix it yourself, q=abort):
 ```
