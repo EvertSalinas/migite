@@ -216,7 +216,9 @@ for every role that doesn't need it (see [configuration.md](./configuration.md#p
 `cache_creation_input_tokens` by how long the written cache entry lives (Claude Code's
 `usage.cache_creation`), and `session_id` is the CLI session the call ran in. They are there to
 diagnose why a call missed the cache. They are 0 and `""` on CLIs that don't report them, on
-Claude Code versions that predate them, and in ledgers written before they were recorded.
+Claude Code versions that predate them, and in ledgers written before they were recorded. The
+calls on a [`plan.chain_sessions`](./configuration.md#plan-chain-sessions) chain share one
+`session_id`.
 
 **`plan.json`** (beside `plan.md`, written by `migite-plan`):
 
@@ -226,6 +228,7 @@ Claude Code versions that predate them, and in ledgers written before they were 
 | `open_questions` | Number of `### N.` entries under `## Open questions` |
 | `plan_headings` | The plan's `## ` headings, in order |
 | `testing_plan_when` | `plan` or `review`: when the testing plan is written. Under `review`, `outputs.testing_plan` is `null` and Phase 3 writes the file |
+| `session_chain` | `plan.chain_sessions`: `enabled` (it was on and the backend can continue a session), `resumed[]` (the calls that continued the synthesis session: `refine_plan:edits`, `generate_testing_plan`), `note` (why the chain didn't apply or ended before the testing plan, else `""`) |
 | `synth_retries` | 0 or 1 — whether synthesis needed the stub retry |
 | `refine_status` | `no_concerns` / `applied_as_edits` / `no_edits_needed` (the critic's findings applied as exact edits, or none needed) / `applied` / `applied_after_retry` / `kept_draft` (the full-rewrite fallback) |
 | `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports. Listed at the end of `architecture-critic.md` |
@@ -265,6 +268,7 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
   "plan_headings": ["## Summary", "## Scope", "## Approach", "## Test plan", "## Performance considerations",
                     "## cURL examples", "## Risks", "## Out of scope", "## Open questions"],
   "testing_plan_when": "plan",
+  "session_chain": { "enabled": false, "resumed": [], "note": "" },
   "synth_retries": 0,
   "refine_status": "applied",
   "explorers": { "count": 7, "failed": [] },

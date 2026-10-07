@@ -149,6 +149,9 @@ DEFAULTS: dict[str, Any] = {
         # plan = migite-plan writes testing-plan.md from the finished plan (Phase 1).
         # review = Phase 3 writes it from the plan and the diff, before the reviewers read it.
         "testing_plan_when": "plan",         # plan | review
+        # true = synthesis, refine and the testing plan continue one agent session, so each reads
+        # what the earlier calls sent from the prompt cache (backends with `resume` only).
+        "chain_sessions": False,
     },
     "review": {
         "dimensions": {
@@ -303,7 +306,7 @@ INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds",
             "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max",
             "ui.prompt_diff_max_bytes", "knowledge.inject_max_bytes")
 BOOL_KEYS = ("gates.commit.require_clean_lint", "gates.commit.require_green_specs",
-             "heal.full_suite_fallback", "budget.print_summary")
+             "heal.full_suite_fallback", "budget.print_summary", "plan.chain_sessions")
 FLOAT_KEYS = ("budget.max_usd_per_run", "budget.review_call_max_usd")
 
 STARTER_TEMPLATE = """\
@@ -395,6 +398,7 @@ knowledge:
 
 # plan:
 #   testing_plan_when: plan  # plan | review: review = Phase 3 writes testing-plan.md from the plan and the diff, not Phase 1 from the plan
+#   chain_sessions: false    # true: synthesis, refine and the testing plan share one session and read each other from cache (Claude Code)
 # review:
 #   dimensions:
 #     testing_plan: on       # on | off: the testing-plan reviewer in Phase 3 (testing-plan.md is still written)

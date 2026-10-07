@@ -49,6 +49,7 @@ class ContractTest(unittest.TestCase):
             self.assertIn(i.prompt_via, ("stdin", "arg"))
             self.assertIn(i.session_mode, ("interactive", "headless"))
             self.assertIsInstance(i.permission_flags, bool)
+            self.assertIsInstance(i.resume, bool)
             self.assertGreater(i.max_arg_bytes, 0)
             json.dumps(agent.describe())                       # bash reads it as JSON
 
@@ -80,9 +81,11 @@ class ContractTest(unittest.TestCase):
         schema = {"type": "object", "title": "contract-schema"}
         for _, agent in self.each_agent():
             argv = " ".join(agent.ask_launch(agents.AskRequest(prompt=PROMPT, schema=schema, effort="high",
-                                                                model="model-xyz")).argv)
+                                                                model="model-xyz", resume="contract-session")).argv)
             self.assertEqual("contract-schema" in argv, agent.info.structured_output)
             self.assertEqual("high" in argv.split(), agent.info.effort)
+            # An agent without `resume` ignores the field; the gateway never sends it one anyway.
+            self.assertEqual("contract-session" in argv, agent.info.resume)
 
     def test_scopes_map_to_tools(self):
         for _, agent in self.each_agent():

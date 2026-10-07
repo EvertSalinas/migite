@@ -28,9 +28,11 @@ LABEL = "generate_testing_plan"        # the ledger label, the same at both mome
 TOOL = "migite-plan"
 
 
-def build_prompt(plan: str, *, frontend: bool = False, diff: str = "") -> str:
+def build_prompt(plan: str, *, frontend: bool = False, diff: str = "", plan_above: bool = False) -> str:
     """The generation prompt. With `diff` (the change as built, already capped by the caller)
-    the document is written from what exists, and the diff wins where it and the plan differ."""
+    the document is written from what exists, and the diff wins where it and the plan differ.
+    With `plan_above` the call continues the planning session (plan.chain_sessions), which
+    already holds the plan and any edits made to it, so the prompt points at it instead."""
     frontend_steps = (
         "\n<This plan touches the frontend: for every UI step give the page path on the local dev "
         "server, the exact action (click, fill, submit), and what should change on the page, "
@@ -45,13 +47,15 @@ def build_prompt(plan: str, *, frontend: bool = False, diff: str = "") -> str:
         "routes, parameter names, response shapes and log lines, and never invent ones it does not show.\n"
         if diff else ""
     )
+    where, plan_text = (("in this conversation", "The plan you wrote earlier in this conversation, with any "
+                         "edits you listed after it applied, is the final plan.") if plan_above else ("below", plan))
     return f"""You are writing a standalone QA/dev verification document for the implementation
-plan below — the concrete steps a human runs by hand, after the code is built, to confirm it
+plan {where} — the concrete steps a human runs by hand, after the code is built, to confirm it
 actually works. This document lives on its own (not inside the plan) precisely so it can be
 regenerated in full whenever the implementation changes, without touching the plan's history.
 
 ## Implementation plan
-{plan}
+{plan_text}
 {built}
 ## Instructions
 Output ONLY the document below, no preamble, no meta-commentary. Use exactly this structure:

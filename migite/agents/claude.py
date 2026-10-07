@@ -39,6 +39,7 @@ class ClaudeAgent(Agent):
         exit_hint="/exit",
         instruction_files="CLAUDE.md",
         isolation=True,
+        resume=True,
     )
 
     def _permission(self, word: str) -> list[str]:
@@ -80,14 +81,20 @@ class ClaudeAgent(Agent):
         tools = self.tools_for(req.scopes)
         if tools:
             argv += ["--allowedTools", " ".join(tools)]
+        if req.resume:
+            argv += ["--resume", req.resume]
         if req.isolated:
             # Only the named tools (none for a text-only call), no MCP servers, and
             # --safe-mode for no plugins, hooks, skills or CLAUDE.md, which are then
-            # passed back explicitly. Nothing saved as a resumable session. Cuts a
-            # call's fixed context from ~24k tokens to the instructions alone, and
-            # stops a "no tools" prompt from browsing the repo turn after turn.
-            argv += ["--tools", ",".join(req.tools), "--strict-mcp-config", "--safe-mode",
-                     "--no-session-persistence", "--exclude-dynamic-system-prompt-sections"]
+            # passed back explicitly. Nothing saved as a resumable session, unless the
+            # call starts or continues a chain. Cuts a call's fixed context from ~24k
+            # tokens to the instructions alone, and stops a "no tools" prompt from
+            # browsing the repo turn after turn. A resumed session keeps the system
+            # prompt it recorded on its first call; the text passed here is the same.
+            argv += ["--tools", ",".join(req.tools), "--strict-mcp-config", "--safe-mode"]
+            if not (req.resume or req.keep_session):
+                argv.append("--no-session-persistence")
+            argv.append("--exclude-dynamic-system-prompt-sections")
             instructions = self.instructions()
             if instructions:
                 argv += ["--append-system-prompt", instructions]

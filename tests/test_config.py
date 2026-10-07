@@ -518,6 +518,21 @@ class TestingPlanConfigTest(_Isolated):
             self.load()
         self.assertIn("plan.testing_plan_when", str(cm.exception))
 
+    def test_planning_calls_start_their_own_sessions_by_default(self):
+        self.assertIs(self.load().get("plan.chain_sessions"), False)
+
+    def test_the_session_chain_can_be_turned_on(self):
+        self.write_repo({"plan": {"chain_sessions": True}})
+        cfg = self.load()
+        self.assertIs(cfg.get("plan.chain_sessions"), True)
+        self.assertEqual(cfg.warnings, [])
+
+    def test_a_chain_setting_that_is_not_true_or_false_is_an_error_naming_the_key(self):
+        self.write_repo({"plan": {"chain_sessions": "sometimes"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("plan.chain_sessions", str(cm.exception))
+
     def test_the_testing_plan_role_stays_on_the_standard_tier_and_its_model(self):
         self.assertEqual(config.ROLE_TIERS["testing_plan"], "standard")
         self.assertEqual(self.load().model("testing_plan"), "claude-sonnet-5")

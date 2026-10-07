@@ -134,6 +134,39 @@ def call_agent(prompt: str, role: str = "think", thinking: bool = False, label: 
     ).text
 
 
+# ── Session chain (plan.chain_sessions) ──────────────────────────────────────────
+# Synthesis, refine and the testing plan can continue one agent session instead of each
+# starting a new one, so a call reads what the earlier calls sent from the prompt cache
+# instead of being sent it again. The critic stays outside: its read tools would change
+# the session's tool set, and a different tool set reads nothing from the cache.
+
+def plan_call(state: "PlanState", prompt: str, *, label: str, role: str = "think", thinking: bool = False,
+              resume: str = "") -> tuple[str, str]:
+    """call_agent, or with the chain on, a call that continues session `resume` ("" = starts one)
+    and keeps its own session. Returns the reply and the session id the next call continues
+    ("" off the chain)."""
+    if not state.get("chain_sessions"):
+        return call_agent(prompt, role=role, thinking=thinking, label=label), ""
+    res = gateway.call_agent(prompt, role, thinking=thinking, tool="migite-plan", label=label,
+                             resume=resume, keep_session=True)
+    return res.text, res.usage.session_id
+
+
+def chain_setup(enabled: bool) -> tuple[bool, str]:
+    """(whether the chain runs, why not when it was asked for). The agent must be able to
+    continue a session, or every call would point at a conversation it doesn't have."""
+    if enabled and not gateway.supports("resume"):
+        return False, (f"the {gateway.AGENT.name} backend can't continue a session, "
+                       f"so every planning call started a new one")
+    return enabled, ""
+
+
+def end_chain(note: str) -> dict:
+    """The state update that ends the chain: later calls send everything, as without it."""
+    print(f"  ⚠ Session chain ended: {note}", flush=True)
+    return {"chain_session": "", "chain_note": note}
+
+
 def count_open_questions(plan: str) -> int:
     """`### N. <question>` entries under the plan's `## Open questions` section."""
     in_section = False
@@ -408,6 +441,11 @@ class PlanState(TypedDict):
     refine_status: str
     refine_rejected: list     # critic findings the refiner rejected, with evidence found in the plan or explorer reports
     refine_unverified: list   # findings it declined, but whose quoted reason is not in either: left open
+    # plan.chain_sessions: synthesis, refine and the testing plan continue one agent session.
+    chain_sessions: bool      # on: the config asks for it and the agent can continue a session
+    chain_session: str        # the session the next chained call continues; "" = no chain (any more)
+    chain_resumed: list       # labels of the calls that continued it, for plan.json
+    chain_note: str           # why the chain didn't apply, or ended before the testing plan
 
 
 class ExploreInput(TypedDict):
@@ -534,7 +572,8 @@ These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
 
 Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
 
-    draft = call_agent(prompt, thinking=True, label="synthesize_plan")
+    # On the chain, synthesis starts the session; the retry below starts a new one.
+    draft, session = plan_call(state, prompt, thinking=True, label="synthesize_plan")
     retries = 0
 
     # Guard against the model returning a one-line stub confirmation ("Plan written
@@ -550,7 +589,7 @@ Write the complete development plan. Output only the plan document — no preamb
             "one-line description of what you would write."
         )
         retries = 1
-        draft = call_agent(retry_prompt, thinking=True, label="synthesize_plan:retry")
+        draft, session = plan_call(state, retry_prompt, thinking=True, label="synthesize_plan:retry")
         if looks_like_stub(draft):
             raise RuntimeError(
                 "migite-plan: synthesis produced a stub instead of an actual plan "
@@ -559,7 +598,12 @@ Write the complete development plan. Output only the plan document — no preamb
                 f"{len(extract_headings(draft))} headings)."
             )
 
-    return {"plan_draft": draft, "synth_retries": retries}
+    out = {"plan_draft": draft, "synth_retries": retries}
+    if state.get("chain_sessions"):
+        out["chain_session"] = session
+        if not session:
+            out.update(end_chain("synthesis reported no session id, so no later call could continue it"))
+    return out
 
 
 def frontend_block(state: PlanState) -> str:
@@ -678,10 +722,13 @@ def refine_plan(state: PlanState) -> dict:
     if "No architectural concerns" in findings:
         print("  ▶ Refine: no concerns — plan unchanged", flush=True)
         return {"plan_final": state["plan_draft"], "refine_status": "no_concerns"}
-    print("  ▶ Refining plan with critic findings", flush=True)
+    chain = state.get("chain_session", "")
+    print("  ▶ Refining plan with critic findings" + (" (continuing the synthesis session)" if chain else ""), flush=True)
     # Exact edits first: the findings usually touch a few passages, and re-emitting a
     # 40-70 KB plan to change them cost ~55k output tokens and ~7 minutes. The full
     # rewrite below stays as the fallback when no usable edit comes back.
+    explorer_reports = ("Explorer reports (what the codebase contains)", "\n\n".join(state.get("explorations") or [])[:24000])
+    chained = {}   # the chain's state after this node, when it came in on the chain
     try:
         edited, report = doc_edits.update(
             state["plan_draft"], name="plan.md", role="think", label="refine_plan:edits", tool="migite-plan",
@@ -689,14 +736,27 @@ def refine_plan(state: PlanState) -> dict:
                   "below, keeping its structure and formatting conventions (### subheadings, tables, `---` "
                   "between top-level sections). A finding the plan or the explorer reports show to be wrong "
                   "or already handled is rejected instead of edited."),
-            context=[("Architecture critic findings", findings),
-                     ("Explorer reports (what the codebase contains)", "\n\n".join(state.get("explorations") or [])[:24000])],
-            triage=True)
+            # On the chain, the session already holds the draft and the explorer reports (synthesis's prompt).
+            context=[("Architecture critic findings", findings)] + ([] if chain else [explorer_reports]),
+            triage=True, resume=chain)
+        if chain:
+            chained["chain_resumed"] = [*(state.get("chain_resumed") or []), "refine_plan:edits"]
     except gateway.AgentError as e:
         edited, report = None, {"reason": str(e)[:200]}
     if edited is not None:
         doc_edits.print_report(report)
-        out = {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed"}
+        out = {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed",
+               **chained}
+        if chain:
+            # The session holds the draft and every proposed edit; plan.md has only the ones that applied.
+            missed = [r for r in report["rejected"] if r.get("reason") != "no change"]
+            if missed:
+                out.update(end_chain(f"{len(missed)} of the refiner's edits didn't apply, so the "
+                                     f"session no longer holds plan.md as written"))
+            elif not report.get("session_id"):
+                out.update(end_chain("refine_plan:edits reported no session id"))
+            else:
+                out["chain_session"] = report["session_id"]
         verified, unverified = check_rejections(report.get("rejected_findings") or [], state["plan_draft"],
                                                 state.get("explorations") or [])
         if verified:
@@ -708,6 +768,8 @@ def refine_plan(state: PlanState) -> dict:
                   + (f"; {len(unverified)} declined without a reason that checks out (left open)" if unverified else ""), flush=True)
         return out
     print(f"  ⚠ Refine by edits didn't work ({report.get('reason', 'unknown')}); rewriting the plan in full", flush=True)
+    if chain:
+        chained.update(end_chain("refine fell back to a full rewrite, which runs without the session"))
     prompt = f"""Original plan:
 {state['plan_draft']}
 
@@ -753,19 +815,35 @@ Output only the revised plan document."""
         if overlap_regressed or looks_like_stub(refined):
             print("  ⚠ Refine still failed structure check — keeping pre-refine plan; "
                   "see architecture-critic.md for the findings that weren't applied", flush=True)
-            return {"plan_final": state["plan_draft"], "refine_status": "kept_draft"}
+            return {"plan_final": state["plan_draft"], "refine_status": "kept_draft", **chained}
 
-    return {"plan_final": refined, "refine_status": status}
+    return {"plan_final": refined, "refine_status": status, **chained}
 
 
 def generate_testing_plan(state: PlanState) -> dict:
     if state.get("testing_plan_when") == "review":
         print("  ▶ Testing plan left to Phase 3 (plan.testing_plan_when: review)", flush=True)
         return {"testing_plan": ""}
-    print("  ▶ Generating testing plan", flush=True)
-    prompt = testing_plan_lib.build_prompt(state["plan_final"], frontend=bool(state.get("frontend")))
-    testing_plan = call_agent(prompt, label=testing_plan_lib.LABEL, role=testing_plan_lib.ROLE)
-    return {"testing_plan": testing_plan}
+    chain, out = state.get("chain_session", ""), {}
+    if chain:
+        # Each model has its own cache: a call on another model reads none of the session's.
+        model, chain_model = gateway.model_for(testing_plan_lib.ROLE), gateway.model_for("think")
+        if model != chain_model:
+            out = end_chain(f"{testing_plan_lib.LABEL} runs on {model or 'the CLI default'} and the session on "
+                            f"{chain_model or 'the CLI default'}, and one model reads nothing from another's cache")
+            chain = ""
+    print("  ▶ Generating testing plan" + (" (continuing the planning session)" if chain else ""), flush=True)
+    frontend = bool(state.get("frontend"))
+    if chain:
+        prompt = testing_plan_lib.build_prompt("", frontend=frontend, plan_above=True)
+        testing_plan, session = plan_call(state, prompt, label=testing_plan_lib.LABEL, role=testing_plan_lib.ROLE,
+                                          resume=chain)
+        out = {"chain_session": session,
+               "chain_resumed": [*(state.get("chain_resumed") or []), testing_plan_lib.LABEL]}
+    else:
+        prompt = testing_plan_lib.build_prompt(state["plan_final"], frontend=frontend)
+        testing_plan = call_agent(prompt, label=testing_plan_lib.LABEL, role=testing_plan_lib.ROLE)
+    return {"testing_plan": testing_plan, **out}
 
 
 def write_outputs(state: PlanState) -> dict:
@@ -825,6 +903,11 @@ def write_outputs(state: PlanState) -> dict:
         "refine_rejected": state.get("refine_rejected") or [],
         "refine_unverified": state.get("refine_unverified") or [],
         "testing_plan_when": state.get("testing_plan_when") or "plan",
+        "session_chain": {
+            "enabled": bool(state.get("chain_sessions")),
+            "resumed": state.get("chain_resumed") or [],
+            "note": state.get("chain_note") or "",
+        },
         "explorers": {
             "count": len(state["explorations"]),
             "failed": failed_explorers,
@@ -924,6 +1007,7 @@ def main() -> None:
     critic_cmd = read_prompt(CRITIC_CMD_PATH)
     base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
     frontend, frontend_source = frontend_decision(intake, args.repo_root, args.stack)
+    chain_sessions, chain_note = chain_setup(bool(cfg.get("plan.chain_sessions")))
 
     print(f"  migite-plan | base branch: {base_branch}", flush=True)
     if args.stack == "rails":
@@ -937,6 +1021,10 @@ def main() -> None:
     if jira_context:
         print(f"  migite-plan | Jira ticket context loaded ({len(jira_context)} chars)", flush=True)
     print(f"  migite-plan | explore={gateway.model_for('explore') or 'default'}  think={gateway.model_for('think') or 'default'}  critic={gateway.model_for('critic') or 'default'}", flush=True)
+    if chain_sessions:
+        print("  migite-plan | session chain: synthesis, refine and the testing plan continue one session", flush=True)
+    elif chain_note:
+        print(f"  ⚠ plan.chain_sessions: {chain_note}", flush=True)
 
     graph = build_graph()
     try:
@@ -971,6 +1059,10 @@ def main() -> None:
             "refine_status":  "",
             "refine_rejected": [],
             "refine_unverified": [],
+            "chain_sessions": chain_sessions,
+            "chain_session":  "",
+            "chain_resumed":  [],
+            "chain_note":     chain_note,
         })
         print("\n  ✔ migite-plan complete", flush=True)
     except Exception as e:

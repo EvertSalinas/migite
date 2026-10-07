@@ -9,13 +9,19 @@ Run: python3 -m unittest tests/test_plan.py"""
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from migite import agents   # noqa: E402
+from migite import config   # noqa: E402
+from migite import gateway  # noqa: E402
 
 HAS_LANGGRAPH = importlib.util.find_spec("langgraph") is not None
 
@@ -321,6 +327,171 @@ class CriticOutputGuardTest(unittest.TestCase):
             critic_usable=False))
         self.assertEqual(out["refine_status"], "critic_unusable")
         self.assertEqual(out["plan_final"], "# Plan\n## Scope\n")
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class SessionChainTest(unittest.TestCase):
+    """plan.chain_sessions: synthesis starts an agent session, refine and the testing plan each
+    continue the session the call before them reported, and the critic stays outside it. The nodes
+    run in turn through the real gateway against tests/fake-claude, which reports a new session id
+    for every call (fake-1, fake-2, ...), so each check can tell which call a later one continued."""
+
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        tmp = Path(self.tmp.name)
+        os.chmod(ROOT / "tests" / "fake-claude", 0o755)
+        (tmp / "bin").mkdir()
+        shim = tmp / "bin" / "claude"
+        shim.write_text(f'#!/usr/bin/env bash\nexec "{ROOT / "tests" / "fake-claude"}" "$@"\n')
+        shim.chmod(0o755)
+        os.environ["PATH"] = str(tmp / "bin") + os.pathsep + os.environ.get("PATH", "")
+        for name in (gateway.LEDGER_ENV, "FAKE_CLAUDE_ARGV"):
+            os.environ.pop(name, None)
+        self.argv_log, self.prompt_file = tmp / "argv.log", tmp / "prompt.txt"
+        os.environ.update(FAKE_CLAUDE_ARGV_LOG=str(self.argv_log), FAKE_CLAUDE_SESSIONS=str(tmp / "sessions"),
+                          FAKE_CLAUDE_PROMPT=str(self.prompt_file))
+        gateway.reset()
+        # Keep the CLAUDE.md files on this machine out of the argv: one call, one log line.
+        patcher = mock.patch.object(type(agents.get("claude")), "instructions", return_value="RULES")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.plan = load_tool()
+        self.state = base_state(
+            intake="Add things.", plan_cmd="Write the plan.", critic_cmd="Critique the plan.", audit="",
+            blueprint="", task_file="", explorations=["### models\nThing has a name column."],
+            testing_plan_when="plan", chain_sessions=True, chain_session="", chain_resumed=[], chain_note="")
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        gateway.reset()
+        self.tmp.cleanup()
+
+    def pin_testing_plan_to_the_chain_model(self):
+        gateway.configure_from(config.Config(
+            {"models": {"roles": {"testing_plan": config.default_model("think")}}}, {}, [], []))
+
+    def run_node(self, node, mode: str) -> str:
+        """Run one node on the state, merging its update as the graph does; returns its last prompt."""
+        os.environ["FAKE_CLAUDE_MODE"] = mode
+        self.state.update(node(self.state))
+        return self.prompt_file.read_text() if self.prompt_file.exists() else ""
+
+    def calls(self) -> list[str]:
+        return self.argv_log.read_text().splitlines() if self.argv_log.exists() else []
+
+    def plan_json(self) -> dict:
+        out = Path(self.tmp.name) / "out"
+        self.plan.write_outputs({**self.state, "plan_output": str(out / "plan.md"),
+                                 "critic_output": str(out / "critic.md"),
+                                 "testing_plan_output": str(out / "tp.md"), "sentinel": str(out / ".done")})
+        return json.loads((out / "plan.json").read_text())
+
+    def test_refine_and_the_testing_plan_each_continue_the_session_the_call_before_reported(self):
+        self.pin_testing_plan_to_the_chain_model()
+        self.run_node(self.plan.synthesize_plan, "plan")
+        self.run_node(self.plan.run_architecture_critic, "critic")
+        refine_prompt = self.run_node(self.plan.refine_plan, "edits")
+        testing_prompt = self.run_node(self.plan.generate_testing_plan, "envelope")
+        synth, critic, refine, testing = self.calls()
+
+        # Synthesis starts the chain: its session is kept, and it continues none.
+        self.assertNotIn("--no-session-persistence", synth)
+        self.assertNotIn("--resume", synth)
+        # The critic stays outside it, read-only, as before.
+        self.assertIn("--tools Read,Grep,Glob", critic)
+        self.assertIn("--no-session-persistence", critic)
+        self.assertNotIn("--resume", critic)
+        # Refine continues synthesis's session, with no schema to change the session's tool set,
+        # and is sent the critic's findings, not the draft or the explorer reports again.
+        self.assertIn("--resume fake-1", refine)
+        self.assertNotIn("--json-schema", refine)
+        self.assertNotIn("--no-session-persistence", refine)
+        self.assertIn("Out of scope names no owner for bulk import", refine_prompt)
+        self.assertNotIn("## Approach", refine_prompt)
+        self.assertNotIn("Thing has a name column.", refine_prompt)
+        self.assertIn("- Bulk import (a follow-up ticket)", self.state["plan_final"])
+        # The testing plan continues refine's session (the critic's call was fake-2), pointed at the plan.
+        self.assertIn("--resume fake-3", testing)
+        self.assertNotIn("## Approach", testing_prompt)
+        self.assertEqual(self.plan_json()["session_chain"],
+                         {"enabled": True, "resumed": ["refine_plan:edits", "generate_testing_plan"], "note": ""})
+
+    def test_with_no_critic_findings_the_testing_plan_continues_synthesis_s_own_session(self):
+        self.pin_testing_plan_to_the_chain_model()
+        self.run_node(self.plan.synthesize_plan, "plan")
+        self.state.update(critic_findings="✅ No architectural concerns found.", critic_usable=True)
+        self.run_node(self.plan.refine_plan, "envelope")
+        self.run_node(self.plan.generate_testing_plan, "envelope")
+        synth, testing = self.calls()
+        self.assertIn("--resume fake-1", testing)
+        self.assertEqual(self.state["chain_resumed"], ["generate_testing_plan"])
+
+    def test_with_the_chain_off_every_call_starts_a_session_it_does_not_keep_as_before(self):
+        self.pin_testing_plan_to_the_chain_model()
+        self.state["chain_sessions"] = False
+        self.run_node(self.plan.synthesize_plan, "plan")
+        self.run_node(self.plan.run_architecture_critic, "critic")
+        refine_prompt = self.run_node(self.plan.refine_plan, "edits")
+        self.run_node(self.plan.generate_testing_plan, "envelope")
+        self.assertEqual(len(self.calls()), 4)
+        for argv in self.calls():
+            self.assertIn("--no-session-persistence", argv)
+            self.assertNotIn("--resume", argv)
+        self.assertIn("## Approach", refine_prompt)                     # the draft is sent, as before
+        self.assertIn("--json-schema", self.calls()[2])
+        self.assertEqual(self.plan_json()["session_chain"], {"enabled": False, "resumed": [], "note": ""})
+
+    def test_a_testing_plan_on_another_model_runs_outside_the_session_and_is_sent_the_plan(self):
+        self.run_node(self.plan.synthesize_plan, "plan")                 # no pin: Sonnet vs Opus by default
+        self.state.update(critic_findings="✅ No architectural concerns found.", critic_usable=True)
+        self.run_node(self.plan.refine_plan, "envelope")
+        testing_prompt = self.run_node(self.plan.generate_testing_plan, "envelope")
+        testing = self.calls()[-1]
+        self.assertNotIn("--resume", testing)
+        self.assertIn("--no-session-persistence", testing)
+        self.assertIn("## Approach", testing_prompt)
+        note = self.plan_json()["session_chain"]["note"]
+        self.assertIn(config.default_model("testing_plan"), note)
+        self.assertIn(config.default_model("think"), note)
+
+    def test_a_refine_that_falls_back_to_a_full_rewrite_ends_the_chain(self):
+        self.pin_testing_plan_to_the_chain_model()
+        self.run_node(self.plan.synthesize_plan, "plan")
+        self.state.update(critic_findings="🟡 **Warning** - the delay is too long", critic_usable=True)
+        self.run_node(self.plan.refine_plan, "fold")      # its one edit matches nothing in the plan
+        testing_prompt = self.run_node(self.plan.generate_testing_plan, "envelope")
+        _, edits, *rest = self.calls()
+        self.assertIn("--resume fake-1", edits)
+        for argv in rest:                                  # the full rewrite, its retry, the testing plan
+            self.assertNotIn("--resume", argv)
+            self.assertIn("--no-session-persistence", argv)
+        self.assertEqual(self.state["refine_status"], "kept_draft")
+        self.assertIn("## Approach", testing_prompt)
+        chain = self.plan_json()["session_chain"]
+        self.assertEqual(chain["resumed"], ["refine_plan:edits"])
+        self.assertIn("full rewrite", chain["note"])
+
+    def test_an_edit_that_did_not_land_ends_the_chain_and_one_that_changed_nothing_does_not(self):
+        self.state.update(chain_session="s-1", plan_draft="# Plan\n", critic_findings="🟡 **Warning** - x",
+                          critic_usable=True)
+        for reason, chain, note in (("text not found in the document", "", "1 of the refiner's edits didn't apply"),
+                                    ("no change", "s-2", "")):
+            report = {"applied": [{}], "rejected": [{"find": "x", "why": "", "reason": reason}], "session_id": "s-2"}
+            with mock.patch.object(self.plan.doc_edits, "update", return_value=("# Plan\nedited\n", report)):
+                out = self.plan.refine_plan(self.state)
+            self.assertEqual(out["chain_session"], chain, reason)
+            self.assertEqual(out["chain_resumed"], ["refine_plan:edits"])
+            self.assertTrue(out.get("chain_note", "").startswith(note), reason)
+
+    def test_a_backend_that_cannot_continue_a_session_runs_the_plan_unchained_and_says_why(self):
+        gateway.AGENT = agents.get("cursor")
+        self.assertEqual(self.plan.chain_setup(True), (False, "the cursor backend can't continue a session, "
+                                                              "so every planning call started a new one"))
+        self.assertEqual(self.plan.chain_setup(False), (False, ""))
+        gateway.AGENT = agents.get("claude")
+        self.assertEqual(self.plan.chain_setup(True), (True, ""))
 
 
 if __name__ == "__main__":

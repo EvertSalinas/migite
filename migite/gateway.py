@@ -60,6 +60,7 @@ ROLE_TIMEOUT: dict[str, int | None] = {}  # role -> explicit timeout (config), e
 HEADLESS_TOOLS = "isolated"              # permissions.headless_tools: isolated | default
 REVIEW_CALL_MAX_USD: float | None = 2.0  # budget.review_call_max_usd, for `read` roles
 _ISOLATION_NOTICE_SHOWN = False
+_RESUME_NOTICE_SHOWN = False
 
 
 class AgentError(RuntimeError):
@@ -94,12 +95,13 @@ def reset() -> None:
     """Back to the built-in state: the default agent, no config, built-in timeouts,
     no permission flag, no effort. Tests call this between agents."""
     global AGENT, CONFIG, DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX, ROLE_EFFORT, ROLE_TIMEOUT
-    global HEADLESS_TOOLS, REVIEW_CALL_MAX_USD, _ISOLATION_NOTICE_SHOWN
+    global HEADLESS_TOOLS, REVIEW_CALL_MAX_USD, _ISOLATION_NOTICE_SHOWN, _RESUME_NOTICE_SHOWN
     AGENT, CONFIG = agents.get(), None
     DEFAULT_TIMEOUT, THINKING_TIMEOUT, DEFAULT_PERMISSION, INLINE_MAX = 600, 900, "none", 100_000
     ROLE_EFFORT = {}
     ROLE_TIMEOUT = {}
     HEADLESS_TOOLS, REVIEW_CALL_MAX_USD, _ISOLATION_NOTICE_SHOWN = "isolated", 2.0, False
+    _RESUME_NOTICE_SHOWN = False
 
 
 def tools_policy(role: str, scopes: tuple[str, ...] = ()) -> str:
@@ -250,12 +252,16 @@ def record(rec: UsageRecord, ledger: str | None = None) -> None:
 def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schema: dict | None = None,
                scopes: tuple[str, ...] | list[str] = (), permission: str | None = None,
                thinking: bool = False, timeout: int | None = None, ledger: str | None = None,
-               effort: str | None = None, model: str | None = None) -> CallResult:
+               effort: str | None = None, model: str | None = None,
+               resume: str = "", keep_session: bool = False) -> CallResult:
     """One headless call on the configured agent.
 
     `role` picks the model and effort (models.* in the config); `model` and `effort`
     override them for this call only. `permission` is a neutral word (auto, edits,
     plan, ask, none) or a Claude Code alias; unset means permissions.headless.
+    `resume` continues the session an earlier call reported (CallResult.usage.session_id),
+    and `keep_session` saves this call's session so a later one can continue it; an agent
+    without the `resume` capability drops both, with one notice.
     Raises ScopeUnsupported before starting anything when a scope can't be honoured,
     and AgentError on a missing CLI, non-zero exit, timeout, or a reported error."""
     agent = AGENT
@@ -279,6 +285,13 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
             _ISOLATION_NOTICE_SHOWN = True
             print(f"      ⚠ the {agent.name} backend can't restrict a headless call's tools or context; "
                   f"these calls run with its full toolset", file=sys.stderr, flush=True)
+    if (resume or keep_session) and not agent.info.resume:
+        global _RESUME_NOTICE_SHOWN
+        if not _RESUME_NOTICE_SHOWN:
+            _RESUME_NOTICE_SHOWN = True
+            print(f"      ⚠ the {agent.name} backend can't continue a headless call's session; "
+                  f"each call starts a new one", file=sys.stderr, flush=True)
+        resume, keep_session = "", False
     req = agents.AskRequest(
         prompt=prompt,
         model=resolved_model or None,
@@ -289,6 +302,8 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         isolated=isolated,
         tools=config.READ_TOOLS if policy == "read" else (),
         max_budget_usd=REVIEW_CALL_MAX_USD if (isolated and policy == "read") else None,
+        resume=resume,
+        keep_session=keep_session,
     )
     timeout = resolve_timeout(role, thinking=thinking, explicit=timeout)
 

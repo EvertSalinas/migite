@@ -136,17 +136,22 @@ def parse_reply(text: str, structured: object = None) -> dict | None:
     return parsed
 
 
-def build_update_prompt(doc: str, *, name: str, task: str, context: list[tuple[str, str]], triage: bool = False) -> str:
+def build_update_prompt(doc: str, *, name: str, task: str, context: list[tuple[str, str]], triage: bool = False,
+                        doc_above: bool = False) -> str:
+    """The edit prompt. With `doc_above` the call continues the session whose last reply is the
+    document, so the prompt points at that reply instead of carrying the document again."""
     blocks = "\n".join(f"\n## {heading}\n{body}" for heading, body in context if body.strip())
     triage_rules = f"\n{TRIAGE_RULES}" if triage else ""
     shape = ('{"revision": "...", "edits": [{"find": "...", "replace": "...", "why": "..."}], '
              '"rejected_findings": [{"finding": "...", "reason": "...", "evidence": "..."}]}') if triage else \
             '{"revision": "...", "edits": [{"find": "...", "replace": "...", "why": "..."}]}'
+    document = (f"{name} is your previous reply in this conversation, exactly as you wrote it. "
+                f"Copy each `find` passage from that reply." if doc_above else doc)
     return f"""You are editing {name}, a document for a software task. {task}
 {blocks}
 
 ## {name} (the document to edit)
-{doc}
+{document}
 
 ## Rules
 {EDIT_RULES}{triage_rules}
@@ -156,22 +161,29 @@ Return ONLY a JSON object: {shape}"""
 
 
 def update(doc: str, *, name: str, task: str, context: list[tuple[str, str]], role: str,
-           label: str, tool: str = "migite", triage: bool = False) -> tuple[str | None, dict]:
+           label: str, tool: str = "migite", triage: bool = False, resume: str = "") -> tuple[str | None, dict]:
     """Ask for edits to `doc` and apply them. Returns (new_doc, report); new_doc is
     None when no usable edit came back, so the caller falls back to a full rewrite:
     an unparseable reply, or edits proposed where none applied. An empty edit list
     is a real answer (nothing to change) and returns the document as it was.
     With `triage`, the editor may also reject findings in the context; the report then carries
     `rejected_findings` (unchecked: the caller verifies their evidence).
+    With `resume`, the call continues that session, whose last reply is `doc`: the prompt
+    leaves the document out, and no schema is sent, since a schema reaches the CLI as a tool
+    and a different tool set reads nothing of the session from the prompt cache. The JSON is
+    read from the text. The report then carries `session_id`, for the next call to continue.
     Raises gateway.AgentError when the call itself fails."""
-    prompt = build_update_prompt(doc, name=name, task=task, context=context, triage=triage)
-    schema = (TRIAGE_SCHEMA if triage else EDIT_SCHEMA) if gateway.supports("structured_output") else None
-    res = gateway.call_agent(prompt, role, label=label, tool=tool, schema=schema)
+    resume = resume if gateway.supports("resume") else ""   # no session to point at: send the document
+    prompt = build_update_prompt(doc, name=name, task=task, context=context, triage=triage, doc_above=bool(resume))
+    schema = (TRIAGE_SCHEMA if triage else EDIT_SCHEMA) if gateway.supports("structured_output") and not resume else None
+    res = gateway.call_agent(prompt, role, label=label, tool=tool, schema=schema, resume=resume)
     reply = parse_reply(res.text, res.structured)
     if reply is None:
         return None, {"reason": "the reply had no usable JSON edit list", "applied": [], "rejected": []}
     new_doc, applied, rejected = apply_edits(doc, reply["edits"])
     report = {"revision": reply["revision"], "applied": applied, "rejected": rejected}
+    if resume:
+        report["session_id"] = res.usage.session_id
     if triage:
         report["rejected_findings"] = reply.get("rejected_findings", [])
     if reply["edits"] and not applied:

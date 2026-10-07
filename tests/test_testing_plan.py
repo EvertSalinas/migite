@@ -40,6 +40,14 @@ class BuildPromptTest(unittest.TestCase):
         self.assertIn("app/brand.rb", prompt)
         self.assertIn("the diff is right", prompt)
 
+    def test_continuing_the_planning_session_points_at_the_plan_instead_of_sending_it(self):
+        prompt = testing_plan.build_prompt(PLAN, plan_above=True)
+        self.assertNotIn(PLAN, prompt)
+        self.assertIn("The plan you wrote earlier in this conversation, with any edits you listed after it "
+                      "applied, is the final plan.", prompt)
+        self.assertNotIn("plan below", prompt)
+        self.assertIn("### Verification steps", prompt)
+
     def test_browser_steps_only_for_a_frontend_change(self):
         self.assertNotIn(BROWSER, testing_plan.build_prompt(PLAN))
         self.assertIn(BROWSER, testing_plan.build_prompt(PLAN, frontend=True))

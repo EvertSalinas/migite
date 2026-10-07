@@ -5,17 +5,30 @@
 #   structured   success envelope with structured_output (a review verdict)
 #   fold         success envelope whose result is a plan_fold reply with one edit ("1 minute" -> "15 seconds")
 #   fold_noop    success envelope whose result is a plan_fold reply with no edits
+#   critic       success envelope whose result is one architecture-critic finding
+#   edits        success envelope whose result is a triage edit reply that matches the `plan` mode's plan
 #   text         plain text on stdout, no JSON (older CLI / --output-format text)
 #   is_error     envelope with is_error=true, exit 0
 #   empty        success envelope whose result is the empty string
 #   exit1        garbage on stdout, exit 1
 #   timeout      sleeps 30s (use with a short timeout)
 # It also records the argv it was called with to $FAKE_CLAUDE_ARGV, and the prompt it read
-# on stdin to $FAKE_CLAUDE_PROMPT, when set.
+# on stdin to $FAKE_CLAUDE_PROMPT, when set; $FAKE_CLAUDE_ARGV_LOG gets one argv line per call.
+# The session id is "fake", or "fake-<n>" for the n-th call when $FAKE_CLAUDE_SESSIONS names a
+# counter file. The real CLI keeps the id on --resume; a new one per call lets a test see which
+# call a later one continued.
 set -u
 prompt="$(cat)"
 [[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
+[[ -n "${FAKE_CLAUDE_ARGV_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_CLAUDE_ARGV_LOG"
 [[ -n "${FAKE_CLAUDE_PROMPT:-}" ]] && printf '%s' "$prompt" > "$FAKE_CLAUDE_PROMPT"
+session="fake"
+if [[ -n "${FAKE_CLAUDE_SESSIONS:-}" ]]; then
+  calls="$(cat "$FAKE_CLAUDE_SESSIONS" 2>/dev/null || true)"
+  calls=$(( ${calls:-0} + 1 ))
+  printf '%s' "$calls" > "$FAKE_CLAUDE_SESSIONS"
+  session="fake-$calls"
+fi
 model="claude-haiku-4-5-20251001"
 for ((i = 1; i <= $#; i++)); do
   [[ "${!i}" == "--model" ]] && { j=$((i + 1)); model="${!j}"; }
@@ -28,7 +41,7 @@ envelope() {
   # $1 = result (JSON-escaped string body), $2 = extra JSON fields (with leading comma) or empty
   cat <<EOF
 {"type":"result","subtype":"success","is_error":false,"duration_ms":1407,"duration_api_ms":1265,"num_turns":1,
- "result":"$1","session_id":"fake","total_cost_usd":0.0475,
+ "result":"$1","session_id":"$session","total_cost_usd":0.0475,
  "usage":{"input_tokens":10,"cache_creation_input_tokens":23624,"cache_read_input_tokens":0,"output_tokens":39,
           "cache_creation":{"ephemeral_5m_input_tokens":20000,"ephemeral_1h_input_tokens":3624}},
  "modelUsage":{"$model":{"inputTokens":10,"outputTokens":39,"costUSD":0.0475}}$2}
@@ -43,6 +56,8 @@ case "${FAKE_CLAUDE_MODE:-envelope}" in
   structured) envelope "{\\\"verdict\\\":\\\"NEEDS FIXES\\\"}" ',"structured_output":{"verdict":"NEEDS FIXES","reason":"one critical","findings":[{"severity":"critical","problem":"x"},{"severity":"note","problem":"y"}],"document":"# Review: t\n\n## Verdict: NEEDS FIXES\n\nbody"}' ;;
   fold)       envelope '{\"revision\": \"Delay is 15 seconds, not 1 minute.\", \"edits\": [{\"find\": \"1 minute\", \"replace\": \"15 seconds\", \"why\": \"amendment 01\"}]}' "" ;;
   fold_noop)  envelope '{\"revision\": \"No plan changes.\", \"edits\": []}' "" ;;
+  critic)     envelope "🟡 **Warning** - Out of scope names no owner for bulk import" "" ;;
+  edits)      envelope '{\"revision\": \"Bulk import is a follow-up.\", \"edits\": [{\"find\": \"- Bulk import\", \"replace\": \"- Bulk import (a follow-up ticket)\", \"why\": \"critic\"}], \"rejected_findings\": []}' "" ;;
   text)       printf 'plain text result for: %s\n' "$snippet" ;;
   is_error)   cat <<EOF
 {"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":50,"result":"Something went wrong","total_cost_usd":0.001,"usage":{"input_tokens":1,"output_tokens":0}}

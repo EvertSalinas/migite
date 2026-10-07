@@ -581,9 +581,10 @@ Each planner explorer gets the same kind of selection at 800 bytes. How words ar
 ```yaml
 plan:
   testing_plan_when: plan     # plan | review
+  chain_sessions: false       # true | false
 ```
 
-`plan` (the default) writes `testing-plan.md` in Phase 1, from the finished plan. `review` leaves
+`testing_plan_when: plan` (the default) writes `testing-plan.md` in Phase 1, from the finished plan. `review` leaves
 it out of Phase 1 and writes it at the start of Phase 3, from `plan.md` and the change as built
 (the diff capped at `ui.prompt_diff_max_bytes`, plus the name of every changed file, since a diff
 leaves new untracked files out), before the browser check and the reviewers read it. It then
@@ -600,6 +601,38 @@ testing plan nobody reads.
   tries again. With `plan` timing a failed call fails `migite-plan` as a whole.
 - `plan.json` records `testing_plan_when`, and `outputs.testing_plan` is `null` under `review`.
 - The ledger shows the same `generate_testing_plan` call, role `testing_plan`, at either moment.
+
+<a id="plan-chain-sessions"></a>
+`chain_sessions: true` runs synthesis, refine and the testing plan as one agent session. Synthesis
+starts it, and each later call continues the session the call before it reported (Claude Code's
+`--resume`) instead of starting a new one. A call that continues a session reads what the earlier
+calls sent from the prompt cache, so refine is sent only the critic's findings (the session already
+holds the draft and the explorer reports), and the testing plan is pointed at the plan instead of
+being sent it again. A previous call's reply was never sent, so the first call that continues the
+session still writes it to the cache once. Off by default: it is an experiment, measured per call
+in `usage.jsonl`.
+
+- The architecture critic runs on its own, as before. Its read tools would change the session's
+  tool set, and a call with a different tool set reads nothing of the session from the cache.
+- On the chain, refine sends no JSON schema, for the same reason: Claude Code passes a schema as a
+  tool. migite reads the edit list from the reply's text, as it does on backends without
+  structured output.
+- The testing plan joins only when the `testing_plan` role runs on the same model as `think`, since
+  one model reads nothing from another's cache. By default it doesn't (standard tier against
+  strong); pin `models.roles.testing_plan` to the strong model to chain it. A different effort
+  level keeps the cache on Opus 5.5, Sonnet 5.5 and Fable 5.1, not on other models. With
+  `testing_plan_when: review` there is nothing to chain: Phase 3 writes the testing plan in its own
+  process.
+- The chain ends, and the calls after it run as they do with the setting off, when refine falls back
+  to a full rewrite, when some of its edits don't apply (the session would hold a different plan
+  from `plan.md`), or when a call reports no session id.
+- `plan.json` records it under `session_chain`: `enabled`, the calls that continued the session
+  (`resumed`), and a `note` saying why the chain didn't apply or ended early. In `usage.jsonl` the
+  chained calls share a `session_id`.
+- It needs a backend that can continue a session: Claude Code. On the others `migite-plan` prints
+  one notice and every call starts a new session, as with the setting off.
+- The chained calls' sessions are saved to disk like any Claude Code session; other isolated
+  headless calls save none.
 
 <a id="review"></a>
 ### `review`

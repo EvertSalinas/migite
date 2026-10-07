@@ -79,6 +79,29 @@ class UpdateTest(unittest.TestCase):
         self.assertIn(DOC, prompt)
         self.assertEqual(fake.call_args.args[1], "testing_plan")
 
+    def test_continuing_the_session_that_wrote_the_document_sends_neither_it_nor_a_schema(self):
+        edits = '{"revision": "15 seconds.", "edits": [{"find": "Wait 1 minute", "replace": "Wait 15 seconds"}]}'
+        res = SimpleNamespace(text=edits, structured=None, usage=SimpleNamespace(session_id="s-2"))
+        with mock.patch.object(doc_edits.gateway, "supports", return_value=True), \
+             mock.patch.object(doc_edits.gateway, "call_agent", return_value=res) as fake:
+            new, report = doc_edits.update(DOC, name="testing-plan.md", task="Amendment 01 changed the delay.",
+                                           context=[], role="testing_plan", label="t", resume="s-1")
+        prompt = fake.call_args.args[0]
+        self.assertNotIn(DOC, prompt)
+        self.assertIn("your previous reply in this conversation", prompt)
+        # A schema reaches the CLI as a tool, and a different tool set reads nothing of the session from cache.
+        self.assertIsNone(fake.call_args.kwargs["schema"])
+        self.assertEqual(fake.call_args.kwargs["resume"], "s-1")
+        self.assertIn("Wait 15 seconds, then", new)          # the edits still land on the caller's copy
+        self.assertEqual(report["session_id"], "s-2")
+
+    def test_a_backend_that_cannot_continue_a_session_is_sent_the_document(self):
+        with reply('{"revision": "", "edits": []}') as fake:
+            doc_edits.update(DOC, name="testing-plan.md", task="t", context=[], role="testing_plan",
+                             label="t", resume="s-1")
+        self.assertIn(DOC, fake.call_args.args[0])
+        self.assertEqual(fake.call_args.kwargs["resume"], "")
+
 
 class TriageTest(unittest.TestCase):
     """The plan refiner may reject a critic finding it can show is wrong, instead of addressing every one."""

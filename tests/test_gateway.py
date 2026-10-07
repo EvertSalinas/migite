@@ -4,13 +4,16 @@ headless call path + usage ledger. Uses tests/fake-claude on PATH so no
 real model call is made. Run: python3 -m unittest tests/test_gateway.py"""
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -189,6 +192,49 @@ class CallClaudeTest(_FakeClaude):
         r = gateway.call_agent("x", "knowledge", model="m")
         self.assertTrue(r.text.startswith("echo:"))
 
+
+
+class SessionChainTest(_FakeClaude):
+    """A call that starts or continues a session chain (plan.chain_sessions) keeps its session,
+    so the next call can continue it; every other isolated call still saves none."""
+
+    def setUp(self):
+        super().setUp()
+        # Keep the CLAUDE.md files on this machine out of the argv the checks read.
+        patcher = mock.patch.object(type(agents.get("claude")), "instructions", return_value="RULES")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def call(self, **chain):
+        argv_file = Path(self.tmp.name) / "argv.txt"
+        os.environ["FAKE_CLAUDE_ARGV"] = str(argv_file)
+        result = gateway.call_agent("x", "think", label="l", **chain)
+        return argv_file.read_text().split(), result
+
+    def test_an_isolated_call_saves_no_session_by_default(self):
+        argv, _ = self.call()
+        self.assertIn("--no-session-persistence", argv)
+        self.assertNotIn("--resume", argv)
+
+    def test_a_call_that_starts_a_chain_keeps_its_session_and_hands_back_its_id(self):
+        argv, result = self.call(keep_session=True)
+        self.assertNotIn("--no-session-persistence", argv)
+        self.assertNotIn("--resume", argv)
+        self.assertIn("--safe-mode", argv)                   # still isolated otherwise
+        self.assertEqual(result.usage.session_id, "fake")    # what the next call continues
+
+    def test_a_call_that_continues_a_chain_resumes_that_session_and_keeps_it(self):
+        argv, _ = self.call(resume="s-1")
+        self.assertEqual(argv[argv.index("--resume") + 1], "s-1")
+        self.assertNotIn("--no-session-persistence", argv)
+
+    def test_an_agent_that_cannot_resume_says_so_once_and_starts_a_new_session_each_time(self):
+        gateway.AGENT = agents.get("cursor", binary=str(ROOT / "tests" / "fake-cursor-agent"))
+        err = io.StringIO()
+        with redirect_stderr(err):
+            results = [gateway.call_agent("x", "think", label="l", resume="s-1", keep_session=True) for _ in range(2)]
+        self.assertEqual(err.getvalue().count("can't continue a headless call's session"), 1)
+        self.assertTrue(all(r.text.startswith("cursor:") for r in results))
 
 
 class GatewayTest(_FakeClaude):

@@ -25,7 +25,8 @@ agent:
 | Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache (writes split 5m / 1h), cost, session id | none (zeros recorded) | none (zeros recorded) | cost and tokens summed from `step_finish` events |
 | Structured output | the `review.json` verdict | `--json-schema` | no → the reviewer parses markdown | no → the reviewer parses markdown | no → the reviewer parses markdown |
 | Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped (set `[thinking].effort` in `~/.kimi-code/config.toml`) | dropped |
-| Isolated headless calls | `permissions.headless_tools: isolated` (the default) | `--tools` (none, or `Read,Grep,Glob` for reviewers), `--strict-mcp-config`, `--safe-mode`, `--no-session-persistence`, `--exclude-dynamic-system-prompt-sections`, CLAUDE.md passed back via `--append-system-prompt`, `--max-budget-usd` for reviewers | no → one notice, then the full toolset | no → one notice, then the full toolset | no → one notice, then the full toolset |
+| Isolated headless calls | `permissions.headless_tools: isolated` (the default) | `--tools` (none, or `Read,Grep,Glob` for reviewers), `--strict-mcp-config`, `--safe-mode`, `--no-session-persistence` (left out on a session chain, below), `--exclude-dynamic-system-prompt-sections`, CLAUDE.md passed back via `--append-system-prompt`, `--max-budget-usd` for reviewers | no → one notice, then the full toolset | no → one notice, then the full toolset | no → one notice, then the full toolset |
+| Continue a headless call's session | `plan.chain_sessions` (synthesis, refine, testing plan) | `--resume <session id>`; a call that starts or continues the chain keeps its session | no → one notice, then a new session per call | no → one notice, then a new session per call | no → one notice, then a new session per call |
 | Tool scope `jira.read` | the Jira fetch's agent fallback | the two Atlassian read tools via `--allowedTools` | no → only `acli` can fetch | no → only `acli` can fetch | no → only `acli` can fetch |
 | Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | none — `-p` rejects `--yolo`/`--auto`/`--plan` and always runs Kimi's auto policy | `auto`/`edits` → `--auto` |
 | Exit command shown by `run_phase` | interactive sessions | `/exit` | `/quit` | n/a — the headless phase returns on its own | `/exit` |
@@ -140,7 +141,8 @@ The interface each adapter implements (`migite/agents/base.py`):
 class Agent:
     info: AgentInfo   # name, display_name, default_binary, models per tier, structured_output,
                       # effort, usage, scopes, prompt_via, max_arg_bytes, env_unset,
-                      # exit_hint, instruction_files, permission_flags, session_mode
+                      # exit_hint, instruction_files, permission_flags, session_mode,
+                      # isolation, resume
     def ask_launch(self, req: AskRequest) -> Launch          # argv, stdin, env to set or unset
     def parse(self, stdout, returncode, req) -> AskResult    # that CLI's output in one shape
     def session_launch(self, req: SessionRequest) -> Launch
