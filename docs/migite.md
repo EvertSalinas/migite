@@ -36,7 +36,7 @@ migite --intake <file> [--blueprint <file>] # pre-written intake, optional bluep
 migite --audit <report.md> [--jira KEY]     # remediation task generated from a migite-audit report
 migite --attach <file> ...                  # fold reference material into the planner's context (repeatable)
 migite --staged                             # one implement session per Scope sub-section, checkpoint between
-migite --stack rails|generic                # override stack detection
+migite --stack rails|generic|<profile>      # override stack detection
 migite --resume [run.json]                  # continue an interrupted run; a plain re-run of the same command does too
 migite --amend ["feedback"] | --amend-file <file> [--jira KEY]   # scope a delta against a built task
 migite doctor [--repo <path>]               # read-only health check
@@ -66,10 +66,12 @@ the config overrides any of them per project.
 
 | Value | When it's used |
 |-------|----------------|
-| `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down. Runs rubocop/rspec via `bundle_exec` from the app's directory. |
+| a profile name | A [`stacks.<name>`](./configuration.md#stacks) profile from the config (`node`, `python`, ...). Auto-detected by its `detect` files, before `rails`. Heal and review run its `autofix`, `lint` and `test` commands on the changed files its globs select; exit codes decide. Explores with the same language-agnostic globs as `generic`. |
+| `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down and no profile matched. Runs rubocop/rspec via `bundle_exec` from the app's directory. |
 | `generic` | Everything else. Skips rubocop/rspec/`bundle`; plan and review still run against the diff, with language-agnostic explore globs instead of Rails' MVC split. |
 
-Precedence: `--stack` on the command line, then `stack:` in the config, then detection.
+Precedence: `--stack` on the command line, then `stack:` in the config, then detection (profiles,
+then `rails`, then `generic`).
 
 <a id="amend-mode"></a>
 ### Amend mode (`--amend`)

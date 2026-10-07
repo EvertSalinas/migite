@@ -29,7 +29,7 @@ Terms used across the docs, in the order you meet them in a run.
 | **Run manifest** | `run.json` in a run folder: the run's arguments, branch and folders, and each phase's status (`pending`, `running`, `pending_gate`, `done`, `skipped`), written at every phase boundary. Running the same command again resumes from it. See [Resuming a run](./migite.md#resuming-a-run). |
 | **Knowledge** | `knowledge.md`, one per repo in the vault. Up to three domain-level bullets appended after every run, injected into every future plan and implement prompt. |
 | **Sentinel** | `.plan.done` / `.review.done`, touched by an agent on success. Bash treats a missing sentinel as failure rather than trusting exit codes through tmux. |
-| **Stack** | `rails` (a `Gemfile` at the root or one level down) or `generic` (everything else, no lint or test tooling). Chosen by detection, `stack:` in config, or `--stack`. |
+| **Stack** | A `stacks.<name>` profile from the config (its own lint and test commands, matched by its detect files), `rails` (a `Gemfile` at the root or one level down) or `generic` (everything else, no lint or test tooling). Chosen by detection in that order, `stack:` in config, or `--stack`. |
 | **Tier** | `fast`, `standard`, `strong`: the three model slots in `models:` (Haiku 4.5, Sonnet 5, Opus 5.5 by default). |
 | **Role** | A named call site (`think`, `critic`, `review_security`, `knowledge`, ...) mapped to a tier by default and pinnable to a model in `models.roles`. `migite config` lists all of them. |
 | **Effort** | The `--effort` level (`low` to `max`) sent with a headless call, from `models.effort.<tier>` or `models.roles_effort.<role>`. `none` sends no flag. Never sent to Haiku. |

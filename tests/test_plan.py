@@ -91,6 +91,11 @@ class FrontendDecisionTest(unittest.TestCase):
     def test_generic_stack_never_adds_the_frontend_explorer(self):
         self.assertFalse(self.plan.frontend_decision("**Frontend:** yes\n", str(self.repo), "generic")[0])
 
+    def test_a_stack_profile_never_adds_the_rails_frontend_explorer(self):
+        (self.repo / "app" / "javascript").mkdir(parents=True)
+        self.assertEqual(self.plan.frontend_decision("**Frontend:** yes\n", str(self.repo), "node"),
+                         (False, "node stack"))
+
 
 def base_state(**overrides):
     state = {"intake": "", "knowledge": "", "jira_context": "", "repo_root": "/nowhere",
@@ -118,6 +123,11 @@ class FrontendPlanningTest(unittest.TestCase):
         self.assertEqual(len(self.areas()), 7)
         self.assertEqual(self.areas(frontend=True)[-1], "views_frontend")
         self.assertEqual(len(self.areas(frontend=True)), 8)
+
+    def test_only_rails_gets_the_mvc_split_a_stack_profile_explores_like_generic(self):
+        self.assertEqual(self.areas(stack="node"), ["source"])
+        self.assertEqual(self.areas(stack="generic"), ["source"])
+        self.assertIn("models", self.areas(stack="rails"))
 
     def test_frontend_testing_plan_asks_for_browser_ready_steps(self):
         self.plan.generate_testing_plan(base_state(frontend=True))

@@ -14,6 +14,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [vault, logs](#vault)
   - [models](#models)
   - [stack](#stack)
+  - [stacks](#stacks)
   - [gates](#gates)
   - [permissions](#permissions)
   - [heal](#heal)
@@ -159,10 +160,23 @@ budget:
   max_usd_per_run: 1.50
 ```
 
-**Non-Rails repo or monorepo where detection picks wrong**
+**Node repo: heal and review run its linter and tests** (`<repo>/.migite.yml`)
 
 ```yaml
-stack: generic                  # skip rubocop/rspec; plan, implement, review still run
+stacks:
+  node:
+    detect: [package.json]
+    source: ["*.js", "*.ts"]            # quote globs: a bare * starts a YAML alias
+    specs: ["*.test.js", "*.test.ts"]
+    autofix: npx eslint --fix {files}
+    lint: npx eslint {files}
+    test: npx jest {files}
+```
+
+**Repo with nothing to lint or test, or a monorepo where detection picks wrong**
+
+```yaml
+stack: generic                  # skip lint and tests; plan, implement, review still run
 permissions:
   headless: edits               # if your managed settings forbid auto-approval
 ```
@@ -327,13 +341,99 @@ testing plan, see [plan](#plan)), so raise it if you see one.
 ### `stack`
 
 ```yaml
-stack: auto             # auto | rails | generic   (MIGITE_STACK; --stack on the command line wins)
+stack: auto             # auto | rails | generic | a profile name from stacks   (MIGITE_STACK; --stack on the command line wins)
 ```
 
-`auto` runs the detection in `lib/stack.sh` (`Gemfile` at the root or one level down → `rails`,
-else `generic`). Setting it explicitly is for monorepos where detection picks wrong, or to force
-the no-tooling path. Describing stacks as data (lint/test commands, globs) is not supported yet —
-see the README roadmap.
+`auto` runs the detection in `lib/stack.sh`, in this order:
+
+1. the [`stacks`](#stacks) profiles, by their `detect` files
+2. `rails`: a `Gemfile` at the root or one level down
+3. `generic`: everything else, with no lint or tests
+
+Set it explicitly for a monorepo where detection picks wrong, to force the no-tooling path, or to
+pick a profile that has no `detect` files. A name that is neither built in nor a configured
+profile is a config error.
+
+<a id="stacks"></a>
+### `stacks`
+
+```yaml
+stacks:
+  node:                                 # the name: lowercase letters, digits, underscores
+    detect: [package.json]              # any one of these at the repo root selects the profile
+    source: ["*.js", "*.ts"]            # the changed files lint and autofix get
+    specs: ["*.test.js", "*.test.ts"]   # the changed files test gets
+    autofix: npx eslint --fix {files}   # runs before lint; its exit code is ignored
+    lint: npx eslint {files}            # exit code 0 = clean
+    test: npx jest {files}              # exit code 0 = green
+```
+
+A profile describes a non-Rails repo's lint and test commands as data. Heal (Phase 2.5) and
+review (Phase 3) run them where they run rubocop and rspec on a Rails repo. Every key is optional
+except one command: a profile needs at least one of `lint`, `autofix` and `test`. Profiles are
+empty by default, which leaves detection as it was before they existed: `rails` or `generic`.
+
+**Detection.** Profiles are tried before `rails`. A profile from a higher-precedence file comes
+first (the repo's `.migite.yml` before `~/.config/migite/config.yml`), then each file's in the
+order written. A profile matches when any one of its `detect` paths or globs exists at the repo
+root. One with no `detect` is used only when `stack:` or `--stack` names it. `rails`, `generic` and
+`auto` can't be profile names: the Rails path stays as it is.
+
+> **A profile in your user config applies to every repo.** A user-level `node` profile with
+> `detect: [package.json]` also claims every Rails app that ships a `package.json`, because
+> profiles come before `rails`. Put a profile in the repo's `.migite.yml`, give it a `detect`
+> file only that kind of repo has, or set `stack: rails` in the Rails repos. The run's `Stack:` line
+> and `migite doctor` name the profile and the file that matched.
+
+**Which files a command gets.** `source` and `specs` filter the same changed-file list every phase
+uses: the diff against the base branch plus untracked files, minus deletes and `scratchpad/`
+([Which files get linted and tested](./phases.md#lint-test-selection)). A glob matches the path
+from the repo root:
+
+- `*` crosses directories, so `*.js` is every `.js` file and `src/*` is all of `src/`.
+- `**/` is zero or more directories, so `**/test_*.py` is a `test_*.py` at any depth.
+- No globs means every changed file.
+
+Quote globs in YAML: a bare `*` starts an alias. A command runs only when its list has at least
+one file.
+
+**`{files}`.** In a command, `{files}` becomes that list, each path a separate, quoted argument (a
+space in a name is safe). A command without `{files}` runs as written, which is what a whole-suite
+runner like `go test ./...` wants; the globs then only decide *when* it runs. Commands run with
+`bash -c` from the repo root, with stdin closed. Chain several with `&&`.
+
+**Pass or fail is the exit code.** 0 passes. 126 or 127 (not executable, not installed) means the
+command could not start: that is a tooling error on the commit-gate banner, never something heal
+asks the agent to fix. Any other code is a failure. Heal hands the failing output to the agent
+through the same capped excerpt as rubocop and rspec (`heal.prompt_log_max_bytes`). Under
+`gates.commit.policy: strict`, failing tests and lint are blockers (`require_green_specs`,
+`require_clean_lint`).
+
+**What a profile does not have.** These are Rails' and stay in its code path:
+
+- the `tooling_failed` log patterns
+- the app directory one level down
+- `heal.full_suite_fallback` (a test command without `{files}` already is the whole suite)
+- the `frontend` linters and reviewer
+
+More examples:
+
+```yaml
+stacks:
+  python:
+    detect: [pyproject.toml, setup.py]
+    source: ["*.py"]
+    specs: ["**/test_*.py", "*_test.py"]
+    autofix: ruff check --fix {files} && ruff format {files}
+    lint: ruff check {files}
+    test: pytest {files}
+  go:
+    detect: [go.mod]
+    source: ["*.go"]
+    specs: ["*.go"]                     # any Go change runs the suite
+    lint: test -z "$(gofmt -l {files})" && go vet ./...
+    test: go test ./...
+```
 
 <a id="gates"></a>
 ### `gates`
@@ -342,8 +442,8 @@ see the README roadmap.
 gates:
   commit:
     policy: lenient           # lenient | strict
-    require_clean_lint: true  # strict only: remaining rubocop offenses block approval
-    require_green_specs: true # strict only: spec failures or a tooling error block approval
+    require_clean_lint: true  # strict only: remaining rubocop offenses (a profile's failing lint) block approval
+    require_green_specs: true # strict only: spec failures (a profile's failing tests) or a tooling error block approval
   plan:
     warn_after_rejections: 3  # warn that the task may be too large after N full redos (0 = never)
 ```
@@ -406,8 +506,8 @@ one-time notice and run as `default`.
 ```yaml
 heal:
   max_attempts: 3             # MAX_HEAL_ATTEMPTS — Phase 2.5 fix-loop cap
-  full_suite_fallback: true   # Phase 3: run the whole rspec suite when no spec files changed
-  prompt_log_max_bytes: 60000 # per-log cap on the rubocop/rspec/frontend-lint excerpts in a heal prompt
+  full_suite_fallback: true   # Phase 3: run the whole rspec suite when no spec files changed (rails only)
+  prompt_log_max_bytes: 60000 # per-log cap on the rubocop/rspec/frontend-lint (or a profile's lint/test) excerpts in a heal prompt
 ```
 
 `full_suite_fallback: false` makes Phase 3 consistent with Phase 2.5 (skip rspec, say so) instead
@@ -604,6 +704,8 @@ files**:
 right after the repo root is known; it `eval`s `python -m migite.config env`, which prints one
 `MIGITE_CFG_<KEY>=value` assignment per leaf plus `MIGITE_CFG_MODEL_<ROLE>` for every resolved
 role, then maps them onto the variables the phases already read (`DEV_LOG_BASE`, `LOG_DIR`, ...).
+A `stacks` profile's lists go out one item per line (`MIGITE_CFG_STACKS_NODE_SOURCE`), and
+`MIGITE_CFG_STACKS` names the profiles in the order detection tries them.
 Phases use `cfg <key>`, `prompt_path <name>`, `template_path <name>`, and pass roles, never
 models, to `agent_ask` / `agent_think`. `load_migite_config` also caches the configured agent's
 description as `MIGITE_AGENT_*` (`load_agent_info`).

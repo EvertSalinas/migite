@@ -248,6 +248,21 @@ layers. Detection picks it automatically when there is no `Gemfile`; pass `--sta
 `stack: generic` in the repo's `.migite.yml`) when detection guesses wrong, for example in a
 monorepo with a stray Gemfile.
 
+To have heal and review run the repo's own linter and tests, describe them in a
+[`stacks.<name>` profile](../configuration.md#stacks) in the repo's `.migite.yml`:
+
+```yaml
+stacks:
+  node:
+    detect: [package.json]
+    source: ["*.js", "*.ts"]
+    specs: ["*.test.js", "*.test.ts"]
+    lint: npx eslint {files}
+    test: npx jest {files}
+```
+
+Detection then picks `node` (profiles come before `rails`), and the run's `Stack:` line says so.
+
 ### Resume after stopping
 
 Aborted at a gate, closed the terminal, or came back the next day? Run the same command again:

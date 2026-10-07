@@ -84,6 +84,37 @@ class FrontendReviewerTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class StackLogLabelsTest(unittest.TestCase):
+    """The two tooling logs carry rubocop/rspec output on rails and a stacks.<name>
+    profile's lint/test output otherwise; the reviewer is told which."""
+
+    def setUp(self):
+        self.review = load_tool()
+        self.prompts = []
+
+        def fake_call_agent(prompt, role, label="", schema=None):
+            self.prompts.append(prompt)
+            return types.SimpleNamespace(text="✅ No issues in this dimension.", structured=None)
+        self.review.call_agent = fake_call_agent
+
+    def prompt(self, **overrides):
+        self.review.review_dimension({**state(rubocop_log="LINT OUTPUT", rspec_log="TEST OUTPUT", **overrides),
+                                      "dimension": "correctness", "description": "logic"})
+        return self.prompts[-1]
+
+    def test_rails_logs_are_called_rubocop_and_rspec(self):
+        prompt = self.prompt()
+        self.assertIn("## Rubocop results\nLINT OUTPUT", prompt)
+        self.assertIn("## RSpec results\nTEST OUTPUT", prompt)
+
+    def test_a_stack_profiles_logs_are_called_lint_and_test(self):
+        prompt = self.prompt(stack="node")
+        self.assertIn("## Lint results\nLINT OUTPUT", prompt)
+        self.assertIn("## Test results\nTEST OUTPUT", prompt)
+        self.assertNotIn("Rubocop", prompt)
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
 class TestingPlanToggleTest(unittest.TestCase):
     """review.dimensions.testing_plan: off drops the testing-plan reviewer and tells the verdict why."""
 

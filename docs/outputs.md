@@ -143,6 +143,8 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | `<ts>-<ticket>-heal-rspec.txt` | Heal loop rspec |
 | `<ts>-<ticket>-heal-frontend-lint.txt` | Heal loop erb_lint / eslint, when the diff touches views or JavaScript |
 | `<ts>-<ticket>-frontend-lint.txt` | Phase 3 erb_lint / eslint, when the diff touches views or JavaScript |
+| `<ts>-<ticket>-lint.txt`, `-test.txt` | Phase 3 lint and test output on a [stack profile](./configuration.md#stacks), in place of the rubocop and rspec logs (`-lint-autofix.txt`: its autofix) |
+| `<ts>-<ticket>-heal-lint.txt`, `-heal-test.txt` | Heal loop lint and test output on a stack profile (`-heal-lint-autofix.txt`: its autofix) |
 | `<ts>-<ticket>-heal-fix-N.txt` | Claude's heal output per attempt |
 | `<ts>-<ticket>-critic.txt` | Architecture critic raw output |
 | `<ts>-<ticket>-knowledge.txt` | Raw knowledge extraction |
@@ -171,6 +173,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`lib/gate.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |
+| Tests, Lint | On a [stack profile](./configuration.md#stacks), in place of Specs and Rubocop: passed / clean, failed, not run (with the reason), or could not start, from the commands' exit codes. A command that could not start (exit 126/127) is also the tooling error line |
 | FE lint | erb_lint / eslint result, only when the diff touches views or JavaScript and the repo configures a linter |
 | Browser | The `Result:` line of `browser-check.md`, when the browser check ran |
 | Findings / Reason | From `review.json`: critical / warning / note counts and the one-line reason the verdict was decided. Only shown when the envelope exists (i.e. not after a hand-edit of `review.md`) |

@@ -64,9 +64,9 @@ EXPLORE_AREAS = [
     ("routes_config",      ["config/routes.rb", "config/application.rb", "config/initializers/*.rb"]),
 ]
 
-# Used when --stack generic (no recognized stack profile — see detect_stack in
-# lib/stack.sh): one broad area instead of Rails' MVC-shaped split, since a
-# generic repo has no convention to organize exploration areas around.
+# Used for every stack but rails (generic, and the stacks.<name> profiles - see
+# detect_stack in lib/stack.sh): one broad area instead of Rails' MVC-shaped
+# split, since those repos have no convention to organize exploration areas around.
 _GENERIC_SOURCE_EXTENSIONS = (
     "py", "js", "jsx", "ts", "tsx", "go", "rb", "java", "kt", "rs",
     "c", "cc", "cpp", "h", "hpp", "cs", "php", "swift",
@@ -234,9 +234,10 @@ def repo_has_frontend(repo_root: str) -> bool:
 def frontend_decision(intake: str, repo_root: str, stack: str) -> tuple[bool, str]:
     """(explore the frontend?, why). The intake's `**Frontend:**` answer wins
     both ways; with no answer, the repo decides (repo_has_frontend). The
-    generic stack already globs every source file, JavaScript included."""
-    if stack == "generic":
-        return False, "generic stack"
+    frontend explorer is Rails' Hotwire half: generic and every stacks.<name>
+    profile already glob every source file, JavaScript included."""
+    if stack != "rails":
+        return False, f"{stack} stack"
     answer = intake_frontend(intake)
     if answer:
         return answer == "yes", f"intake says {answer}"
@@ -427,7 +428,8 @@ def load_context(state: PlanState) -> dict:
 
 
 def route_to_explorers(state: PlanState) -> list[Send]:
-    areas = GENERIC_EXPLORE_AREAS if state.get("stack") == "generic" else list(EXPLORE_AREAS)
+    # Rails' MVC split only fits rails; generic and stacks.<name> profiles get one broad area.
+    areas = list(EXPLORE_AREAS) if state.get("stack", "rails") == "rails" else list(GENERIC_EXPLORE_AREAS)
     if state.get("frontend"):
         areas.append(FRONTEND_EXPLORE_AREA)
     print(f"  ▶ Fanning out {len(areas)} explorers in parallel (stack={state.get('stack', 'rails')})", flush=True)
@@ -924,7 +926,7 @@ def main() -> None:
     frontend, frontend_source = frontend_decision(intake, args.repo_root, args.stack)
 
     print(f"  migite-plan | base branch: {base_branch}", flush=True)
-    if args.stack != "generic":
+    if args.stack == "rails":
         print(f"  migite-plan | frontend: {'explored' if frontend else 'skipped'} ({frontend_source})", flush=True)
     if audit:
         print(f"  migite-plan | audit context loaded ({len(audit)} chars)", flush=True)

@@ -31,7 +31,7 @@ migite/                       ← wherever you clone this repo
 ├── lib/                      ← bash, sourced by bin/*; one file per concern, sharing the entrypoint's variables
 │   ├── common.sh             ← colours, log/warn/error, notify, Python resolution + preflights, PYTHONPATH
 │   ├── config.sh             ← load_migite_config, load_agent_info, cfg / prompt_path, use_tmux, `migite config`
-│   ├── stack.sh              ← stack profiles, bundle_exec, rubocop/rspec, changed-file lists, base branch
+│   ├── stack.sh              ← stack detection, bundle_exec, rubocop/rspec, stacks.<name> profile commands, changed-file lists, base branch
 │   ├── agent.sh              ← agent_ask / agent_think / run_phase / spawn_langgraph, usage ledger
 │   ├── vault.sh              ← slugify, stamp_file / sync_artifact / sync_json, resume_from_vault
 │   ├── intake.sh             ← attachments block, knowledge injection, fill_intake_field

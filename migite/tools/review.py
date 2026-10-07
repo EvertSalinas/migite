@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # migite.tools.review (migite-review) — autonomous LangGraph review agent
 #
-# Reads plan.md, any amendments, implementation notes, rubocop/rspec logs, and git diff.
+# Reads plan.md, any amendments, implementation notes, rubocop/rspec logs (a stack
+# profile's lint/test logs, with --stack <name>), and git diff.
 # Fans out 4 parallel specialist reviewers (3 with review.dimensions.testing_plan
 # off, 5 when the diff touches views or JavaScript: see FRONTEND_DIMENSION), has
 # a second agent try to disprove their
@@ -158,6 +159,12 @@ def amendments_block(amendments: list[str], limit: int) -> str:
             f"the amendment wins)\n{body}\n")
 
 
+def log_labels(stack: str) -> tuple[str, str]:
+    """What the two tooling logs are called in a prompt. migite passes rails' rubocop and
+    rspec output, or a stack profile's lint and test output, in the same two arguments."""
+    return ("Rubocop", "RSpec") if stack == "rails" else ("Lint", "Test")
+
+
 CARRIED_NOTE = "(not re-run: clean in the previous review, and nothing it checks was flagged)"
 
 
@@ -235,6 +242,7 @@ class ReviewState(TypedDict):
     implementation: str
     rubocop_log: str
     rspec_log: str
+    stack: str                  # rails, generic or a stacks.<name> profile: names the two logs
     git_diff: str
     repo_root: str
     base_branch: str
@@ -263,6 +271,7 @@ class DimensionInput(TypedDict):
     implementation: str
     rubocop_log: str
     rspec_log: str
+    stack: str
     git_diff: str
     testing_plan: str
     frontend_files: list[str]
@@ -309,6 +318,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
             "implementation": state["implementation"],
             "rubocop_log": state["rubocop_log"],
             "rspec_log": state["rspec_log"],
+            "stack": state.get("stack", "rails"),
             "git_diff": state["git_diff"],
             "testing_plan": state["testing_plan"],
             "frontend_files": state.get("frontend_files", []),
@@ -345,6 +355,7 @@ def review_dimension(state: DimensionInput) -> dict:
                  f"whenever a claim needs it, and no more: each costs time and tokens.\n"
                  if dim in verify.SKIP_DIMENSIONS else
                  verify.GROUNDING + "\nEach file you open costs time and tokens: open what a claim needs, no more.")
+    lint_label, test_label = log_labels(state.get("stack", "rails"))
     prompt = f"""You are a senior Rails engineer doing a focused code review.
 Your dimension: **{dim}**
 
@@ -359,10 +370,10 @@ Criteria: {state['description']}
 ## Git diff (first 10k chars)
 {state['git_diff'][:10000]}
 
-## Rubocop results
+## {lint_label} results
 {state['rubocop_log'][:1500]}
 
-## RSpec results
+## {test_label} results
 {state['rspec_log'][:1500]}
 
 Review for **{dim}** only. Report each finding as a block:
@@ -438,6 +449,7 @@ def synthesize_verdict(state: ReviewState) -> dict:
     print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
     findings_text = "\n\n".join(reviewed(state))
     refuted = state.get("refuted") or []
+    lint_label, test_label = log_labels(state.get("stack", "rails"))
     base_prompt = f"""## Review format
 {state['review_cmd']}
 
@@ -447,10 +459,10 @@ def synthesize_verdict(state: ReviewState) -> dict:
 ## Specialist findings
 {findings_text}
 
-## Rubocop
+## {lint_label}
 {state['rubocop_log'][:800]}
 
-## RSpec
+## {test_label}
 {state['rspec_log'][:800]}
 {synth_frontend_block(state)}{synth_testing_plan_block(state)}
 Synthesise these findings into a single review document following the format above.
@@ -588,6 +600,7 @@ def main() -> None:
     ap.add_argument("--review-output",   required=True)
     ap.add_argument("--sentinel",        required=True)
     ap.add_argument("--base-branch",     default=None, help="Branch to diff against (default: auto-detect origin/HEAD, then main/master/develop)")
+    ap.add_argument("--stack",           default="rails", help="Detected stack (rails, generic or a stacks.<name> profile): names the two logs")
     ap.add_argument("--testing-plan",    default="", help="Path to testing-plan.md (optional)")
     ap.add_argument("--frontend-files",  default="", help="Space-separated changed views/JS; adds the frontend reviewer (optional)")
     ap.add_argument("--frontend-lint-log", default="", help="Path to the erb_lint/eslint log (optional)")
@@ -656,6 +669,7 @@ def main() -> None:
             "implementation": implementation,
             "rubocop_log": rubocop_log,
             "rspec_log": rspec_log,
+            "stack": args.stack,
             "git_diff": "",
             "repo_root": args.repo_root,
             "base_branch": base_branch,

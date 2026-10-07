@@ -151,6 +151,18 @@ When the diff touches views or JavaScript, the loop also autofixes them with erb
 `tooling_failed` puts down to the toolchain (no browser for system specs, DB down) are never sent
 to the agent: changing application code can't fix a missing Chrome.
 
+**On a [stack profile](./configuration.md#stacks)** (`stacks.<name>`) the loop is the same, with
+the profile's commands in place of rubocop and rspec (`run_stack_heal_loop`):
+
+1. `autofix`, then `lint`, run over the changed files the `source` globs select.
+2. `test` runs over the files the `specs` globs select.
+3. Exit codes decide pass or fail.
+
+Only a lint or test that failed goes to the agent, each log capped by
+`heal.prompt_log_max_bytes`. A command that could not start (exit 126 or 127: not installed, not
+executable) is never sent; Phase 3 reports it as a tooling error. A profile has no `tooling_failed`
+patterns and no frontend linters.
+
 <a id="lint-test-selection"></a>
 ### Which files get linted and tested
 
@@ -196,10 +208,20 @@ Phase 3 and the commit-gate re-checks still run the whole rspec suite when no sp
 the pre-config behaviour. Set it to `false` in `.migite.yml` to make Phase 3 consistent with Phase
 2.5 (skip rspec and say so); the full suite needs a live DB and verifies nothing about the diff.
 
+**A stack profile picks its files with globs.** On a [`stacks.<name>`](./configuration.md#stacks)
+profile, `changed_stack_files` filters `changed_all_files` by the profile's `source` globs (for
+autofix and lint) and `specs` globs (for test). Only the globs come from the profile; the list
+underneath is the same tracked-plus-untracked, no-deletes, no-`scratchpad/` list. A command whose
+list is empty doesn't run, and says so (`Skipped: ...`), in every phase alike: a profile has no
+full-suite fallback, because a test command without `{files}` already is the whole suite.
+
 <a id="phase-3-review"></a>
 ### Phase 3 — Review (LangGraph)
 
-`migite-review` runs after the authoritative rubocop and rspec pass. With `plan.testing_plan_when: review`, Phase 3 first writes `testing-plan.md` from `plan.md` and the diff (`ensure_testing_plan`), so the browser check and the `testing_plan` reviewer below read a testing plan that describes what was built; an existing one is kept, and a failed call only warns. See [configuration](./configuration.md#plan).
+`migite-review` runs after the authoritative rubocop and rspec pass (on a
+[stack profile](./configuration.md#stacks), the profile's autofix, lint and test, run by
+`run_stack_review_checks` and decided by exit code; the reviewers see them as the lint and test
+results, and the gate banner shows `Lint:` and `Tests:` lines). With `plan.testing_plan_when: review`, Phase 3 first writes `testing-plan.md` from `plan.md` and the diff (`ensure_testing_plan`), so the browser check and the `testing_plan` reviewer below read a testing plan that describes what was built; an existing one is kept, and a failed call only warns. See [configuration](./configuration.md#plan).
 
 
 ```

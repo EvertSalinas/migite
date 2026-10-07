@@ -220,7 +220,9 @@ a fallback path. The vault is plain markdown at `~/dev-log` by default; point `v
 Obsidian vault if you want the `[[wikilinks]]` to resolve.
 
 Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down; anything else is
-`generic`, which runs the whole pipeline minus lint and tests. See
+`generic`, which runs the whole pipeline minus lint and tests. A node, python or go repo gets its
+own lint and tests from a [`stacks.<name>` profile](./docs/configuration.md#stacks) in the config:
+detect files, commands, and the globs that pick each command's changed files. See
 [`--stack`](./docs/migite.md#stack-values).
 
 ---
@@ -289,7 +291,7 @@ feedback belongs in Issues, where it can be discussed and tracked.
 
 Roughly in the order they are likely to land:
 
-- **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
+- **Stack-aware audit and PR review.** [Stack profiles](./docs/configuration.md#stacks) run a non-Rails repo's lint and tests in heal and review; `migite-audit` and `migite-pr-review` still use Rails-only checklists, and should key them by stack.
 - **`--yes`, a non-interactive mode** so migite can run from CI or from another agent. The run manifest it builds on is in: every run writes `run.json` at each phase boundary and resumes from it ([docs/migite.md](./docs/migite.md#resuming-a-run)).
 - **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
 - **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.

@@ -2,8 +2,8 @@
 # lib/gate.sh - the human gates: banner, review verdict, commit context.
 #
 # Reads the run's globals (REVIEW_FILE, RSPEC_LOG, RUBOCOP_FINAL_*, TOOLING_ERROR,
-# FRONTEND_LINT_LOG, FRONTEND_LINT_DIRTY, BROWSER_CHECK_FILE) at call time;
-# sets $GATE_CHOICE.
+# FRONTEND_LINT_LOG, FRONTEND_LINT_DIRTY, BROWSER_CHECK_FILE, and for a stack
+# profile STACK_LINT_RESULT / STACK_TEST_RESULT) at call time; sets $GATE_CHOICE.
 
 # read_gate_choice <banner-line> <prompt-text> — sets $GATE_CHOICE
 # Prints the standard gate banner then reads one line of input. Must be called
@@ -102,8 +102,23 @@ show_commit_context() {
     fi
   fi
 
+  # A stack profile's lint and tests, decided by exit code (run_stack_review_checks
+  # in lib/phases/review.sh); the Specs / Rubocop lines below are Rails' patterns.
+  if [[ -n "${STACK_TEST_RESULT:-}${STACK_LINT_RESULT:-}" ]]; then
+    case "${STACK_TEST_RESULT:-}" in
+      failed)      echo -e "  Tests:   ${RED}${BOLD}⚠ failed - check $RSPEC_LOG before approving${RESET}" ;;
+      unavailable) echo -e "  Tests:   ${RED}${BOLD}⚠ could not start - see the tooling error above${RESET}" ;;
+      skipped)     echo -e "  Tests:   ${YELLOW}not run ($(head -1 "$RSPEC_LOG" 2>/dev/null | sed 's/^Skipped: //'))${RESET}" ;;
+      passed)      echo -e "  Tests:   ${GREEN}passed${RESET}" ;;
+    esac
+    case "${STACK_LINT_RESULT:-}" in
+      failed)      echo -e "  Lint:    ${RED}${BOLD}problems remain - check $RUBOCOP_LOG${RESET}" ;;
+      unavailable) echo -e "  Lint:    ${RED}${BOLD}⚠ could not start - see the tooling error above${RESET}" ;;
+      skipped)     echo -e "  Lint:    ${YELLOW}not run ($(head -1 "$RUBOCOP_LOG" 2>/dev/null | sed 's/^Skipped: //'))${RESET}" ;;
+      passed)      echo -e "  Lint:    ${GREEN}clean${RESET}" ;;
+    esac
   # Spec failures / tooling failures (via tooling_failed — one pattern list)
-  if [[ -f "${RSPEC_LOG:-}" ]]; then
+  elif [[ -f "${RSPEC_LOG:-}" ]]; then
     local failure_line spec_tooling_msg
     failure_line=$(grep -oE '[1-9][0-9]* failure[s]?' "$RSPEC_LOG" | head -1 || echo "")
     if [[ -n "$failure_line" ]]; then
@@ -117,8 +132,10 @@ show_commit_context() {
     fi
   fi
 
-  # Rubocop post-review state
-  if [[ -n "${RUBOCOP_FINAL_OFFENSES:-}" && "${RUBOCOP_FINAL_OFFENSES}" != "0" ]]; then
+  # Rubocop post-review state (a stack profile's lint is shown above)
+  if [[ -n "${STACK_TEST_RESULT:-}${STACK_LINT_RESULT:-}" ]]; then
+    :
+  elif [[ -n "${RUBOCOP_FINAL_OFFENSES:-}" && "${RUBOCOP_FINAL_OFFENSES}" != "0" ]]; then
     echo -e "  Rubocop: ${RED}${BOLD}$RUBOCOP_FINAL_OFFENSES offense(s) remain${RESET}"
   elif [[ -n "${RUBOCOP_FINAL_LOG:-}" && -f "$RUBOCOP_FINAL_LOG" ]]; then
     echo -e "  Rubocop: ${GREEN}clean${RESET}"

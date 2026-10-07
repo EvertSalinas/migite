@@ -94,7 +94,8 @@ Task options:
   --audit <report.md>     generate a remediation task from a migite-audit report
   --attach <file>         fold a file into the planner's context (repeatable)
   --staged                one implement session per Scope sub-section, with a checkpoint between
-  --stack <stack>         rails | generic (default: detected from the repo)
+  --stack <stack>         rails | generic | a stacks.<name> profile from the config
+                          (default: detected from the repo)
   --resume [run.json]     continue an interrupted run from its run manifest; without a
                           file, the newest unfinished run (or the one the options above name)
 
@@ -408,9 +409,14 @@ trap _migite_exit EXIT
 # directory holding the Gemfile, which isn't always $REPO_ROOT (e.g. a
 # rails-app/ subdirectory one level down). bundle exec always runs from
 # $APP_ROOT via the bundle_exec/run_rubocop_check/run_rspec_check helpers,
-# regardless of where migite itself was invoked from.
+# regardless of where migite itself was invoked from. A stacks.<name> profile
+# runs its configured commands from the repo root instead.
 detect_stack
-log "Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+if stack_is_profile; then
+  log "Stack: $STACK (stacks.$STACK profile${STACK_DETECTED_BY:+, matched $STACK_DETECTED_BY}) - app dir: ${APP_REL_PATH:-.}"
+else
+  log "Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+fi
 [[ "$STACK" == "rails" ]] && require_cmd bundle
 
 log "Repo: $ORG/$REPO_NAME"

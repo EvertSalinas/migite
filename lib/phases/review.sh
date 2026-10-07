@@ -27,7 +27,48 @@
 # When $STACK == "generic" (no recognized stack profile matched — see
 # detect_stack in lib/stack.sh), rubocop/rspec are skipped entirely, both here
 # and in the commit-gate re-run loop; the LangGraph review still runs against
-# the plan + diff, just without tooling logs.
+# the plan + diff, just without tooling logs. A configured profile
+# (stacks.<name>) runs its own lint and test commands instead
+# (run_stack_review_checks), into the same RUBOCOP_LOG / RSPEC_LOG variables.
+
+# run_stack_review_checks - Phase 3's lint and tests for a configured profile:
+# autofix then lint over the changed files the profile's `source` globs select,
+# then the test command over its `specs` matches (lib/stack.sh run_stack_lint /
+# run_stack_test). Exit codes decide; one that could not start (126/127) sets
+# TOOLING_ERROR rather than reading as a failure. Writes RUBOCOP_LOG and
+# RSPEC_LOG, the names every later reader takes, and sets STACK_LINT_RESULT /
+# STACK_TEST_RESULT (passed | failed | skipped | unavailable) for the gate.
+run_stack_review_checks() {
+  local rc
+  TOOLING_ERROR=""
+  echo ""
+  log "Running the $STACK lint on changed files..."
+  rc=0
+  run_stack_lint "$BASE_BRANCH" "$RUBOCOP_LOG" true || rc=$?
+  STACK_LINT_RESULT=$(stack_check_result "$rc" "$RUBOCOP_LOG")
+  case "$STACK_LINT_RESULT" in
+    passed)  success "Lint clean" ;;
+    failed)  warn "Lint problems remain after autofix (exit $rc); the review will address them" ;;
+    skipped) warn "$(head -1 "$RUBOCOP_LOG")" ;;
+    unavailable)
+      TOOLING_ERROR="The $STACK lint could not start (exit $rc): $(cfg "stacks.$STACK.lint")"
+      warn "$TOOLING_ERROR" ;;
+  esac
+  echo ""
+  log "Running the $STACK tests on changed files..."
+  rc=0
+  run_stack_test "$BASE_BRANCH" "$RSPEC_LOG" || rc=$?
+  STACK_TEST_RESULT=$(stack_check_result "$rc" "$RSPEC_LOG")
+  case "$STACK_TEST_RESULT" in
+    passed)  success "Tests passed" ;;
+    failed)  warn "Tests failed (exit $rc)" ;;
+    skipped) warn "$(head -1 "$RSPEC_LOG")" ;;
+    unavailable)
+      TOOLING_ERROR="${TOOLING_ERROR:-The $STACK tests could not start (exit $rc): $(cfg "stacks.$STACK.test")}"
+      warn "The $STACK tests could not start (exit $rc)" ;;
+  esac
+  return 0
+}
 
 # ensure_testing_plan - plan.testing_plan_when: review. migite-plan left testing-plan.md
 # out; this writes it from plan.md and the change as built, before the browser check and
@@ -154,6 +195,12 @@ run_review() {
   BROWSER_CHECK_FILE="$SCRATCHPAD_DIR/browser-check.md"
   CHANGED_FRONTEND=""
   FRONTEND_LINT_DIRTY=false
+  STACK_LINT_RESULT=""
+  STACK_TEST_RESULT=""
+  if stack_is_profile; then
+    RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-lint.txt"
+    RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-test.txt"
+  fi
   local RUBOCOP_FINAL_LOG=""
 
   # One frontend lint sweep over $CHANGED_FRONTEND (autofix and check in the
@@ -186,6 +233,10 @@ run_review() {
     CHANGED_SPECS=""
     echo "Generic stack — no lint tooling configured." > "$RUBOCOP_LOG"
     echo "Generic stack — no test tooling configured." > "$RSPEC_LOG"
+  elif stack_is_profile; then
+    CHANGED_RUBY=""
+    CHANGED_SPECS=""
+    run_stack_review_checks
   else
     echo ""
     log "Running rubocop on changed Ruby files..."
@@ -282,6 +333,7 @@ run_review() {
     --review-output    "$REVIEW_FILE"
     --sentinel         "$REVIEW_SENTINEL"
     --base-branch      "$BASE_BRANCH"
+    --stack            "$STACK"
   )
   # Amendments are approved scope; the reviewer needs the ones plan.md doesn't
   # reflect yet (this run's, until Phase 3.8 folds it in, and any whose fold was
@@ -366,6 +418,9 @@ run_review() {
       log "Generic stack — no lint/test tooling to re-run"
       CHANGED_RUBY=""
       CHANGED_SPECS=""
+    elif stack_is_profile; then
+      log "Re-running checks..."
+      run_stack_review_checks
     else
       log "Re-running checks..."
       CHANGED_RUBY=$(changed_ruby_files "$BASE_BRANCH")
@@ -428,6 +483,17 @@ run_review() {
   _commit_gate_blockers() {
     local -a b=()
     [[ "$(review_verdict "$REVIEW_FILE")" == "needs_fixes" ]] && b+=("review verdict is NEEDS FIXES")
+    if stack_is_profile; then
+      # Exit codes, not log patterns (run_stack_review_checks).
+      if [[ "$(cfg gates.commit.require_green_specs true)" == "true" ]]; then
+        [[ -n "${TOOLING_ERROR:-}" ]] && b+=("tooling error: $TOOLING_ERROR")
+        [[ "${STACK_TEST_RESULT:-}" == "failed" ]] && b+=("tests failed ($STACK)")
+      fi
+      [[ "$(cfg gates.commit.require_clean_lint true)" == "true" && "${STACK_LINT_RESULT:-}" == "failed" ]] \
+        && b+=("lint problems remain ($STACK)")
+      [[ ${#b[@]} -gt 0 ]] && printf '%s\n' "${b[@]}"
+      return 0
+    fi
     if [[ "$(cfg gates.commit.require_green_specs true)" == "true" ]]; then
       [[ -n "${TOOLING_ERROR:-}" ]] && b+=("tooling error: $TOOLING_ERROR")
       local fl

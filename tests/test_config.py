@@ -227,10 +227,10 @@ class PrecedenceTest(_Isolated):
 
 class ValidationTest(_Isolated):
     def test_unknown_key_is_a_warning_not_an_error(self):
-        self.write_repo({"stacks": {"node": {}}, "models": {"strong": "x"}})
+        self.write_repo({"extras": {"node": {}}, "models": {"strong": "x"}})
         cfg = self.load()
         self.assertEqual(len(cfg.warnings), 1)
-        self.assertIn("stacks.node", cfg.warnings[0])
+        self.assertIn("extras.node", cfg.warnings[0])
         self.assertEqual(cfg.get("models.strong"), "x")
 
     def test_invalid_enum_is_an_error(self):
@@ -529,6 +529,109 @@ class KnowledgeSelectConfigTest(_Isolated):
         with self.assertRaises(config.ConfigError) as cm:
             self.load()
         self.assertIn("knowledge.select", str(cm.exception))
+
+
+class StacksConfigTest(_Isolated):
+    """stacks.<name>: a non-Rails repo's lint and test commands as data (lib/stack.sh)."""
+
+    NODE = {"detect": ["package.json"], "source": ["*.js"], "specs": ["*.test.js"],
+            "autofix": "npx eslint --fix {files}", "lint": "npx eslint {files}", "test": "npx jest {files}"}
+
+    def assertConfigError(self, data: dict, *fragments: str):
+        self.write_repo(data)
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        for fragment in fragments:
+            self.assertIn(fragment, str(cm.exception))
+
+    def test_no_profiles_by_default_so_detection_is_rails_or_generic_as_before(self):
+        cfg = self.load()
+        self.assertEqual(cfg.get("stacks"), {})
+        self.assertEqual(cfg.stack_names(), [])
+        self.assertIn("MIGITE_CFG_STACKS=''", config.to_shell(cfg))
+
+    def test_a_profile_is_read_with_its_globs_as_lists(self):
+        self.write_repo({"stacks": {"node": dict(self.NODE, detect="package.json")}})
+        cfg = self.load()
+        self.assertEqual(cfg.warnings, [])
+        self.assertEqual(cfg.stack_names(), ["node"])
+        self.assertEqual(cfg.get("stacks.node.detect"), ["package.json"])  # one string is a one-item list
+        self.assertEqual(cfg.get("stacks.node.lint"), "npx eslint {files}")
+
+    def test_shell_export_puts_one_glob_per_line_and_names_the_profiles(self):
+        self.write_repo({"stacks": {"node": dict(self.NODE, source=["*.js", "src/**/*.ts"]),
+                                    "py": {"detect": ["pyproject.toml"], "test": "pytest {files}"}}})
+        out = config.to_shell(self.load())
+        self.assertIn("MIGITE_CFG_STACKS='node py'", out)
+        self.assertIn("MIGITE_CFG_STACKS_NODE_SOURCE='*.js\nsrc/**/*.ts'", out)
+        self.assertIn("MIGITE_CFG_STACKS_NODE_TEST='npx jest {files}'", out)
+        rc = subprocess.run(["bash", "-euc", out + '\n[[ "$MIGITE_CFG_STACKS_NODE_SOURCE" == *$\'\\n\'* ]]'],
+                            capture_output=True, text=True)
+        self.assertEqual(rc.returncode, 0, rc.stderr)
+
+    def test_files_merge_field_by_field_and_the_repo_profiles_are_tried_first(self):
+        self.write_user({"stacks": {"py": {"detect": ["pyproject.toml"], "test": "pytest"},
+                                    "node": {"lint": "user-lint", "test": "user-test"}}})
+        self.write_repo({"stacks": {"node": {"detect": ["package.json"], "test": "repo-test"}}})
+        cfg = self.load()
+        self.assertEqual(cfg.stack_names(), ["node", "py"])
+        self.assertEqual(cfg.get("stacks.node.lint"), "user-lint")
+        self.assertEqual(cfg.get("stacks.node.test"), "repo-test")
+        self.assertEqual(cfg.source("stacks.node.test"), str(self.repo / ".migite.json"))
+
+    def test_stack_can_name_a_profile_but_nothing_unknown(self):
+        self.write_repo({"stack": "node", "stacks": {"node": self.NODE}})
+        self.assertEqual(self.load().get("stack"), "node")
+        self.assertConfigError({"stack": "nope", "stacks": {"node": self.NODE}}, "stack must be one of", "node", "nope")
+
+    def test_a_blank_stack_is_still_auto_detection(self):
+        self.write_repo({"stack": None})
+        self.assertIn("MIGITE_CFG_STACK=''", config.to_shell(self.load()))
+
+    def test_migite_stack_env_is_checked_the_same_way(self):
+        os.environ["MIGITE_STACK"] = "nope"
+        self.assertConfigError({}, "stack must be one of", "env:MIGITE_STACK")
+
+    def test_built_in_stacks_cannot_be_redefined(self):
+        for name in ("rails", "generic", "auto"):
+            self.assertConfigError({"stacks": {name: {"test": "x"}}}, f"stacks.{name}", "built in")
+
+    def test_a_name_must_map_onto_a_shell_variable(self):
+        self.assertConfigError({"stacks": {"Node-App": {"test": "x"}}}, "stacks.Node-App", "lowercase")
+
+    def test_a_profile_needs_a_command(self):
+        self.assertConfigError({"stacks": {"node": {"detect": ["package.json"]}}}, "stacks.node", "no lint, autofix or test")
+
+    def test_wrong_types_are_errors_naming_the_key(self):
+        self.assertConfigError({"stacks": {"node": {"test": ["npx", "jest"]}}}, "stacks.node.test", "command string")
+        self.assertConfigError({"stacks": {"node": {"test": "x", "source": [1]}}}, "stacks.node.source", "list of paths")
+        self.assertConfigError({"stacks": {"node": {"test": {"cmd": "x"}}}}, "stacks.node.test", "command string")
+        self.assertConfigError({"stacks": {"node": "npx jest"}}, "stacks.node", "must be a mapping")
+        self.assertConfigError({"stacks": ["node"]}, "stacks must be a mapping")
+
+    def test_an_unknown_field_or_an_empty_profile_is_a_warning(self):
+        self.write_repo({"stacks": {"node": dict(self.NODE, tests="typo"), "py": {}}})
+        cfg = self.load()
+        self.assertEqual(len(cfg.warnings), 2, cfg.warnings)
+        self.assertIn("stacks.node.tests", cfg.warnings[0])
+        self.assertIn("stacks.py", cfg.warnings[1])
+        self.assertEqual(cfg.stack_names(), ["node"])
+
+    @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+    def test_the_starter_templates_node_example_loads_when_uncommented(self):
+        lines = config.STARTER_TEMPLATE.splitlines()
+        start = lines.index(next(line for line in lines if line.startswith("# stacks:")))
+        block = []
+        for line in lines[start:]:
+            if not line.startswith("#"):
+                break
+            block.append(line[2:])
+        (self.repo / ".migite.yml").write_text("\n".join(block) + "\n")
+        cfg = self.load()
+        self.assertEqual(cfg.warnings, [])
+        self.assertEqual(cfg.stack_names(), ["node"])
+        self.assertEqual(cfg.get("stacks.node.source"), ["*.js", "*.ts"])
+        self.assertIn("{files}", cfg.get("stacks.node.test"))
 
 
 if __name__ == "__main__":
