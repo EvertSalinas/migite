@@ -276,9 +276,14 @@ sibling; `--name` is exact-match-only).
 <a id="migite-audit"></a>
 ### `migite-audit`
 
-Audits an existing codebase for architectural problems. Runs 7 parallel specialist auditors
-(models, controllers, services, serializers, jobs, migrations, `schema_indexes`), synthesises
-findings ranked by severity, and writes an audit report to the vault.
+Audits an existing codebase for architectural problems. Runs one specialist auditor per area in
+parallel, synthesises findings ranked by severity, and writes an audit report to the vault. The
+areas, their files and their checks come from the stack's [checklist](./configuration.md#checklists):
+on rails, 7 layers (models, controllers, services, serializers, jobs, migrations,
+`schema_indexes`); on generic and on a [stack profile](./configuration.md#stacks) without a
+checklist of its own, 5 language-neutral lenses over the source files (security, data access,
+error handling, design, tests). The stack is picked the way `migite` picks it: `--stack`, then
+`stack:` in the config, then detection.
 
 ```bash
 # Full audit — writes to ~/dev-log/<org>/<repo>/audit-<date>.md
@@ -293,6 +298,9 @@ migite-audit --jira <jira-ticket-id>
 
 # Write to a specific file
 migite-audit --output ./audit.md
+
+# Audit with another stack's checklist
+migite-audit --stack generic
 ```
 
 `--focus` matches area names by case-insensitive substring — `--focus schema` or `--focus indexes`
@@ -322,9 +330,13 @@ alongside any other run already using that ticket folder.
 Reviews a teammate's PR using a local branch. Diffs the branch against the merge-base with a base
 branch (`git diff base...branch` — only the branch's own commits, not everything on base since
 divergence), runs rubocop and rspec on changed files (optional), then fans out 4 parallel
-specialist reviewers (correctness, security, test coverage, conventions & migrations — the fourth
-dimension's checklist is migration-heavy: missing `NOT NULL` defaults, reversibility, missing
-`add_index`, non-idempotent jobs). Produces a review with a clear APPROVED / APPROVED WITH
+specialist reviewers (correctness, security, test coverage, conventions & migrations — on rails the
+fourth dimension's checklist is migration-heavy: missing `NOT NULL` defaults, reversibility, missing
+`add_index`, non-idempotent jobs). What each reviewer checks comes from the stack's
+[checklist](./configuration.md#checklists), picked like `migite` picks it (`--stack`, then `stack:`,
+then detection). On a [stack profile](./configuration.md#stacks) it runs the profile's lint (no
+autofix) and tests over the files changed since the branch left its base, instead of rubocop and
+rspec; on generic it runs neither. Produces a review with a clear APPROVED / APPROVED WITH
 COMMENTS / NEEDS CHANGES verdict. The branch must be checked out locally — it errors if the diff
 comes back empty, which is the common failure mode when reviewing someone else's unfetched
 branch. A single reviewer dimension failing doesn't crash the run; it's downgraded to a synthetic
@@ -343,8 +355,11 @@ migite-pr-review --branch feature/<jira-ticket-id> --jira https://yourcompany.at
 # Different base branch
 migite-pr-review --branch alex/fix-n-plus-one --base develop
 
-# Skip rubocop + rspec (use when reviewing unfamiliar code or flaky test suite)
+# Skip the lint and tests (use when reviewing unfamiliar code or flaky test suite)
 migite-pr-review --branch feature/big-refactor --skip-tests
+
+# Review with another stack's checklist
+migite-pr-review --branch feature/x --stack generic
 
 # Write to a specific file
 migite-pr-review --branch feature/<jira-ticket-id> --output ./review.md

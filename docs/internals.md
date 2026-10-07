@@ -62,6 +62,7 @@ migite/                       ← wherever you clone this repo
 │   ├── keywords.py           ← extract_keywords: the task words migite-plan's explorers and knowledge.py match on
 │   ├── testing_plan.py       ← the testing-plan.md prompt shared by migite-plan and Phase 3, and a CLI bash calls (no langgraph)
 │   ├── verify.py             ← evidence gate and refuter for reviewer findings, shared by review.py and pr_review.py
+│   ├── checklists.py         ← loads prompts/checklists/<stack>.md, with prompts.dir overrides by section
 │   └── tools/                ← the LangGraph tools
 │       ├── plan.py           ← the planner ("migite-plan"), called by Phase 1
 │       ├── review.py         ← the reviewer ("migite-review"), called by Phase 3
@@ -71,6 +72,7 @@ migite/                       ← wherever you clone this repo
 │       └── pr_review.py      ← behind bin/migite-pr-review
 ├── evals/                    ← promptfoo setup that calibrates the refuter against labeled findings (README.md); offline, not part of the package
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
+│   └── checklists/           ← rails.md, generic.md: what migite-review, migite-pr-review and migite-audit check, per stack
 ├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
 ├── tests/                    ← run.sh (bash suite), test_*.py (unittest, incl. the adapter contract), fake CLIs per agent, fixtures/
 ├── docs/                     ← this directory, plus improvements.md (the self-improvement log, appended by Phase 4.5)

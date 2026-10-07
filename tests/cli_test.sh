@@ -26,6 +26,8 @@ help_ok "migite-explore --help"     "--from-exploration <file>"           bash "
 help_ok "migite-blueprint --help"   "--from-blueprint <file>"             bash "$MIGITE_HOME/bin/migite-blueprint" --help
 help_ok "migite-audit --help"       "--focus <area>"                      bash "$MIGITE_HOME/bin/migite-audit" --help
 help_ok "migite-pr-review -h"       "--branch <branch>"                   bash "$MIGITE_HOME/bin/migite-pr-review" -h
+help_ok "migite-audit --help: --stack picks the checklist"     "--stack <stack>" bash "$MIGITE_HOME/bin/migite-audit" --help
+help_ok "migite-pr-review --help: --stack picks the checklist" "--stack <stack>" bash "$MIGITE_HOME/bin/migite-pr-review" --help
 
 # every flag the entrypoint parses is in its help
 flags=$(grep -oE '^    --[a-z-]+\)' "$MIGITE_HOME/bin/migite" | tr -d ' )' | sort -u)

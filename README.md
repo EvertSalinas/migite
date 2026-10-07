@@ -291,7 +291,6 @@ feedback belongs in Issues, where it can be discussed and tracked.
 
 Roughly in the order they are likely to land:
 
-- **Stack-aware audit and PR review.** [Stack profiles](./docs/configuration.md#stacks) run a non-Rails repo's lint and tests in heal and review; `migite-audit` and `migite-pr-review` still use Rails-only checklists, and should key them by stack.
 - **`--yes`, a non-interactive mode** so migite can run from CI or from another agent. The run manifest it builds on is in: every run writes `run.json` at each phase boundary and resumes from it ([docs/migite.md](./docs/migite.md#resuming-a-run)).
 - **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
 - **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.

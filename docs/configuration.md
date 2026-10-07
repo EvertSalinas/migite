@@ -23,6 +23,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [plan](#plan)
   - [review](#review)
   - [prompts, templates](#prompts)
+    - [checklists](#checklists)
   - [budget](#budget)
   - [ui](#ui)
 - [Environment variables](#env)
@@ -416,6 +417,9 @@ through the same capped excerpt as rubocop and rspec (`heal.prompt_log_max_bytes
 - `heal.full_suite_fallback` (a test command without `{files}` already is the whole suite)
 - the `frontend` linters and reviewer
 
+What the reviewers and `migite-audit` check on a profile comes from `prompts/checklists/generic.md`
+until you give the profile its own [checklist](#checklists) (`checklists/<name>.md` in `prompts.dir`).
+
 More examples:
 
 ```yaml
@@ -612,9 +616,10 @@ templates:
 ```
 
 Any `<dir>/<name>.md` overrides the same-named file under migite's `prompts/`
-(`plan`, `implement`, `review`, `architecture_critic`) or `templates/` (`feature`, `bug`,
-`refactor`, `spike`, `config`, `commit`). Files not present in the override dir fall back to the
-repo copies, so you can override just the PR-description prompt for one project.
+(`plan`, `implement`, `review`, `architecture_critic`, and the per-stack
+[checklists](#checklists)) or `templates/` (`feature`, `bug`, `refactor`, `spike`, `config`,
+`commit`). Files not present in the override dir fall back to the repo copies, so you can override
+just the PR-description prompt for one project.
 
 The directory may be relative (anchored at the repo root) or absolute, and may contain **`{org}`**
 and **`{repo}`**, substituted with the vault org and the repo name. That makes a single user-level
@@ -635,6 +640,55 @@ templates:
 
 The generic `templates/commit.md` shipped with migite has no company-specific checklist items; a
 team's own PR template belongs in an override like the one above.
+
+<a id="checklists"></a>
+#### Checklists: what the reviewers and the auditor check, per stack
+
+What `migite-review` (Phase 3), `migite-pr-review` and `migite-audit` check comes from a checklist
+file per stack, under `prompts/checklists/`:
+
+- `rails.md` for the rails stack
+- `generic.md` for `generic` and every [stack profile](#stacks) without a file of its own
+
+`prompts.dir` overrides a checklist like any other prompt, with one difference: an override
+**replaces only the sections it contains** and keeps the rest of the shipped file. Each override
+goes in `<prompts.dir>/checklists/<stack>.md`:
+
+- To change one Rails dimension, write `checklists/rails.md` with just that section.
+- To give a profile its own checks, write `checklists/node.md` with the sections you want; the
+  rest come from `generic.md`.
+
+```markdown
+Expertise: Node.js                      <!-- "a senior Node.js engineer / architect" -->
+
+## review: security                     <!-- migite-review's criteria for one reviewer -->
+Every route handler checks the session. No user input reaches child_process or eval.
+
+## pr_review: test_coverage             <!-- migite-pr-review's checks for one reviewer -->
+- New handlers have supertest specs for 200, 401 and 422
+
+## audit: handlers                      <!-- one migite-audit area -->
+Files: src/routes/**/*.ts src/middleware/**/*.ts
+- Unvalidated req.body fields
+- Promise chains with no catch
+
+## refute                               <!-- the refuter's "How to work" block -->
+How to work:
+1. ...
+```
+
+| Section | Names | Notes |
+|---|---|---|
+| `## review: <dimension>` | `correctness`, `security`, `test_coverage`, `testing_plan`, `frontend` | Fixed: each reviewer is a [model role](#models) (`review_<dimension>`), so a file changes its text but can't add one. `frontend` runs only on rails, when the diff touches views or JavaScript |
+| `## pr_review: <dimension>` | `correctness`, `security`, `test_coverage`, `conventions_and_migrations` | Fixed, for the same reason (`pr_review_<dimension>`) |
+| `## audit: <area>` | any | First line `Files:` with globs from the repo root. A new name adds an area, an existing one replaces it; `--focus` matches area names |
+| `## refute` | none | The second agent that tries to disprove each Critical. Rails has none and uses the block in `migite/verify.py`, the one the refuter evals calibrate |
+
+`Expertise:` before the first section names the reviewers' and the auditor's expertise. Other text
+before the first section is ignored. A section name that isn't in the table is an error naming the
+file and line. `migite-review`, `migite-pr-review` and `migite-audit` print the checklist files
+they used. Both standalone tools pick the stack the way `migite` does (`--stack`, then `stack:`,
+then detection), and `migite-pr-review` runs a profile's lint and tests itself, read-only (no autofix).
 
 <a id="budget"></a>
 ### `budget`

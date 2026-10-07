@@ -242,6 +242,11 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
 
 All reviewers (four, or five with frontend) use Sonnet 5 and run in parallel; `synthesize_verdict` uses Opus 5. The commit gate then opens with a context banner showing the verdict, spec failures, and rubocop offense count.
 
+What each reviewer checks comes from the stack's [checklist](./configuration.md#checklists):
+`prompts/checklists/rails.md` on rails (the criteria in parentheses above), `generic.md` on generic
+and on a stack profile without a checklist of its own, with any `prompts.dir` override's sections on
+top. The refuter below takes its expertise and "how to work" block from the same file.
+
 **Findings are checked before they decide the verdict.** A reviewer can be confidently wrong about code
 it did read, and a wrong Critical turns into a wrong `NEEDS FIXES` and a wrong `f` fix round. So
 `verify_findings` (`migite/verify.py`, shared with `migite-pr-review`) sits between the reviewers and

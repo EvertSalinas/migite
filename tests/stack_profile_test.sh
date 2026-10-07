@@ -275,6 +275,26 @@ sp_heal_setup() {
   check "heal: ...and it is reported as a tooling problem" grep -q 'could not start' "$sp_dir/heal-unavailable.out"
 )
 
+# ── migite-audit and migite-pr-review pick their checklist by stack ──────────
+mkdir -p "$sp_dir/det/mono/a" "$sp_dir/det/mono/b"
+touch "$sp_dir/det/mono/a/Gemfile" "$sp_dir/det/mono/b/Gemfile"
+# shellcheck disable=SC2034  # MIGITE_CFG_* are read by cfg through indirection
+(
+  MIGITE_CFG_STACKS="node"
+  MIGITE_CFG_STACKS_NODE_DETECT="package.json"
+  REPO_ROOT="$sp_dir/det/both"
+  check "standalone_stack: detection, as migite does (a profile before rails)" test "$(standalone_stack)" = "node"
+  check "standalone_stack: --stack beats detection" test "$(standalone_stack --focus x --stack rails)" = "rails"
+  check "standalone_stack: stack: in the config beats detection" \
+    test "$(MIGITE_CFG_STACK=generic standalone_stack)" = "generic"
+  REPO_ROOT="$sp_dir/det/mono"
+  check "standalone_stack: a repo detect_stack can't place (two Gemfiles one level down) is rails" \
+    test "$(standalone_stack 2>/dev/null)" = "rails"
+  out=$( (standalone_stack --stack nope) 2>&1 ); rc=$?
+  check "standalone_stack: an unknown --stack fails, naming what is supported" \
+    bash -c '[[ "$1" != 0 && "$2" == *"node rails generic"* ]]' _ "$rc" "$out"
+)
+
 # ── Phase 3's checks and the commit gate's banner ────────────────────────────
 # shellcheck disable=SC2034  # read by run_stack_review_checks and show_commit_context
 (

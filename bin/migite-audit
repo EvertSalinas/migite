@@ -2,7 +2,7 @@
 # migite-audit — autonomous codebase audit
 #
 # Usage:
-#   migite-audit [--focus <area>] [--output <file>]
+#   migite-audit [--focus <area>] [--stack <stack>] [--output <file>]
 #
 # Examples:
 #   migite-audit                    # full audit, writes to vault
@@ -23,21 +23,28 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
+# shellcheck source=../lib/config.sh
+source "$MIGITE_HOME/lib/config.sh"
+# shellcheck source=../lib/stack.sh
+source "$MIGITE_HOME/lib/stack.sh"
 
 usage() {
   cat <<'EOF'
 migite-audit - audit this repository for correctness, security, and performance risks
 
 Usage:
-  migite-audit [--focus <area>] [--jira <key-or-url>] [--output <file>]
+  migite-audit [--focus <area>] [--stack <stack>] [--jira <key-or-url>] [--output <file>]
 
 Options:
   --focus <area>        only the areas whose name matches this keyword (e.g. jobs, controllers)
+  --stack <stack>       rails | generic | a stacks.<name> profile (default: detected, as migite does)
   --jira <key-or-url>   file the report under that ticket's vault folder
   --output <file>       write the report here instead of the vault
   -h, --help            show this help
 
 One reviewer per area runs in parallel, then a synthesis ranks the findings. Read-only.
+The areas and their checks come from the stack's checklist, prompts/checklists/<stack>.md
+(generic.md when the stack has none), which prompts.dir in the config can override.
 Default output: <vault>/<org>/<repo>/audit-<date>.md
 Turn the report into a task with: migite --audit <report.md>
 EOF
@@ -57,5 +64,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 
 require_langgraph
 
+# ── Stack: picks the checklist (areas and checks) ────────────────────────────────
+load_migite_config "$REPO_ROOT" >/dev/null
+STACK="$(standalone_stack "$@")"
+
 # ── Run ──────────────────────────────────────────────────────────────────────────
-exec "$MIGITE_PYTHON" -m migite.tools.audit --repo-root "$REPO_ROOT" "$@"
+exec "$MIGITE_PYTHON" -m migite.tools.audit --repo-root "$REPO_ROOT" "$@" --stack "$STACK"

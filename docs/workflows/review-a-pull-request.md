@@ -114,7 +114,7 @@ migite-pr-review --branch feature/BB-1250-soft-delete --base develop
 
 When the PR targets something other than the detected default.
 
-### Skip rubocop and rspec
+### Skip the lint and tests
 
 ```bash
 migite-pr-review --branch feature/big-refactor --skip-tests
@@ -122,6 +122,10 @@ migite-pr-review --branch feature/big-refactor --skip-tests
 
 When the suite needs services you don't have locally, or is too slow to run for a review. The
 reviewers then work from the diff alone.
+
+On a [stack profile](../configuration.md#stacks) the lint and tests are the profile's own commands
+(rubocop and rspec are rails only), and the reviewers check what the stack's
+[checklist](../configuration.md#checklists) says.
 
 ### File it under the ticket
 

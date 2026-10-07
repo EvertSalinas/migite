@@ -2,7 +2,7 @@
 # migite-pr-review — autonomous PR reviewer
 #
 # Usage:
-#   migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--jira <key>] [--output <file>]
+#   migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--stack <stack>] [--jira <key>] [--output <file>]
 #
 # Examples:
 #   migite-pr-review --branch feature/<jira-ticket-id>-add-pdf-export
@@ -25,25 +25,32 @@ MIGITE_HOME="$(cd "$(dirname "$_self")/.." && pwd)"
 unset _self _link
 # shellcheck source=../lib/common.sh
 source "$MIGITE_HOME/lib/common.sh"
+# shellcheck source=../lib/config.sh
+source "$MIGITE_HOME/lib/config.sh"
+# shellcheck source=../lib/stack.sh
+source "$MIGITE_HOME/lib/stack.sh"
 
 usage() {
   cat <<'EOF'
 migite-pr-review - review a branch's changes against its base, with a verdict. Read-only.
 
 Usage:
-  migite-pr-review --branch <branch> [--base <branch>] [--skip-tests]
+  migite-pr-review --branch <branch> [--base <branch>] [--skip-tests] [--stack <stack>]
                    [--jira <key-or-url>] [--output <file>]
 
 Options:
   --branch <branch>     the branch to review (required)
   --base <branch>       compare against this (default: origin/HEAD, then main, master, develop)
-  --skip-tests          skip rubocop and rspec
+  --skip-tests          skip the lint and tests (rubocop and rspec on rails)
+  --stack <stack>       rails | generic | a stacks.<name> profile (default: detected, as migite does)
   --jira <key-or-url>   file the review under that ticket's vault folder
   --output <file>       write the review here instead of the vault
   -h, --help            show this help
 
 Four reviewers run in parallel (correctness, security, test coverage, conventions and
-migrations), then a synthesis writes the verdict.
+migrations), then a synthesis writes the verdict. What each one checks comes from the stack's
+checklist, prompts/checklists/<stack>.md (generic.md when the stack has none), which
+prompts.dir in the config can override.
 EOF
 }
 
@@ -69,6 +76,30 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 
 require_langgraph
 
+# ── Stack: picks the checklist; a stacks.<name> profile's lint and tests run here ──
+load_migite_config "$REPO_ROOT" >/dev/null
+STACK="$(standalone_stack "$@")"
+EXTRA_ARGS=(--stack "$STACK")
+if stack_is_profile "$STACK" && [[ " $* " != *" --skip-tests "* ]]; then
+  # Read-only: lint without autofix. The files are the ones changed since the branch
+  # left its base, in the working tree the reviewers read too.
+  pr_base=""
+  _args=("$@")
+  for ((_i = 0; _i < ${#_args[@]}; _i++)); do
+    [[ "${_args[_i]}" == "--base" ]] && pr_base="${_args[_i + 1]:-}"
+  done
+  cd "$REPO_ROOT"
+  pr_base="${pr_base:-$(detect_base_branch)}"
+  pr_fork=$(git merge-base "$pr_base" HEAD 2>/dev/null || echo "$pr_base")
+  # shellcheck disable=SC2034  # read by run_stack_command (lib/stack.sh)
+  APP_ROOT="$REPO_ROOT"
+  mkdir -p "$LOG_DIR"
+  pr_logs="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-pr-review"
+  log "Running the $STACK lint and tests on the changed files..."
+  run_stack_lint "$pr_fork" "$pr_logs-lint.txt" > /dev/null 2>&1 || true
+  run_stack_test "$pr_fork" "$pr_logs-test.txt" > /dev/null 2>&1 || true
+  EXTRA_ARGS+=(--lint-log "$pr_logs-lint.txt" --test-log "$pr_logs-test.txt")
+fi
 
 # ── Run ──────────────────────────────────────────────────────────────────────────
-exec "$MIGITE_PYTHON" -m migite.tools.pr_review --repo-root "$REPO_ROOT" "$@"
+exec "$MIGITE_PYTHON" -m migite.tools.pr_review --repo-root "$REPO_ROOT" "$@" "${EXTRA_ARGS[@]}"

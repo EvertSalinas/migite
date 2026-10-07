@@ -82,7 +82,9 @@ command's changed files; heal and review then run them, and exit codes decide. W
 a repo with no `Gemfile` is the `generic` stack: plan, implement, review, knowledge, and PR
 description all run; lint, tests, and the heal loop are skipped. Either way, explorers use
 language-agnostic globs. `migite-explore` and `migite-blueprint` are already stack-agnostic;
-`migite-audit` and `migite-pr-review` still use Rails checklists.
+`migite-audit`, `migite-pr-review` and Phase 3's reviewers check what the stack's
+[checklist](./configuration.md#checklists) says: Rails' own on rails, a language-neutral one
+everywhere else, and your `checklists/<name>.md` when you write one.
 
 **How do I use a cheaper or a stronger model for one step?**
 Pin the role in `.migite.yml`: `models: { roles: { think: claude-sonnet-5 } }`. Roles cover

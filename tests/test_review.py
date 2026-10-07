@@ -115,6 +115,34 @@ class StackLogLabelsTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class StackChecklistTest(unittest.TestCase):
+    """What each reviewer checks comes from the stack's checklist (prompts/checklists/<stack>.md):
+    rails by default, generic for a stack without a file of its own."""
+
+    def setUp(self):
+        self.review = load_tool()
+        from migite import checklists
+        self.generic = checklists.load("generic", ROOT)
+
+    def test_rails_is_the_default(self):
+        self.assertIn("current_user", dict(self.review.active_dimensions(state()))["security"])
+
+    def test_a_profile_gets_the_generic_criteria_and_expertise(self):
+        st = state(criteria=self.generic.review, expertise="software", stack="node")
+        dims = dict(self.review.active_dimensions(st))
+        self.assertEqual(list(dims), ["correctness", "security", "test_coverage", "testing_plan"])
+        self.assertEqual(dims["security"], self.generic.review["security"])
+        sends = self.review.route_to_reviewers(st)
+        self.assertEqual({s.arg["expertise"] for s in sends}, {"software"})
+        prompts = []
+        self.review.call_agent = lambda prompt, role, label="", schema=None: (
+            prompts.append(prompt) or types.SimpleNamespace(text="✅ No issues.", structured=None))
+        self.review.review_dimension(sends[1].arg)
+        self.assertIn("You are a senior software engineer", prompts[0])
+        self.assertNotIn("current_user", prompts[0])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
 class TestingPlanToggleTest(unittest.TestCase):
     """review.dimensions.testing_plan: off drops the testing-plan reviewer and tells the verdict why."""
 

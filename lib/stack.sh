@@ -67,6 +67,31 @@ stack_generic_app_root() {
   APP_REL_PATH=""
 }
 
+# standalone_stack <args...> - the stack migite-audit and migite-pr-review key their
+# checklist by: --stack in <args>, else `stack:` in the config, else detection, as
+# migite does. An unknown --stack is an error. A repo detection can't place (several
+# Gemfiles one level down) is still rails: these tools never run from an app dir.
+standalone_stack() {
+  local override="" detected=""
+  while [[ $# -gt 0 ]]; do
+    [[ "$1" == "--stack" ]] && override="${2:-}"
+    shift
+  done
+  [[ -z "$override" && "$(cfg stack auto)" != "auto" ]] && override="$(cfg stack)"
+  if [[ -n "$override" ]]; then
+    if stack_is_profile "$override" || [[ " ${STACK_PROFILES[*]} " == *" $override "* ]]; then
+      echo "$override"
+      return 0
+    fi
+    local known
+    known="$(cfg stacks) ${STACK_PROFILES[*]}"
+    error "Unknown stack '$override' - supported: ${known# }"
+  fi
+  # shellcheck disable=SC2030,SC2031  # STACK is set inside the subshell on purpose
+  detected=$( (STACK_OVERRIDE="" && detect_stack >/dev/null 2>&1 && echo "$STACK") || true )
+  echo "${detected:-rails}"
+}
+
 # ── Configured profiles ───────────────────────────────────────────────────────
 # The third kind of stack: `stacks.<name>` in the config, data instead of a
 # function pair. A profile names its detect files, its lint / autofix / test

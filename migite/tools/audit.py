@@ -20,77 +20,25 @@ from langgraph.types import Send
 from migite import gateway
 from migite import config
 from migite import paths
+from migite import checklists as checklists_lib
 
 
 VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 
-AUDIT_AREAS = [
-    (
-        "models",
-        ["app/models/**/*.rb"],
-        """\
-- N+1 risks: associations loaded lazily inside loops or serializers
-- Callbacks with side effects (API calls, jobs enqueued) that break idempotency
-- Missing `dependent:` on has_many (orphan records risk)
-- Scopes that can return unbounded result sets
-- Validations that silently fail in bulk operations""",
-    ),
-    (
-        "controllers",
-        ["app/controllers/**/*.rb"],
-        """\
-- Actions missing authorization (Pundit policy, CanCanCan, or manual check)
-- Collections or records not scoped to current_user / current_account
-- Business logic inline in action bodies (belongs in a service)
-- Actions accepting raw params — missing strong params
-- Before-action filters with `:only`/`:except` that can be bypassed""",
-    ),
-    (
-        "services",
-        ["app/services/**/*.rb", "app/interactors/**/*.rb", "app/commands/**/*.rb"],
-        """\
-- Multiple DB writes outside a transaction (partial write risk)
-- Exceptions rescued and swallowed silently
-- God objects — services doing more than one thing
-- Methods with no clear return value / result object contract""",
-    ),
-    (
-        "serializers",
-        ["app/serializers/**/*.rb"],
-        """\
-- Associations accessed without eager loading (N+1 in serializer)
-- Sensitive fields exposed (tokens, internal IDs, password digests)
-- Attributes that bypass authorization checks""",
-    ),
-    (
-        "jobs",
-        ["app/jobs/**/*.rb", "app/workers/**/*.rb"],
-        """\
-- Non-idempotent perform method (retrying changes state incorrectly)
-- Heavy business logic inline in perform (should delegate to a service)
-- Missing explicit queue_as
-- Jobs that fan out more jobs without deduplication
-- Raised exceptions not logged before re-raise""",
-    ),
-    (
-        "migrations",
-        ["db/migrate/*.rb"],
-        """\
-- Irreversible operations in `change` with no `up`/`down`
-- NOT NULL column added to existing table with no default or data migration
-- Foreign key added without a corresponding index
-- Destructive operations (column drops, renames) missing a phased deployment plan""",
-    ),
-    (
-        "schema_indexes",
-        ["db/schema.rb"],
-        """\
-- Foreign key columns (ending in _id) without a matching index
-- Columns likely used in .where / .order (status, type, state, role, created_at) without indexes
-- Polymorphic type+id pairs missing a composite index
-- Unique constraint candidates (email, token, slug) missing a unique index""",
-    ),
-]
+# The areas and what each auditor checks come from the stack's checklist
+# (migite/checklists.py, prompts/checklists/<stack>.md): (name, globs, checks). The
+# rails one is the default when no --stack is given; main() loads the stack's own,
+# with any prompts.dir override on top.
+MIGITE_HOME = Path(__file__).resolve().parents[2]   # migite/tools/<x>.py → the checkout
+RAILS_CHECKLIST = checklists_lib.load("rails", MIGITE_HOME)
+AUDIT_AREAS = [(a.name, a.globs, a.checks) for a in RAILS_CHECKLIST.audit]
+
+# Vendored and build-artifact directories, skipped when a non-rails area's broad
+# "**/*.<ext>" globs would otherwise read them (rails' globs are scoped to app/ and db/).
+EXCLUDE_DIR_COMPONENTS = {
+    "node_modules", "vendor", ".venv", "venv", "dist", "build", "target",
+    "coverage", "tmp", "log", "__pycache__", ".next", ".cache", ".git",
+}
 
 
 # ── Agent call ──────────────────────────────────────────────────────────────────
@@ -102,11 +50,14 @@ def call_agent(prompt: str, role: str, label: str = "") -> str:
 
 # ── File reading ─────────────────────────────────────────────────────────────────
 
-def read_area_files(patterns: list[str], repo_root: str, max_chars: int = 14000) -> str:
+def read_area_files(patterns: list[str], repo_root: str, max_chars: int = 14000, stack: str = "rails") -> str:
     all_files: list[str] = []
     for p in patterns:
         all_files.extend(glob.glob(f"{repo_root}/{p}", recursive=True))
     all_files = sorted(set(all_files))
+    if stack != "rails":
+        all_files = [f for f in all_files
+                     if os.path.isfile(f) and not EXCLUDE_DIR_COMPONENTS & set(Path(f).relative_to(repo_root).parts[:-1])]
 
     listing = "\n".join(f.replace(f"{repo_root}/", "") for f in all_files) or "(none)"
     parts = [f"## File listing\n{listing}\n\n## File contents"]
@@ -116,7 +67,7 @@ def read_area_files(patterns: list[str], repo_root: str, max_chars: int = 14000)
         try:
             content = Path(f).read_text(errors="replace")[:2500]
             rel = f.replace(f"{repo_root}/", "")
-            chunk = f"\n### {rel}\n```ruby\n{content}\n```"
+            chunk = f"\n### {rel}\n```{checklists_lib.fence(stack, rel)}\n{content}\n```"
             if total + len(chunk) > max_chars:
                 break
             parts.append(chunk)
@@ -133,6 +84,9 @@ class AuditState(TypedDict):
     repo_name: str
     focus: str
     output: str
+    stack: str          # rails, generic or a stacks.<name> profile
+    areas: list         # [(name, globs, checks)] from the stack's checklist
+    expertise: str      # "a senior <expertise> architect"
     findings: Annotated[list[str], operator.add]
     report: str
 
@@ -143,6 +97,8 @@ class AuditAreaInput(TypedDict):
     checks: str
     repo_root: str
     focus: str
+    stack: str
+    expertise: str
 
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────────
@@ -153,13 +109,13 @@ def load_context(state: AuditState) -> dict:
 
 
 def route_to_auditors(state: AuditState) -> list[Send]:
-    areas = AUDIT_AREAS
+    all_areas = areas = state.get("areas") or AUDIT_AREAS
     if state["focus"]:
         focus_lower = state["focus"].lower()
         areas = [(a, p, c) for a, p, c in areas if focus_lower in a.lower()]
         if not areas:
             print(f"  ⚠ No areas matched focus '{state['focus']}' — auditing all", flush=True)
-            areas = AUDIT_AREAS
+            areas = all_areas
     print(f"  ▶ Dispatching {len(areas)} parallel auditors", flush=True)
     return [
         Send("audit_area", {
@@ -168,6 +124,8 @@ def route_to_auditors(state: AuditState) -> list[Send]:
             "checks": checks,
             "repo_root": state["repo_root"],
             "focus": state["focus"],
+            "stack": state.get("stack", "rails"),
+            "expertise": state.get("expertise", "Rails"),
         })
         for area, patterns, checks in areas
     ]
@@ -176,9 +134,9 @@ def route_to_auditors(state: AuditState) -> list[Send]:
 def audit_area(state: AuditAreaInput) -> dict:
     area = state["area"]
     print(f"    ◦ {area}", flush=True)
-    context = read_area_files(state["glob_patterns"], state["repo_root"])
+    context = read_area_files(state["glob_patterns"], state["repo_root"], stack=state.get("stack", "rails"))
     focus_line = f"\nFocus: {state['focus']}\n" if state["focus"] else ""
-    prompt = f"""You are a senior Rails architect auditing the **{area}** layer of an existing codebase.
+    prompt = f"""You are a senior {state.get('expertise', 'Rails')} architect auditing the **{area}** layer of an existing codebase.
 You are looking at LIVE CODE — report only real issues you can see, not theoretical risks.{focus_line}
 
 {context}
@@ -286,6 +244,7 @@ def main() -> None:
     ap.add_argument("--focus",  default="", help="Limit audit to areas matching this keyword")
     ap.add_argument("--output", default="", help="Output file path (default: vault)")
     ap.add_argument("--jira",   default="", help="Jira ticket key or URL — groups this audit under the ticket's existing folder")
+    ap.add_argument("--stack",  default="rails", help="rails, generic or a stacks.<name> profile: picks the checklist")
     args = ap.parse_args()
 
     global VAULT_BASE
@@ -301,6 +260,12 @@ def main() -> None:
     try:
         gateway.require_cli()
     except gateway.AgentError as e:
+        print(f"✘ {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        checklist = checklists_lib.load(args.stack, MIGITE_HOME, cfg.override_dir("prompts", args.repo_root))
+    except checklists_lib.ChecklistError as e:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -327,7 +292,8 @@ def main() -> None:
     )
 
     print(f"\n  migite-audit | model: explore={gateway.model_for('audit_area') or 'default'}  think={gateway.model_for('audit_synth') or 'default'}", flush=True)
-    print(f"  Repo: {org}/{repo_name}", flush=True)
+    print(f"  Repo: {org}/{repo_name}  Stack: {args.stack}", flush=True)
+    print(f"  Checklist: {' + '.join(checklist.files)}", flush=True)
     if args.focus:
         print(f"  Focus: {args.focus}", flush=True)
 
@@ -338,6 +304,9 @@ def main() -> None:
             "repo_name": repo_name,
             "focus":     args.focus,
             "output":    output,
+            "stack":     args.stack,
+            "areas":     [(a.name, a.globs, a.checks) for a in checklist.audit],
+            "expertise": checklist.expertise,
             "findings":  [],
             "report":    "",
         })

@@ -33,6 +33,7 @@ from migite import gateway
 from migite import config
 from migite import paths
 from migite import verify
+from migite import checklists as checklists_lib
 
 # Defaults from config's single table; main() replaces them from the loaded
 # config (one role per review dimension, plus `verdict`).
@@ -82,60 +83,18 @@ def read_prompt(path: Path) -> str:
         sys.exit(1)
     return path.read_text()
 
-REVIEW_DIMENSIONS = [
-    (
-        "correctness",
-        "Implementation matches the approved plan and its amendments (an amendment supersedes the plan "
-        "where they conflict, and plan.md text an amendment superseded is not a finding). No scope creep. "
-        "All acceptance criteria covered. "
-        "Logic is correct. No dead code or commented-out blocks.",
-    ),
-    (
-        "security",
-        "All controller actions authorised. Resources scoped to current_user. No N+1 queries "
-        "(check .each over AR collections). No raw SQL without parameterisation. No hardcoded secrets. "
-        "Strong params on every action. No SQL injection vectors. In views: no user-supplied content "
-        "passed through html_safe, raw or <%== %>. Turbo Stream broadcasts (broadcasts_to, "
-        "broadcast_*_to, turbo_stream_from) are scoped to the user or account allowed to see them, "
-        "never a shared stream name that carries private data.",
-    ),
-    (
-        "test_coverage",
-        "New public methods have unit specs. New endpoints have request specs covering success, 401, 422. "
-        "Actions that respond with turbo_stream have request specs asserting the <turbo-stream> action and target. "
-        "Factories used (not fixtures). No real HTTP calls in specs. Spec descriptions use 'when/with/without' for context blocks.",
-    ),
-    (
-        "testing_plan",
-        "The testing plan document exists and is complete: contains a real Rails console seed script "
-        "(generic emails only), step-by-step verification actions (curl or browser steps; for UI changes, "
-        "the page, the exact action and what should change on the page), log lines to grep, "
-        "and a teardown script. A missing, placeholder, or empty testing plan is a critical failure. If this "
-        "task had any amendments, the testing plan must reflect the CURRENT amended behaviour, not just the "
-        "original plan — flag any step that still describes pre-amendment behaviour.",
-    ),
-]
+# What each reviewer checks comes from the stack's checklist (migite/checklists.py,
+# prompts/checklists/<stack>.md). The rails one is the default when no --stack is
+# given; main() loads the stack's own, with any prompts.dir override on top. The
+# frontend reviewer runs only when migite passes --frontend-files (lib/stack.sh
+# changed_frontend_files found views or JavaScript in the diff, rails only), so a
+# backend-only review stays at four reviewers.
+RAILS_CHECKLIST = checklists_lib.load("rails", MIGITE_HOME)
+REVIEW_DIMENSIONS = RAILS_CHECKLIST.review_dimensions()
+FRONTEND_DIMENSION = ("frontend", RAILS_CHECKLIST.review["frontend"])
 
 
-# Runs only when migite passes --frontend-files (lib/stack.sh changed_frontend_files
-# found views or JavaScript in the diff), so a backend-only review stays at four
-# reviewers. XSS and broadcast scoping live under security; this is the Hotwire
-# mechanics that break silently in the browser rather than in a spec.
-FRONTEND_DIMENSION = (
-    "frontend",
-    "Hotwire and Stimulus correctness in the changed views and JavaScript. Form submissions that fail "
-    "validation render with status :unprocessable_entity (422), and redirects after a successful non-GET "
-    "use :see_other (303); otherwise Turbo won't show the errors or follow the redirect. Every "
-    "turbo_frame_tag id and turbo_stream target the diff references exists in the rendered markup, with "
-    "dom_id used the same way on both sides. Stimulus controllers are registered (importmap pin or "
-    "controllers/index.js), and data-controller, data-<name>-target, data-<name>-value and data-action "
-    "names match the controller's file name and its static targets/values. No inline <script> or on* "
-    "attribute handlers. Partials rendered per row don't query per row (N+1 in collection rendering). "
-    "Frontend lint problems that remain (log below) are warnings unless they break the page.",
-)
-
-
-def frontend_criteria(system_specs: bool) -> str:
+def frontend_criteria(system_specs: bool, base: str | None = None) -> str:
     """FRONTEND_DIMENSION's criteria plus the system-spec rule, which depends on
     whether the repo already has spec/system: demanding a first system spec (and
     a browser driver) as part of an unrelated change is scope creep."""
@@ -145,7 +104,7 @@ def frontend_criteria(system_specs: bool) -> str:
     else:
         rule = ("The repo has no system specs: do not demand one, but add a 🟢 Note when a new "
                 "interactive flow is covered only by the testing plan's manual steps.")
-    return f"{FRONTEND_DIMENSION[1]} {rule}"
+    return f"{base or FRONTEND_DIMENSION[1]} {rule}"
 
 
 def amendments_block(amendments: list[str], limit: int) -> str:
@@ -157,12 +116,6 @@ def amendments_block(amendments: list[str], limit: int) -> str:
     body = "\n\n".join(reversed(texts))[:limit]
     return ("\n## Amendments (approved after the plan, newest first; where one conflicts with the plan, "
             f"the amendment wins)\n{body}\n")
-
-
-def log_labels(stack: str) -> tuple[str, str]:
-    """What the two tooling logs are called in a prompt. migite passes rails' rubocop and
-    rspec output, or a stack profile's lint and test output, in the same two arguments."""
-    return ("Rubocop", "RSpec") if stack == "rails" else ("Lint", "Test")
 
 
 CARRIED_NOTE = "(not re-run: clean in the previous review, and nothing it checks was flagged)"
@@ -243,6 +196,9 @@ class ReviewState(TypedDict):
     rubocop_log: str
     rspec_log: str
     stack: str                  # rails, generic or a stacks.<name> profile: names the two logs
+    criteria: dict[str, str]    # the stack's checklist: dimension -> what its reviewer checks
+    expertise: str              # "a senior <expertise> engineer" (the checklist's Expertise line)
+    refute_how: str | None      # the checklist's refute section; None = verify.HOW_TO_WORK
     git_diff: str
     repo_root: str
     base_branch: str
@@ -272,6 +228,7 @@ class DimensionInput(TypedDict):
     rubocop_log: str
     rspec_log: str
     stack: str
+    expertise: str
     git_diff: str
     testing_plan: str
     frontend_files: list[str]
@@ -296,11 +253,14 @@ def load_inputs(state: ReviewState) -> dict:
 
 
 def active_dimensions(state: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """REVIEW_DIMENSIONS without the testing-plan reviewer when review.dimensions.testing_plan
-    is off, plus the frontend reviewer when the diff touches views or JS."""
-    dims = [d for d in REVIEW_DIMENSIONS if d[0] != "testing_plan" or state.get("testing_plan_enabled", True)]
+    """The checklist's reviewers (state["criteria"], else the rails checklist) without the
+    testing-plan reviewer when review.dimensions.testing_plan is off, plus the frontend
+    reviewer when the diff touches views or JS."""
+    criteria = state.get("criteria") or dict(REVIEW_DIMENSIONS)
+    dims = [(d, criteria[d]) for d in checklists_lib.REVIEW_REQUIRED
+            if d != "testing_plan" or state.get("testing_plan_enabled", True)]
     if state.get("frontend_files"):
-        dims.append((FRONTEND_DIMENSION[0], frontend_criteria(state.get("system_specs", False))))
+        dims.append((FRONTEND_DIMENSION[0], frontend_criteria(state.get("system_specs", False), criteria.get("frontend"))))
     return dims
 
 
@@ -319,6 +279,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
             "rubocop_log": state["rubocop_log"],
             "rspec_log": state["rspec_log"],
             "stack": state.get("stack", "rails"),
+            "expertise": state.get("expertise", "Rails"),
             "git_diff": state["git_diff"],
             "testing_plan": state["testing_plan"],
             "frontend_files": state.get("frontend_files", []),
@@ -355,8 +316,8 @@ def review_dimension(state: DimensionInput) -> dict:
                  f"whenever a claim needs it, and no more: each costs time and tokens.\n"
                  if dim in verify.SKIP_DIMENSIONS else
                  verify.GROUNDING + "\nEach file you open costs time and tokens: open what a claim needs, no more.")
-    lint_label, test_label = log_labels(state.get("stack", "rails"))
-    prompt = f"""You are a senior Rails engineer doing a focused code review.
+    lint_label, test_label = checklists_lib.log_labels(state.get("stack", "rails"))
+    prompt = f"""You are a senior {state.get('expertise', 'Rails')} engineer doing a focused code review.
 Your dimension: **{dim}**
 
 Criteria: {state['description']}
@@ -420,6 +381,8 @@ def verify_findings(state: ReviewState) -> dict:
         read_file=verify.make_reader(state["repo_root"]),
         extra=f"{state['git_diff']}\n{intent}",
         context=context,
+        expertise=state.get("expertise", "Rails"),
+        how_to_work=state.get("refute_how"),
     )
     return {"verified": blocks, "refuted": refuted}
 
@@ -449,7 +412,7 @@ def synthesize_verdict(state: ReviewState) -> dict:
     print(f"  ▶ Synthesising verdict from {len(state['findings'])} reviews", flush=True)
     findings_text = "\n\n".join(reviewed(state))
     refuted = state.get("refuted") or []
-    lint_label, test_label = log_labels(state.get("stack", "rails"))
+    lint_label, test_label = checklists_lib.log_labels(state.get("stack", "rails"))
     base_prompt = f"""## Review format
 {state['review_cmd']}
 
@@ -627,6 +590,11 @@ def main() -> None:
         print(f"  ✘ migite-review: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
     REVIEW_CMD_PATH = cfg.prompt_path("review", MIGITE_HOME, args.repo_root)
+    try:
+        checklist = checklists_lib.load(args.stack, MIGITE_HOME, cfg.override_dir("prompts", args.repo_root))
+    except checklists_lib.ChecklistError as e:
+        print(f"  ✘ migite-review: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
 
     base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
 
@@ -646,7 +614,7 @@ def main() -> None:
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
     testing_plan_enabled = str(cfg.get("review.dimensions.testing_plan", "on")) != "off"
-    dim_names = [d for d, _ in active_dimensions({"frontend_files": frontend_files,
+    dim_names = [d for d, _ in active_dimensions({"frontend_files": frontend_files, "criteria": checklist.review,
                                                   "testing_plan_enabled": testing_plan_enabled})]
     dims = "  ".join(f"{d}={gateway.model_for(f'review_{d}') or 'default'}" for d in dim_names)
     rerun = list(dim_names)
@@ -661,6 +629,7 @@ def main() -> None:
         carried = carried_findings(previous, rerun, dim_names)
 
     print(f"\n  migite-review | {dims}  refute={gateway.model_for(verify.REFUTE_ROLE) or 'default'}  verdict={gateway.model_for('verdict') or 'default'}  base branch: {base_branch}", flush=True)
+    print(f"  migite-review | checklist: {' + '.join(checklist.files)}", flush=True)
 
     graph = build_graph()
     try:
@@ -670,6 +639,9 @@ def main() -> None:
             "rubocop_log": rubocop_log,
             "rspec_log": rspec_log,
             "stack": args.stack,
+            "criteria": checklist.review,
+            "expertise": checklist.expertise,
+            "refute_how": checklist.refute,
             "git_diff": "",
             "repo_root": args.repo_root,
             "base_branch": base_branch,

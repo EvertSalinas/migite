@@ -181,8 +181,19 @@ run_plan() {
       printf '- Do not change public API contracts or alter behaviour observable to callers\n\n'
       printf '## Acceptance Criteria\n'
       printf '- All critical findings resolved with no regressions\n'
-      printf '- `bundle exec rubocop` reports no new offenses\n'
-      printf '- `bundle exec rspec` remains green\n\n'
+      if stack_is_profile; then
+        # The profile's own commands (stacks.<name>), without the {files} placeholder.
+        local audit_lint audit_test
+        audit_lint="$(cfg "stacks.$STACK.lint")"; audit_test="$(cfg "stacks.$STACK.test")"
+        [[ -n "$audit_lint" ]] && printf -- '- `%s` reports no new problems\n' "${audit_lint// \{files\}/}"
+        [[ -n "$audit_test" ]] && printf -- '- `%s` remains green\n' "${audit_test// \{files\}/}"
+        printf '\n'
+      elif [[ "$STACK" == "generic" ]]; then
+        printf -- '- The existing tests remain green\n\n'
+      else
+        printf '- `bundle exec rubocop` reports no new offenses\n'
+        printf '- `bundle exec rspec` remains green\n\n'
+      fi
       printf '## Audit Findings (source of truth for this task)\n\n'
       cat "$AUDIT_FILE"
     } > "$INTAKE_FILE"
