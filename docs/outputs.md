@@ -36,7 +36,7 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | File | Contents |
 |------|----------|
 | `plan.md` | The living plan: the design as it now stands, updated at the end of every run ([Phase 3.8](./phases.md#phase-3-8-plan-update)), with a `## Revision history` line per run |
-| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status and the findings it rejected, the session chain (`plan.chain_sessions`), failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
+| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status and the findings it rejected, the session chain (`plan.chain_sessions`), the planning strategy (`plan.strategy`), failed explorers (`langgraph` only), per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
 | `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Written in Phase 1, or at the start of Phase 3 with `plan.testing_plan_when: review`. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
 | `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
 | `browser-check.md` | Only with `frontend.browser_check: ask` / `on` and a diff that touches views or JavaScript: the agent's PASS / FAIL / SKIPPED walk through the testing plan in a real browser, read by the `frontend` reviewer. See [Frontend](./phases.md#frontend) |

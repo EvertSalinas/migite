@@ -95,6 +95,15 @@ class UpdateTest(unittest.TestCase):
         self.assertIn("Wait 15 seconds, then", new)          # the edits still land on the caller's copy
         self.assertEqual(report["session_id"], "s-2")
 
+    def test_a_call_that_continues_a_session_can_repeat_that_session_s_launch(self):
+        with reply('{"revision": "", "edits": []}') as fake:
+            doc_edits.update(DOC, name="plan.md", task="t", context=[], role="think", label="t",
+                             permission="plan", tools="default")
+        self.assertEqual((fake.call_args.kwargs["permission"], fake.call_args.kwargs["tools"]), ("plan", "default"))
+        with reply('{"revision": "", "edits": []}') as fake:
+            doc_edits.update(DOC, name="plan.md", task="t", context=[], role="think", label="t")
+        self.assertEqual((fake.call_args.kwargs["permission"], fake.call_args.kwargs["tools"]), (None, None))
+
     def test_a_backend_that_cannot_continue_a_session_is_sent_the_document(self):
         with reply('{"revision": "", "edits": []}') as fake:
             doc_edits.update(DOC, name="testing-plan.md", task="t", context=[], role="testing_plan",

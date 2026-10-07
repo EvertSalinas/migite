@@ -161,6 +161,8 @@ class AgentInfo:
     isolation: bool = False            # can run a headless call with only named tools and
                                        # without its MCP servers, plugins, hooks and skills
     resume: bool = False               # a headless call can continue an earlier one's session by id
+    plan_mode: bool = False            # a headless call can run in the CLI's read-only plan mode:
+                                       # the `plan` permission word reaches it as a flag
 
 
 class Agent:
@@ -176,7 +178,7 @@ class Agent:
         return self.info.name
 
     def supports(self, capability: str) -> bool:
-        """structured_output | effort | usage | resume | scope:<name>"""
+        """structured_output | effort | usage | resume | plan_mode | scope:<name>"""
         if capability.startswith("scope:"):
             return capability[len("scope:"):] in self.info.scopes
         return bool(getattr(self.info, capability, False))
@@ -213,5 +215,5 @@ class Agent:
             "env_unset": list(i.env_unset), "exit_hint": i.exit_hint,
             "instruction_files": i.instruction_files, "models": dict(i.models),
             "permission_flags": i.permission_flags, "session_mode": i.session_mode,
-            "isolation": i.isolation, "resume": i.resume,
+            "isolation": i.isolation, "resume": i.resume, "plan_mode": i.plan_mode,
         }

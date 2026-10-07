@@ -40,6 +40,7 @@ class ClaudeAgent(Agent):
         instruction_files="CLAUDE.md",
         isolation=True,
         resume=True,
+        plan_mode=True,                # --permission-mode plan
     )
 
     def _permission(self, word: str) -> list[str]:

@@ -12,7 +12,7 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 ```
 
 - **Two human gates**, one after the plan and one before the commit, with approve / AI-refine / hand-edit / redo / abort at each.
-- **Autonomous everywhere else**: 7 parallel codebase explorers, an architecture critic, an auto-heal loop for lint and tests, 4 specialist reviewers, a typed verdict.
+- **Autonomous everywhere else**: 7 parallel codebase explorers (or the agent's own plan mode, with `plan.strategy: native`), an architecture critic, an auto-heal loop for lint and tests, 4 specialist reviewers, a typed verdict.
 - **Memory**: every artifact mirrored to a markdown vault (Obsidian-friendly), and a per-repo `knowledge.md` injected into every future plan.
 - **Machine-readable**: `plan.json`, `review.json`, and a per-run usage ledger with cost per model.
 - **Configurable**: one layered `.migite.yml` for models, effort, gates, permissions, prompts, budget.

@@ -198,6 +198,14 @@ class OpenCodeTest(unittest.TestCase):
         argv = self.agent.ask_launch(ask(permission="ask")).argv
         self.assertNotIn("--auto", argv); self.assertNotIn("--model", argv)
 
+    def test_plan_runs_as_the_read_only_plan_agent(self):
+        argv = self.agent.ask_launch(ask(permission="plan")).argv
+        self.assertEqual(argv[argv.index("--agent") + 1], "plan")
+        self.assertNotIn("--auto", argv)
+        self.assertEqual(argv[-1], "P")
+        self.assertEqual(self.agent.session_launch(agents.SessionRequest(prompt="P", permission="plan")).argv,
+                         ["opencode", "--prompt", "P", "--agent", "plan"])
+
     def test_session(self):
         self.assertEqual(self.agent.session_launch(agents.SessionRequest(prompt="P", permission="edits")).argv,
                          ["opencode", "--prompt", "P", "--auto"])

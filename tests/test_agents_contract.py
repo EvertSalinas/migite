@@ -50,6 +50,7 @@ class ContractTest(unittest.TestCase):
             self.assertIn(i.session_mode, ("interactive", "headless"))
             self.assertIsInstance(i.permission_flags, bool)
             self.assertIsInstance(i.resume, bool)
+            self.assertIsInstance(i.plan_mode, bool)
             self.assertGreater(i.max_arg_bytes, 0)
             json.dumps(agent.describe())                       # bash reads it as JSON
 
@@ -71,6 +72,15 @@ class ContractTest(unittest.TestCase):
                 continue   # this CLI fixes its own approval policy; the words build but can't differ
             self.assertNotEqual(built["auto"], built["none"])
             self.assertNotEqual(session["auto"], session["none"])
+
+    def test_plan_mode_reaches_the_command_line_exactly_when_the_agent_claims_it(self):
+        # plan.strategy: native runs only on an agent whose `plan` word changes what it runs.
+        for _, agent in self.each_agent():
+            for launch in (lambda w: agent.ask_launch(agents.AskRequest(prompt=PROMPT, permission=w)).argv,
+                           lambda w: agent.session_launch(agents.SessionRequest(prompt=PROMPT, permission=w)).argv):
+                self.assertEqual(launch("plan") != launch("none"), agent.info.plan_mode)
+                if agent.info.plan_mode:
+                    self.assertNotEqual(launch("plan"), launch("auto"))   # plan mode is not auto approval
 
     def test_model_is_passed_only_when_given(self):
         for _, agent in self.each_agent():

@@ -72,6 +72,25 @@ stays outside the session, since its read tools would change the session's tool 
 plan joins only when it runs on the same model as `think`. See
 [configuration](./configuration.md#plan-chain-sessions).
 
+With `plan.strategy: native` the agent's own plan mode does the exploring instead:
+
+```
+native_plan   (Opus 5.5 — role `native_plan`: one call in the agent's read-only plan mode,
+     │         with its own tools; it explores with its own subagents and writes the plan)
+architecture_critic → refine_plan → generate_testing_plan → write_outputs   (as above)
+```
+
+The call replaces `load_context`, the explorers and `synthesize_plan`. Its prompt is
+`prompts/native_plan.md` followed by the same task context, plan format (`prompts/plan.md`) and
+formatting rules synthesis gets, without explorer reports. The plan ends with a `## Files examined`
+section, one line per file the agent read and what it showed, which stays in `plan.md` and is the
+evidence the refiner quotes from in place of the explorer reports. A reply without a plan or
+without that section is retried once, in the same session when the backend can continue one. With
+`plan.chain_sessions: true` the chain starts at this call, and refine and the testing plan repeat
+its launch (plan mode, the CLI's tools) so they read the session from the cache. A backend with no
+headless plan mode (Kimi) prints one notice and plans with the explorers. See
+[configuration](./configuration.md#plan-strategy).
+
 Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis and refinement use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The testing plan is a checklist document written from the finished plan, so `generate_testing_plan` runs on the standard tier (Sonnet 5 by default, role `testing_plan`), which also gives it the standard tier's 600s timeout (see [timeouts](./configuration.md#models)). The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation — and runs read-only (`Read`, `Grep`, `Glob`) so it can verify the plan's claims against the repo. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
 
 **Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into `synthesize_plan`, the explorers' keyword extraction, and the choice of [knowledge.md entries](#active-memory-injection) the prompts get. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.

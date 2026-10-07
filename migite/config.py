@@ -99,7 +99,9 @@ DEFAULTS: dict[str, Any] = {
         # Optional per-role timeout override: {"refine_plan": 1800, ...}. session is set: an
         # --automata run's headless sessions (implement, gate fixes, PR description) are
         # whole phases, far longer than the strong tier's 900s. Interactive sessions have no limit.
-        "roles_timeouts": {"session": 3600},
+        # native_plan is set too: with plan.strategy: native one call explores the repo and
+        # writes the plan, the work the explorers and synthesis split between them.
+        "roles_timeouts": {"session": 3600, "native_plan": 1800},
     },
     "stack": "auto",                     # auto | rails | generic | <a stacks profile>  (MIGITE_STACK, or --stack)
     # Stack profiles: a non-Rails repo's lint and test commands as data (lib/stack.sh).
@@ -152,6 +154,10 @@ DEFAULTS: dict[str, Any] = {
         # true = synthesis, refine and the testing plan continue one agent session, so each reads
         # what the earlier calls sent from the prompt cache (backends with `resume` only).
         "chain_sessions": False,
+        # langgraph = migite's explorers read the repo and synthesis writes the plan from their
+        # reports. native = one call in the agent's own plan mode explores with its subagents
+        # and writes the plan (backends with `plan_mode`; the rest fall back to langgraph).
+        "strategy": "langgraph",             # langgraph | native
     },
     "review": {
         "dimensions": {
@@ -187,6 +193,7 @@ ROLE_TIERS: dict[str, str] = {
     "explore": "fast",            # 7 parallel explorers: grounding, capped at 14 files each
     "think": "strong",            # plan synthesis + refine: highest-leverage text in the run
     "critic": "strong",           # architecture critic
+    "native_plan": "strong",      # plan.strategy: native - one call in the agent's plan mode explores and writes the plan
     # migite-review — one role per dimension, plus the verdict
     "review_correctness": "strong",
     "review_security": "strong",
@@ -230,6 +237,7 @@ ROLE_TIERS: dict[str, str] = {
 #             scoped MCP tools need the CLI's MCP servers
 ROLE_TOOLS: dict[str, str] = {
     "critic": "read",             # architecture critic verifies the plan's claims against the repo
+    "native_plan": "default",     # the CLI's own tools, so it can run its explore subagents; plan mode keeps it read-only
     "review_correctness": "read", "review_security": "read",
     "review_test_coverage": "read", "review_testing_plan": "read",
     "review_frontend": "read",
@@ -294,6 +302,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.browser_check": ("off", "ask", "on"),
     "review.dimensions.testing_plan": ("on", "off"),
     "plan.testing_plan_when": ("plan", "review"),
+    "plan.strategy": ("langgraph", "native"),
     "knowledge.select": ("relevant", "recent"),
     "permissions.headless_tools": ("isolated", "default"),
     "ui.tmux": ("auto", "on", "off"),
@@ -399,12 +408,13 @@ knowledge:
 # plan:
 #   testing_plan_when: plan  # plan | review: review = Phase 3 writes testing-plan.md from the plan and the diff, not Phase 1 from the plan
 #   chain_sessions: false    # true: synthesis, refine and the testing plan share one session and read each other from cache (Claude Code)
+#   strategy: langgraph      # langgraph | native: native = one call in the agent's plan mode explores with its own subagents and writes the plan (Claude Code, Cursor, OpenCode; Kimi falls back)
 # review:
 #   dimensions:
 #     testing_plan: on       # on | off: the testing-plan reviewer in Phase 3 (testing-plan.md is still written)
 
 # prompts:
-#   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md
+#   dir: .migite/prompts     # override any of prompts/{plan,native_plan,implement,review,architecture_critic}.md
 # templates:
 #   dir: .migite/templates   # override intake templates or commit.md (the PR-description prompt)
 #   # {org} and {repo} are substituted, e.g. in ~/.config/migite/config.yml:

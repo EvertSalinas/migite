@@ -104,6 +104,9 @@ def reset() -> None:
     _RESUME_NOTICE_SHOWN = False
 
 
+TOOL_POLICIES = ("none", "read", "default")
+
+
 def tools_policy(role: str, scopes: tuple[str, ...] = ()) -> str:
     """none | read | default: what a headless call for `role` may use (config.ROLE_TOOLS).
     A scoped call, or permissions.headless_tools: default, keeps the CLI's full context."""
@@ -120,7 +123,7 @@ def model_for(role: str) -> str:
 
 
 def supports(capability: str) -> bool:
-    """structured_output | effort | usage | scope:<name>, for the active agent."""
+    """structured_output | effort | usage | resume | plan_mode | scope:<name>, for the active agent."""
     return AGENT.supports(capability)
 
 
@@ -253,7 +256,7 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
                scopes: tuple[str, ...] | list[str] = (), permission: str | None = None,
                thinking: bool = False, timeout: int | None = None, ledger: str | None = None,
                effort: str | None = None, model: str | None = None,
-               resume: str = "", keep_session: bool = False) -> CallResult:
+               resume: str = "", keep_session: bool = False, tools: str | None = None) -> CallResult:
     """One headless call on the configured agent.
 
     `role` picks the model and effort (models.* in the config); `model` and `effort`
@@ -262,10 +265,15 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
     `resume` continues the session an earlier call reported (CallResult.usage.session_id),
     and `keep_session` saves this call's session so a later one can continue it; an agent
     without the `resume` capability drops both, with one notice.
+    `tools` (none | read | default) overrides the role's tool policy (config.ROLE_TOOLS) for
+    this call only: a call that continues a session uses it to match the launch of the call
+    that started it, since a different tool set reads nothing from that session's cache.
     Raises ScopeUnsupported before starting anything when a scope can't be honoured,
     and AgentError on a missing CLI, non-zero exit, timeout, or a reported error."""
     agent = AGENT
     scopes = tuple(scopes)
+    if tools is not None and tools not in TOOL_POLICIES:
+        raise ValueError(f"unknown tool policy {tools!r}; known: {', '.join(TOOL_POLICIES)}")
     missing = [s for s in scopes if not agent.supports(f"scope:{s}")]
     if missing:
         raise ScopeUnsupported(f"the {agent.name} backend cannot restrict a call to the "
@@ -277,7 +285,7 @@ def call_agent(prompt: str, role: str, *, label: str = "", tool: str = "", schem
         # Kimi's -p always runs its own auto policy and rejects the permission flags.
         print(f"      ⚠ the {agent.name} backend has no headless permission flag; "
               f"running with its own default instead of {resolved_permission}", file=sys.stderr, flush=True)
-    policy = tools_policy(role, scopes)
+    policy = tools if tools is not None else tools_policy(role, scopes)
     isolated = policy != "default" and agent.info.isolation
     if policy != "default" and not agent.info.isolation:
         global _ISOLATION_NOTICE_SHOWN

@@ -273,6 +273,7 @@ models:
   roles_timeouts:                   # optional per-role timeout override, in seconds (beats the tier)
     think: 1800
     session: 3600                   # the default: an --automata run's headless sessions
+    native_plan: 1800               # the default: plan.strategy: native's one call explores and writes the plan
 ```
 
 The default tiering follows one rule: **a drafter is never weaker than the critic whose findings it
@@ -284,6 +285,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `explore` | fast | `migite-plan` — the 7 parallel codebase explorers, 8 when the task may touch the frontend (grounding, capped at 14 files each) |
 | `think` | **strong** | `migite-plan` — synthesis and refine: the highest-leverage text in the run |
 | `critic` | strong | `migite-plan` — architecture critic |
+| `native_plan` | **strong** | `migite-plan` with [`plan.strategy: native`](#plan-strategy) — the one call in the agent's plan mode that explores the repo with its own subagents and writes the plan, in place of `explore` and synthesis |
 | `review_correctness`, `review_security` | **strong** | `migite-review` — the two reviewers where a miss costs the most |
 | `review_test_coverage`, `review_testing_plan` | standard | `migite-review` — checklist dimensions |
 | `review_frontend` | standard | `migite-review` - Hotwire/Stimulus checklist, only when the diff touches views or JavaScript |
@@ -334,10 +336,12 @@ role wins). Set a generous value when a reasoning backend routinely runs long �
 `models.timeouts.strong: 1800`. `migite config` prints each role's resolved `timeout=`.
 
 `models.roles_timeouts` merges role by role across the config files, so a file that times one
-role keeps the others. Its one default is `session: 3600`: under [`--automata`](./migite.md#automata)
+role keeps the others. It has two defaults. `session: 3600`: under [`--automata`](./migite.md#automata)
 the implement, fix and PR-description sessions are headless calls on the `session` role, each a
 whole phase, far longer than the strong tier's 900s. A timed-out session stops the run (exit 1),
 and the same command with `--automata` runs that phase again. Interactive sessions have no limit.
+`native_plan: 1800`: with [`plan.strategy: native`](#plan-strategy) one call explores the repo and
+writes the plan, the work the explorers and synthesis split between them.
 
 The testing plan used to run on the strong tier, so its generation had `thinking_timeout_seconds`
 (900s). On the standard tier it gets `timeout_seconds` (600s). A long testing plan on a slow
@@ -507,6 +511,7 @@ the agent CLI's MCP servers, plugins, hooks or skills:
 | `heal` | the CLI's full toolset (it edits files) |
 | `jira` | the CLI's full context (its scoped tools are MCP tools) |
 | `session` | the CLI's full toolset: under [`--automata`](./migite.md#automata) the implement, fix and PR-description sessions run as headless calls on this role |
+| `native_plan` | the CLI's full toolset, so it can run its own explore subagents. It runs in the agent's read-only plan mode, which keeps it from editing anything (see [`plan.strategy`](#plan-strategy)) |
 | every other role | no tools: the prompt carries everything |
 
 Your `~/.claude/CLAUDE.md` and the repo's `CLAUDE.md` files are still passed to every isolated
@@ -582,6 +587,7 @@ Each planner explorer gets the same kind of selection at 800 bytes. How words ar
 plan:
   testing_plan_when: plan     # plan | review
   chain_sessions: false       # true | false
+  strategy: langgraph         # langgraph | native
 ```
 
 `testing_plan_when: plan` (the default) writes `testing-plan.md` in Phase 1, from the finished plan. `review` leaves
@@ -633,6 +639,41 @@ in `usage.jsonl`.
   one notice and every call starts a new session, as with the setting off.
 - The chained calls' sessions are saved to disk like any Claude Code session; other isolated
   headless calls save none.
+- With `strategy: native` the chain starts at the native plan call instead of synthesis. Refine and
+  the testing plan then repeat that call's launch (plan mode, the CLI's own tools), since a
+  different launch reads nothing of the session from the cache, and are told not to use the tools.
+  Each joins only when its role runs on the same model as `native_plan`; by default `think` does
+  (both strong tier) and `testing_plan` doesn't.
+
+<a id="plan-strategy"></a>
+`strategy` chooses who explores the codebase and writes the plan.
+
+- `langgraph` (the default) is the planner as it has always been: 7 explorers (8 when the task may
+  touch the frontend) each read up to 14 files of one area on the fast tier, and synthesis writes
+  the plan from their reports on the strong tier.
+- `native` replaces the explorers and synthesis with one headless call on the `native_plan` role,
+  in the agent's own read-only plan mode, with the CLI's own tools. The agent explores the repo
+  with its own subagents, as it would in an interactive plan session, then writes the plan in the
+  format of `prompts/plan.md`, preceded by `prompts/native_plan.md` (overridable through
+  [`prompts.dir`](#prompts) like the others). The critic, refine and the testing plan that follow
+  are the same, and so are the five outputs the gate, `--staged`, implement, the reviewers and the
+  plan fold read.
+
+What changes under `native`:
+
+- The plan ends with a `## Files examined` section: one line per file the agent read and what it
+  showed. It stays in `plan.md`. It is the evidence the explorer reports were: the refiner may
+  reject a critic finding only by quoting the plan, this section included.
+- A reply without a plan document or without that section is retried once, in the same session
+  when the backend can continue one, so the exploration isn't paid for twice.
+- No 14-file cap and no Haiku explorers: the agent reads what it decides to, on its own subagents'
+  models. Expect more cache reads and fewer, longer calls; the ledger records one `native_plan`
+  call where it recorded `explore:*` and `synthesize_plan`.
+- `plan.json` records `strategy: native` and has no `explorers` key.
+- It needs a backend with a headless plan mode: Claude Code (`--permission-mode plan`), Cursor
+  (`--mode plan`) and OpenCode (`--agent plan`, built from its docs, not yet run live). On Kimi,
+  whose `-p` rejects `--plan`, `migite-plan` prints one notice and plans with `langgraph`, and
+  `plan.json`'s `strategy_note` says why.
 
 <a id="review"></a>
 ### `review`
@@ -662,7 +703,7 @@ templates:
 ```
 
 Any `<dir>/<name>.md` overrides the same-named file under migite's `prompts/`
-(`plan`, `implement`, `review`, `architecture_critic`, and the per-stack
+(`plan`, `native_plan`, `implement`, `review`, `architecture_critic`, and the per-stack
 [checklists](#checklists)) or `templates/` (`feature`, `bug`, `refactor`, `spike`, `config`,
 `commit`). Files not present in the override dir fall back to the repo copies, so you can override
 just the PR-description prompt for one project.

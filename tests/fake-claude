@@ -7,6 +7,9 @@
 #   fold_noop    success envelope whose result is a plan_fold reply with no edits
 #   critic       success envelope whose result is one architecture-critic finding
 #   edits        success envelope whose result is a triage edit reply that matches the `plan` mode's plan
+#   plan         success envelope whose result is a multi-section plan (passes migite-plan's stub guard)
+#   native_plan  the `plan` mode's plan with a final `## Files examined` section (plan.strategy: native)
+#   testing_plan success envelope whose result is a testing plan with its three ### sections
 #   text         plain text on stdout, no JSON (older CLI / --output-format text)
 #   is_error     envelope with is_error=true, exit 0
 #   empty        success envelope whose result is the empty string
@@ -17,6 +20,9 @@
 # The session id is "fake", or "fake-<n>" for the n-th call when $FAKE_CLAUDE_SESSIONS names a
 # counter file. The real CLI keeps the id on --resume; a new one per call lets a test see which
 # call a later one continued.
+# $FAKE_CLAUDE_ROUTES ("<marker>=<mode>;<marker>=<mode>;...") picks the mode by the first marker
+# found in the prompt, else $FAKE_CLAUDE_MODE: a whole planner run, whose explorers call in
+# parallel, gets the right reply for each call without depending on the order they arrive in.
 set -u
 prompt="$(cat)"
 [[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
@@ -33,6 +39,13 @@ model="claude-haiku-4-5-20251001"
 for ((i = 1; i <= $#; i++)); do
   [[ "${!i}" == "--model" ]] && { j=$((i + 1)); model="${!j}"; }
 done
+mode="${FAKE_CLAUDE_MODE:-envelope}"
+if [[ -n "${FAKE_CLAUDE_ROUTES:-}" ]]; then
+  IFS=';' read -r -a routes <<< "$FAKE_CLAUDE_ROUTES"
+  for route in "${routes[@]}"; do
+    [[ "$prompt" == *"${route%%=*}"* ]] && { mode="${route#*=}"; break; }
+  done
+fi
 snippet="${prompt:0:40}"
 snippet="${snippet//\"/\\\"}"
 snippet="${snippet//$'\n'/ }"
@@ -48,11 +61,15 @@ envelope() {
 EOF
 }
 
-case "${FAKE_CLAUDE_MODE:-envelope}" in
+# a plausible multi-section plan (> 400 chars, 6+ headings) so migite-plan's stub guard passes
+plan_text="# Fake plan\\nDate: 2026-01-01\\nType: feature\\nJira: N/A\\nStatus: planned\\n\\n## Summary\\nAdd the thing to the place, following the existing service-object pattern used elsewhere in this codebase.\\n\\n## Scope\\n### Models\\n- app/models/thing.rb (new)\\n### Controllers\\n- app/controllers/things_controller.rb (modified)\\n\\n## Approach\\n1. Add the model\\n2. Add the controller action\\n3. Wire the route\\n\\n## Test plan\\n- spec/models/thing_spec.rb\\n- spec/requests/things_spec.rb\\n\\n## Performance considerations\\nNone identified\\n\\n## Risks\\n- 🟡 Migration on a large table\\n\\n## Out of scope\\n- Bulk import\\n\\n## Open questions\\n### 1. Should deletes be soft?\\n**Why it matters:** audit trail\\n**Recommendation:** soft delete\\n### 2. Rate limit?\\n**Why it matters:** abuse\\n**Recommendation:** no, follow-up"
+
+case "$mode" in
   envelope)   envelope "echo:$snippet" "" ;;
   empty)      envelope "" "" ;;
-  plan)       # a plausible multi-section plan (> 400 chars, 6+ headings) so migite-plan's stub guard passes
-              envelope "# Fake plan\\nDate: 2026-01-01\\nType: feature\\nJira: N/A\\nStatus: planned\\n\\n## Summary\\nAdd the thing to the place, following the existing service-object pattern used elsewhere in this codebase.\\n\\n## Scope\\n### Models\\n- app/models/thing.rb (new)\\n### Controllers\\n- app/controllers/things_controller.rb (modified)\\n\\n## Approach\\n1. Add the model\\n2. Add the controller action\\n3. Wire the route\\n\\n## Test plan\\n- spec/models/thing_spec.rb\\n- spec/requests/things_spec.rb\\n\\n## Performance considerations\\nNone identified\\n\\n## Risks\\n- 🟡 Migration on a large table\\n\\n## Out of scope\\n- Bulk import\\n\\n## Open questions\\n### 1. Should deletes be soft?\\n**Why it matters:** audit trail\\n**Recommendation:** soft delete\\n### 2. Rate limit?\\n**Why it matters:** abuse\\n**Recommendation:** no, follow-up" "" ;;
+  plan)       envelope "$plan_text" "" ;;
+  native_plan) envelope "$plan_text\\n\\n## Files examined\\n- app/models/account.rb: Account has_many :widgets and no things association yet\\n- app/controllers/widgets_controller.rb: the service-object pattern the controller follows" "" ;;
+  testing_plan) envelope "# Testing Plan\\n\\n### Prerequisites — seed records (Rails console)\\n\`\`\`ruby\\nAccount.create!(name: 'qa')\\n\`\`\`\\n\\n### Verification steps\\n1. curl -s localhost:3000/things | jq\\n2. grep 'ThingsController#index' log/development.log\\n\\n### Teardown\\n\`\`\`ruby\\nAccount.where(name: 'qa').destroy_all\\n\`\`\`" "" ;;
   structured) envelope "{\\\"verdict\\\":\\\"NEEDS FIXES\\\"}" ',"structured_output":{"verdict":"NEEDS FIXES","reason":"one critical","findings":[{"severity":"critical","problem":"x"},{"severity":"note","problem":"y"}],"document":"# Review: t\n\n## Verdict: NEEDS FIXES\n\nbody"}' ;;
   fold)       envelope '{\"revision\": \"Delay is 15 seconds, not 1 minute.\", \"edits\": [{\"find\": \"1 minute\", \"replace\": \"15 seconds\", \"why\": \"amendment 01\"}]}' "" ;;
   fold_noop)  envelope '{\"revision\": \"No plan changes.\", \"edits\": []}' "" ;;

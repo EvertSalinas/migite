@@ -429,7 +429,7 @@ run_plan() {
   # Human review gate
   # y — approve and continue
   # f - give feedback, refine plan in place (no re-exploration, one headless agent call)
-  # n — full redo (re-run all 7 explorers + synthesis + critic)
+  # n — full redo (re-run the planner: the explorers + synthesis, or the native plan call, then the critic)
   # q — abort
   # Carries on from run.json when a resumed run re-opens this gate
   PLAN_GATE_ATTEMPTS="${PLAN_GATE_ATTEMPTS:-0}"

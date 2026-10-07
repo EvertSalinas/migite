@@ -3,8 +3,9 @@
 Headless: `opencode run --format json <message>`, a stream of JSON events, one
 per line. The answer is the `text` events joined; tokens and cost are summed
 from `step_finish` events; an `error` event fails the call. `--auto` approves
-tool use. Models are `provider/model` ids and are not pinned by default
-(`opencode models`). Built from the OpenCode docs; not yet verified live.
+tool use; `--agent plan` runs the call as OpenCode's read-only plan agent.
+Models are `provider/model` ids and are not pinned by default (`opencode models`).
+Built from the OpenCode docs; not yet verified live.
 """
 
 from __future__ import annotations
@@ -24,10 +25,15 @@ class OpenCodeAgent(Agent):
         prompt_via="arg",
         exit_hint="/exit",
         instruction_files="AGENTS.md",
+        plan_mode=True,                # --agent plan
     )
 
     def _permission(self, word: str) -> list[str]:
-        return ["--auto"] if word in ("auto", "edits") else []
+        if word in ("auto", "edits"):
+            return ["--auto"]
+        if word == "plan":
+            return ["--agent", "plan"]
+        return []
 
     def ask_launch(self, req: AskRequest) -> Launch:
         argv = [self.binary, "run", "--format", "json"] + self._permission(req.permission)

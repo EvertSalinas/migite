@@ -7,7 +7,9 @@ the browser-ready testing-plan steps. The agent is replaced by a fake; skipped
 where langgraph isn't installed (the tool imports it at module load).
 Run: python3 -m unittest tests/test_plan.py"""
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -329,12 +331,12 @@ class CriticOutputGuardTest(unittest.TestCase):
         self.assertEqual(out["plan_final"], "# Plan\n## Scope\n")
 
 
-@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
-class SessionChainTest(unittest.TestCase):
-    """plan.chain_sessions: synthesis starts an agent session, refine and the testing plan each
-    continue the session the call before them reported, and the critic stays outside it. The nodes
-    run in turn through the real gateway against tests/fake-claude, which reports a new session id
-    for every call (fake-1, fake-2, ...), so each check can tell which call a later one continued."""
+class _PlannerOnFakeClaude(unittest.TestCase):
+    """The planner's nodes through the real gateway against tests/fake-claude, which reports a new
+    session id for every call (fake-1, fake-2, ...), so a check can tell which call a later one
+    continued. Every argv goes to self.argv_log, one line per call; the last prompt to self.prompt_file."""
+
+    state: dict   # the planner state the nodes run on; each subclass builds its own
 
     def setUp(self):
         self._env = dict(os.environ)
@@ -346,7 +348,7 @@ class SessionChainTest(unittest.TestCase):
         shim.write_text(f'#!/usr/bin/env bash\nexec "{ROOT / "tests" / "fake-claude"}" "$@"\n')
         shim.chmod(0o755)
         os.environ["PATH"] = str(tmp / "bin") + os.pathsep + os.environ.get("PATH", "")
-        for name in (gateway.LEDGER_ENV, "FAKE_CLAUDE_ARGV"):
+        for name in (gateway.LEDGER_ENV, "FAKE_CLAUDE_ARGV", "FAKE_CLAUDE_ROUTES", "FAKE_CLAUDE_MODE"):
             os.environ.pop(name, None)
         self.argv_log, self.prompt_file = tmp / "argv.log", tmp / "prompt.txt"
         os.environ.update(FAKE_CLAUDE_ARGV_LOG=str(self.argv_log), FAKE_CLAUDE_SESSIONS=str(tmp / "sessions"),
@@ -357,10 +359,6 @@ class SessionChainTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.plan = load_tool()
-        self.state = base_state(
-            intake="Add things.", plan_cmd="Write the plan.", critic_cmd="Critique the plan.", audit="",
-            blueprint="", task_file="", explorations=["### models\nThing has a name column."],
-            testing_plan_when="plan", chain_sessions=True, chain_session="", chain_resumed=[], chain_note="")
 
     def tearDown(self):
         os.environ.clear()
@@ -368,9 +366,8 @@ class SessionChainTest(unittest.TestCase):
         gateway.reset()
         self.tmp.cleanup()
 
-    def pin_testing_plan_to_the_chain_model(self):
-        gateway.configure_from(config.Config(
-            {"models": {"roles": {"testing_plan": config.default_model("think")}}}, {}, [], []))
+    def pin_roles(self, **roles):
+        gateway.configure_from(config.Config({"models": {"roles": roles}}, {}, [], []))
 
     def run_node(self, node, mode: str) -> str:
         """Run one node on the state, merging its update as the graph does; returns its last prompt."""
@@ -381,12 +378,31 @@ class SessionChainTest(unittest.TestCase):
     def calls(self) -> list[str]:
         return self.argv_log.read_text().splitlines() if self.argv_log.exists() else []
 
-    def plan_json(self) -> dict:
+    def outputs(self) -> Path:
         out = Path(self.tmp.name) / "out"
         self.plan.write_outputs({**self.state, "plan_output": str(out / "plan.md"),
                                  "critic_output": str(out / "critic.md"),
                                  "testing_plan_output": str(out / "tp.md"), "sentinel": str(out / ".done")})
-        return json.loads((out / "plan.json").read_text())
+        return out
+
+    def plan_json(self) -> dict:
+        return json.loads((self.outputs() / "plan.json").read_text())
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class SessionChainTest(_PlannerOnFakeClaude):
+    """plan.chain_sessions: synthesis starts an agent session, refine and the testing plan each
+    continue the session the call before them reported, and the critic stays outside it."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = base_state(
+            intake="Add things.", plan_cmd="Write the plan.", critic_cmd="Critique the plan.", audit="",
+            blueprint="", task_file="", explorations=["### models\nThing has a name column."],
+            testing_plan_when="plan", chain_sessions=True, chain_session="", chain_resumed=[], chain_note="")
+
+    def pin_testing_plan_to_the_chain_model(self):
+        self.pin_roles(testing_plan=config.default_model("think"))
 
     def test_refine_and_the_testing_plan_each_continue_the_session_the_call_before_reported(self):
         self.pin_testing_plan_to_the_chain_model()
@@ -492,6 +508,240 @@ class SessionChainTest(unittest.TestCase):
         self.assertEqual(self.plan.chain_setup(False), (False, ""))
         gateway.AGENT = agents.get("claude")
         self.assertEqual(self.plan.chain_setup(True), (True, ""))
+
+
+FILES_SECTION = ("## Files examined\n- app/models/account.rb: Account has_many :widgets and no things association yet\n"
+                 "- app/controllers/widgets_controller.rb: the service-object pattern the controller follows")
+RETRY_MARKER = "Your last reply was not the complete plan document"
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class NativePlanNodeTest(_PlannerOnFakeClaude):
+    """plan.strategy: native - one call in the agent's plan mode, with the CLI's own tools, explores
+    and writes the plan; its `## Files examined` section is the evidence the explorer reports were.
+    The critic, refine and the testing plan that follow are the langgraph planner's own nodes."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = base_state(
+            intake="Add things.", knowledge="LESSON: never N+1", plan_cmd="Write the plan.",
+            critic_cmd="Critique the plan.", native_cmd="NATIVE PREAMBLE", strategy="native", strategy_note="",
+            audit="", blueprint="", task_file="", explorations=[], testing_plan_when="plan",
+            chain_sessions=False, chain_session="", chain_resumed=[], chain_note="", chain_role="", chain_launch={})
+
+    def test_one_call_in_plan_mode_with_the_cli_s_own_tools_on_the_native_plan_role(self):
+        prompt = self.run_node(self.plan.native_plan, "native_plan")
+        (argv,) = self.calls()
+        self.assertIn("--permission-mode plan", argv)
+        self.assertIn(f"--model {config.default_model('native_plan')}", argv)
+        for flag in ("--tools", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--resume"):
+            self.assertNotIn(flag, argv)
+        for part in ("NATIVE PREAMBLE", "Add things.", "LESSON: never N+1", "Write the plan.",
+                     "## Formatting rules", "End it with the `## Files examined` section"):
+            self.assertIn(part, prompt)
+        self.assertNotIn("## Codebase exploration", prompt)
+        self.assertEqual(self.state["explorations"], [f"### Files examined\n{FILES_SECTION.split(chr(10), 1)[1]}"])
+        self.assertTrue(self.state["plan_draft"].rstrip().endswith("the service-object pattern the controller follows"))
+        self.assertEqual(self.state["synth_retries"], 0)
+
+    def test_a_plan_without_files_examined_is_retried_once_in_the_session_that_explored(self):
+        os.environ["FAKE_CLAUDE_ROUTES"] = f"{RETRY_MARKER}=native_plan"
+        retry_prompt = self.run_node(self.plan.native_plan, "plan")      # the first reply has no section
+        first, retry = self.calls()
+        self.assertIn("--resume fake-1", retry)
+        self.assertIn("--permission-mode plan", retry)
+        self.assertNotIn("Write the plan.", retry_prompt)                # it points at the session, not the task
+        self.assertIn("Do not explore again", retry_prompt)
+        self.assertEqual(self.state["synth_retries"], 1)
+        self.assertTrue(self.state["explorations"][0].startswith("### Files examined\n- app/models/account.rb"))
+
+    def test_a_retry_still_without_the_section_keeps_the_plan_and_has_no_evidence(self):
+        self.run_node(self.plan.native_plan, "plan")
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn("## Scope", self.state["plan_draft"])
+        self.assertEqual(self.state["explorations"], [])
+
+    def test_a_stub_twice_aborts_rather_than_passing_it_on(self):
+        with self.assertRaises(RuntimeError):
+            self.run_node(self.plan.native_plan, "envelope")             # "echo:..." is no plan
+
+    def test_a_stub_retry_keeps_the_first_draft_and_ends_the_chain(self):
+        self.state["chain_sessions"] = True
+        os.environ["FAKE_CLAUDE_ROUTES"] = f"{RETRY_MARKER}=envelope"
+        self.run_node(self.plan.native_plan, "plan")
+        self.assertIn("## Scope", self.state["plan_draft"])
+        self.assertEqual(self.state["chain_session"], "")
+        self.assertIn("no session whose last reply is the plan", self.state["chain_note"])
+
+    def test_on_the_chain_refine_and_the_testing_plan_continue_the_native_session_with_its_launch(self):
+        self.state["chain_sessions"] = True
+        self.pin_roles(testing_plan=config.default_model("native_plan"))
+        self.run_node(self.plan.native_plan, "native_plan")
+        self.run_node(self.plan.run_architecture_critic, "critic")
+        refine_prompt = self.run_node(self.plan.refine_plan, "edits")
+        testing_prompt = self.run_node(self.plan.generate_testing_plan, "testing_plan")
+        native, critic, refine, testing = self.calls()
+
+        # The critic stays outside the session, read-only and isolated, as on the langgraph chain.
+        self.assertIn("--tools Read,Grep,Glob", critic)
+        self.assertNotIn("--resume", critic)
+        # Refine and the testing plan repeat the native call's launch, so the session's cache applies:
+        # plan mode, the CLI's own tools, no isolation flags and no schema.
+        for argv, resumed in ((refine, "fake-1"), (testing, "fake-3")):
+            self.assertIn(f"--resume {resumed}", argv)
+            self.assertIn("--permission-mode plan", argv)
+            for flag in ("--tools", "--safe-mode", "--json-schema", "--no-session-persistence"):
+                self.assertNotIn(flag, argv)
+        # Neither is sent the plan again, and both are told the tools they now have are not for this reply.
+        self.assertNotIn("## Approach", refine_prompt)
+        self.assertIn("Out of scope names no owner for bulk import", refine_prompt)
+        self.assertIn("Do not use any tool in this reply", refine_prompt)
+        self.assertIn("Do not use any tool in this reply", testing_prompt)
+        self.assertIn("- Bulk import (a follow-up ticket)", self.state["plan_final"])
+        envelope = self.plan_json()
+        self.assertEqual(envelope["session_chain"],
+                         {"enabled": True, "resumed": ["refine_plan:edits", "generate_testing_plan"], "note": ""})
+        self.assertEqual(envelope["strategy"], "native")
+        self.assertNotIn("explorers", envelope)
+
+    def test_off_the_chain_the_refiner_reads_the_plan_s_files_examined_not_explorer_reports(self):
+        self.run_node(self.plan.native_plan, "native_plan")
+        self.state.update(critic_findings="🟡 **Warning** - Out of scope names no owner", critic_usable=True)
+        refine_prompt = self.run_node(self.plan.refine_plan, "edits")
+        refine = self.calls()[-1]
+        self.assertIn("--safe-mode", refine)                             # isolated, as without the native plan
+        self.assertNotIn("--permission-mode", refine)
+        self.assertIn("The plan's `## Files examined` section records what the codebase contains", refine_prompt)
+        self.assertIn("app/models/account.rb: Account has_many :widgets", refine_prompt)   # in the plan itself
+        self.assertNotIn("Explorer reports (what the codebase contains)", refine_prompt)
+        self.assertNotIn("Do not use any tool in this reply", refine_prompt)
+
+    def test_a_think_role_on_another_model_does_not_continue_the_native_session(self):
+        self.state["chain_sessions"] = True
+        self.pin_roles(think="claude-other-model")
+        self.run_node(self.plan.native_plan, "native_plan")
+        self.state.update(critic_findings="🟡 **Warning** - Out of scope names no owner", critic_usable=True)
+        self.run_node(self.plan.refine_plan, "edits")
+        self.assertNotIn("--resume", self.calls()[-1])
+        self.assertIn("refine_plan:edits runs on claude-other-model", self.state["chain_note"])
+
+    def test_findings_the_refiner_rejected_cite_the_files_examined_section(self):
+        rejected = [{"finding": "f", "reason": "r", "evidence": "e"}]
+        text = self.plan.rejections_appendix(rejected, rejected, self.plan.evidence_source(self.state))
+        self.assertIn("from the plan and its Files examined section", text)
+        self.assertIn("not in the plan or its Files examined section", text)
+        self.assertIn("the explorer reports", self.plan.rejections_appendix(rejected, [], self.plan.evidence_source({})))
+
+    def test_the_frontend_guidance_asks_the_agent_to_explore_the_views_itself(self):
+        block = self.plan.frontend_block({**self.state, "frontend": True, "frontend_source": "detected in repo"})
+        self.assertIn("explore views, components, helpers and Stimulus/Turbo code too", block)
+        self.assertNotIn("views_frontend", block)
+        self.assertIn("do not explore views or JavaScript",
+                      self.plan.frontend_block({**self.state, "frontend_source": "intake says no"}))
+
+    def test_files_examined_reads_up_to_the_next_section(self):
+        self.assertEqual(self.plan.files_examined("# P\n## Files examined\n- a.rb: x\n\n## Notes\nlater"), "- a.rb: x")
+        self.assertEqual(self.plan.files_examined("# P\n## Scope\n"), "")
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class StrategySetupTest(unittest.TestCase):
+    def tearDown(self):
+        gateway.reset()
+
+    def test_a_backend_without_a_headless_plan_mode_falls_back_to_langgraph_and_says_why(self):
+        plan = load_tool()
+        gateway.AGENT = agents.get("kimi")
+        self.assertEqual(plan.strategy_setup("native"),
+                         ("langgraph", "the kimi backend has no headless plan mode, so the explorers and synthesis ran instead"))
+        self.assertEqual(plan.strategy_setup("langgraph"), ("langgraph", ""))
+        for name in ("claude", "cursor", "opencode"):
+            gateway.AGENT = agents.get(name)
+            self.assertEqual(plan.strategy_setup("native"), ("native", ""), name)
+
+
+# Which canned reply each planner call gets, by a phrase only its prompt carries.
+ROUTES = ";".join([
+    "You are editing=edits",                              # refine_plan:edits (migite/doc_edits.py)
+    "standalone QA/dev verification=testing_plan",        # generate_testing_plan (migite/testing_plan.py)
+    "pre-implementation critique=critic",                 # prompts/architecture_critic.md
+    "## Codebase exploration=plan",                       # synthesize_plan
+    "# Native plan=native_plan",                          # prompts/native_plan.md
+])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class PlanStrategyEndToEndTest(_PlannerOnFakeClaude):
+    """migite-plan's main() under each plan.strategy, against tests/fake-claude: the same five outputs
+    the gate, --staged, implement, the reviewers and the plan fold read."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = Path(self.tmp.name)
+        self.repo, self.out = tmp / "repo", tmp / "scratch"
+        self.repo.mkdir(); self.out.mkdir()
+        (self.repo / "intake.md").write_text("Title: Add things\nType: feature\n\n## Objective\nAdd things.\n")
+        (tmp / "xdg").mkdir()
+        for name in ("MIGITE_CONFIG", "MIGITE_PERMISSION_MODE", "FAKE_CLAUDE_SESSIONS", "FAKE_CLAUDE_PROMPT"):
+            os.environ.pop(name, None)
+        os.environ.update(XDG_CONFIG_HOME=str(tmp / "xdg"), MIGITE_AGENT="claude", FAKE_CLAUDE_ROUTES=ROUTES,
+                          FAKE_CLAUDE_MODE="envelope", **{gateway.LEDGER_ENV: str(tmp / "usage.jsonl")})
+
+    def run_main(self, strategy: str) -> dict:
+        (self.repo / ".migite.json").write_text(json.dumps({"plan": {"strategy": strategy}}))
+        argv = ["migite-plan", "--intake", str(self.repo / "intake.md"), "--plan-output", str(self.out / "plan.md"),
+                "--critic-output", str(self.out / "architecture-critic.md"),
+                "--testing-plan-output", str(self.out / "testing-plan.md"), "--repo-root", str(self.repo),
+                "--sentinel", str(self.out / ".plan.done"), "--base-branch", "main", "--stack", "rails"]
+        log = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+            try:
+                self.plan.main()
+            except SystemExit as e:
+                self.fail(f"migite-plan exited {e.code}:\n{log.getvalue()}")
+        return json.loads((self.out / "plan.json").read_text())
+
+    def labels(self) -> list[str]:
+        return [r["label"] for r in gateway.read_ledger(os.environ[gateway.LEDGER_ENV])]
+
+    def assert_the_five_outputs(self, envelope: dict, strategy: str):
+        plan = (self.out / "plan.md").read_text()
+        self.assertIn("## Summary", plan)
+        self.assertIn("## Scope\n### Models", plan)                       # --staged's stages
+        self.assertIn("## Open questions\n### 1.", plan)
+        self.assertIn("- Bulk import (a follow-up ticket)", plan)          # the critic's finding, applied
+        self.assertIn("🟡 **Warning**", (self.out / "architecture-critic.md").read_text())
+        testing_plan = (self.out / "testing-plan.md").read_text()
+        self.assertTrue(testing_plan.startswith("# Testing Plan"))
+        for heading in ("### Prerequisites", "### Verification steps", "### Teardown"):
+            self.assertIn(heading, testing_plan)
+        self.assertTrue((self.out / ".plan.done").exists())
+        self.assertEqual(envelope["strategy"], strategy)
+        self.assertEqual(envelope["strategy_note"], "")
+        self.assertIn("## Scope", envelope["plan_headings"])
+        self.assertEqual(envelope["open_questions"], 2)
+        self.assertEqual(envelope["critic"]["warning"], 1)
+        self.assertEqual(envelope["refine_status"], "applied_as_edits")
+        self.assertEqual(envelope["usage"]["calls"], len(self.labels()))
+        return plan
+
+    def test_native_writes_the_five_outputs_from_one_plan_mode_call(self):
+        envelope = self.run_main("native")
+        plan = self.assert_the_five_outputs(envelope, "native")
+        self.assertIn("## Files examined", plan)
+        self.assertIn("## Files examined", envelope["plan_headings"])
+        self.assertNotIn("explorers", envelope)
+        self.assertEqual(self.labels(), ["native_plan", "architecture_critic", "refine_plan:edits", "generate_testing_plan"])
+
+    def test_langgraph_writes_the_same_five_outputs_from_the_explorers_and_synthesis(self):
+        envelope = self.run_main("langgraph")
+        plan = self.assert_the_five_outputs(envelope, "langgraph")
+        self.assertNotIn("## Files examined", plan)
+        self.assertEqual(envelope["explorers"], {"count": 7, "failed": []})
+        labels = self.labels()
+        self.assertEqual(sorted(l for l in labels if l.startswith("explore:")),
+                         sorted(f"explore:{area}" for area, _ in self.plan.EXPLORE_AREAS))
+        self.assertEqual(labels[7:], ["synthesize_plan", "architecture_critic", "refine_plan:edits", "generate_testing_plan"])
 
 
 if __name__ == "__main__":

@@ -119,8 +119,8 @@ check "session: cursor → cursor-agent --force <prompt>" \
 use_agent opencode
 check "session: opencode → opencode --prompt <prompt> --auto" \
   test "$(session_cmd --permission edits)" = "opencode --prompt 'do the thing' --auto"
-check "session: plan on opencode → no approval flag" \
-  test "$(session_cmd --permission plan)" = "opencode --prompt 'do the thing'"
+check "session: plan on opencode → its read-only plan agent, no approval flag" \
+  test "$(session_cmd --permission plan)" = "opencode --prompt 'do the thing' --agent plan"
 use_agent kimi
 check "session: kimi runs the phase headless (kimi -p <prompt>, no permission flag)" \
   test "$(session_cmd --permission plan)" = "kimi -p 'do the thing'"

@@ -161,7 +161,8 @@ Return ONLY a JSON object: {shape}"""
 
 
 def update(doc: str, *, name: str, task: str, context: list[tuple[str, str]], role: str,
-           label: str, tool: str = "migite", triage: bool = False, resume: str = "") -> tuple[str | None, dict]:
+           label: str, tool: str = "migite", triage: bool = False, resume: str = "",
+           permission: str | None = None, tools: str | None = None) -> tuple[str | None, dict]:
     """Ask for edits to `doc` and apply them. Returns (new_doc, report); new_doc is
     None when no usable edit came back, so the caller falls back to a full rewrite:
     an unparseable reply, or edits proposed where none applied. An empty edit list
@@ -172,11 +173,14 @@ def update(doc: str, *, name: str, task: str, context: list[tuple[str, str]], ro
     leaves the document out, and no schema is sent, since a schema reaches the CLI as a tool
     and a different tool set reads nothing of the session from the prompt cache. The JSON is
     read from the text. The report then carries `session_id`, for the next call to continue.
+    `permission` and `tools` go to gateway.call_agent as they are: a call that continues a
+    session passes the launch of the call that started it.
     Raises gateway.AgentError when the call itself fails."""
     resume = resume if gateway.supports("resume") else ""   # no session to point at: send the document
     prompt = build_update_prompt(doc, name=name, task=task, context=context, triage=triage, doc_above=bool(resume))
     schema = (TRIAGE_SCHEMA if triage else EDIT_SCHEMA) if gateway.supports("structured_output") and not resume else None
-    res = gateway.call_agent(prompt, role, label=label, tool=tool, schema=schema, resume=resume)
+    res = gateway.call_agent(prompt, role, label=label, tool=tool, schema=schema, resume=resume,
+                             permission=permission, tools=tools)
     reply = parse_reply(res.text, res.structured)
     if reply is None:
         return None, {"reason": "the reply had no usable JSON edit list", "applied": [], "rejected": []}

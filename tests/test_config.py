@@ -137,11 +137,13 @@ class EffortTest(_Isolated):
 
 
 class TimeoutTest(_Isolated):
-    def test_no_override_by_default_except_the_automata_session(self):
+    def test_no_override_by_default_except_the_automata_session_and_the_native_plan(self):
         cfg = self.load()
-        self.assertTrue(all(v is None for r, v in cfg.timeouts_by_role().items() if r != "session"))
+        self.assertTrue(all(v is None for r, v in cfg.timeouts_by_role().items() if r not in ("session", "native_plan")))
         # an --automata run's headless session is a whole phase: an hour, not the strong tier's 900s
         self.assertEqual(cfg.timeout("session"), 3600)
+        # plan.strategy: native's one call explores and writes the plan: 30 minutes
+        self.assertEqual(cfg.timeout("native_plan"), 1800)
         with self.assertRaises(KeyError):
             cfg.timeout("nonexistent_role")
 
@@ -536,6 +538,28 @@ class TestingPlanConfigTest(_Isolated):
     def test_the_testing_plan_role_stays_on_the_standard_tier_and_its_model(self):
         self.assertEqual(config.ROLE_TIERS["testing_plan"], "standard")
         self.assertEqual(self.load().model("testing_plan"), "claude-sonnet-5")
+
+    def test_the_explorers_and_synthesis_plan_by_default(self):
+        self.assertEqual(self.load().get("plan.strategy"), "langgraph")
+
+    def test_the_native_strategy_can_be_chosen(self):
+        self.write_repo({"plan": {"strategy": "native"}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("plan.strategy"), "native")
+        self.assertEqual(cfg.warnings, [])
+
+    def test_an_unknown_strategy_is_an_error_naming_the_key(self):
+        self.write_repo({"plan": {"strategy": "ultraplan"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("plan.strategy", str(cm.exception))
+
+    def test_the_native_plan_is_a_strong_tier_call_with_the_cli_s_own_tools(self):
+        # The plan is the highest-leverage text in the run, and its explore subagents need the CLI's tools;
+        # plan mode, not a tool list, keeps it read-only.
+        self.assertEqual(config.ROLE_TIERS["native_plan"], "strong")
+        self.assertEqual(config.ROLE_TOOLS["native_plan"], "default")
+        self.assertEqual(self.load().model("native_plan"), self.load().model("think"))
 
 
 class KnowledgeSelectConfigTest(_Isolated):

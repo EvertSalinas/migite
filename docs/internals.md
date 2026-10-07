@@ -134,7 +134,7 @@ migite-plan \
 
 `--testing-plan-output` is where `testing-plan.md` goes. With `plan.testing_plan_when: review` (config only, no flag) `migite-plan` makes no testing-plan call and writes nothing there: Phase 3 does, through `python -m migite.testing_plan --plan P --out O [--diff F] [--frontend]` (the same prompt, plus the diff; exit 0 writes `--out`, 1 failed call, 2 empty reply, and `--out` is untouched on a non-zero exit).
 
-`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria), fetched in `plan.sh` by `migite-ticket` whenever `--jira` is used (Jira REST, or the agent's Atlassian MCP tools as a fallback; see [tickets.md](./tickets.md)), cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context) and the 7 explorers' keyword extraction. `migite-plan` itself never fetches anything - it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
+`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria), fetched in `plan.sh` by `migite-ticket` whenever `--jira` is used (Jira REST, or the agent's Atlassian MCP tools as a fallback; see [tickets.md](./tickets.md)), cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context; the native plan call under `plan.strategy: native`) and the 7 explorers' keyword extraction. `migite-plan` itself never fetches anything - it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
 
 `--base-branch` sets the branch explorers diff against. Omitted, it auto-detects from `origin/HEAD`, then falls back to `main` / `master` / `develop`. `migite` passes its own detected value so both agree.
 
@@ -143,8 +143,11 @@ migite-plan \
 Reads `prompts/plan.md` (plan format + type routing, injected into `synthesize_plan`) and
 `prompts/architecture_critic.md` (the critic checklist) from the directory the script really
 lives in (`Path(__file__).resolve().parents[2]`, the checkout above `migite/tools/`), unless
-`prompts.dir` in the config overrides one. Either file missing is a hard exit-1 — never a silent
-empty prompt. Models come from the config roles `explore` / `think` / `critic`
+`prompts.dir` in the config overrides one. With `plan.strategy: native` it also reads
+`prompts/native_plan.md`, the preamble of the one plan-mode call that replaces the explorers and
+synthesis ([configuration](./configuration.md#plan-strategy)). Any of them missing is a hard
+exit-1 — never a silent empty prompt. Models come from the config roles `explore` / `think` /
+`critic`, and `native_plan` under the native strategy
 ([docs/configuration.md](./configuration.md#models)).
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure (no sentinel written).
@@ -224,16 +227,18 @@ calls on a [`plan.chain_sessions`](./configuration.md#plan-chain-sessions) chain
 
 | Field | Meaning |
 |---|---|
+| `strategy` | `langgraph` (explorers + synthesis) or `native` (one call in the agent's plan mode): the planner that wrote the draft, from `plan.strategy` |
+| `strategy_note` | Why `native` was asked for and `langgraph` ran (a backend with no headless plan mode), else `""` |
 | `critic.clean`, `critic.critical/warning/note` | Whether the architecture critic returned the clean signal, and its 🔴/🟡/🟢 counts |
 | `open_questions` | Number of `### N.` entries under `## Open questions` |
 | `plan_headings` | The plan's `## ` headings, in order |
 | `testing_plan_when` | `plan` or `review`: when the testing plan is written. Under `review`, `outputs.testing_plan` is `null` and Phase 3 writes the file |
-| `session_chain` | `plan.chain_sessions`: `enabled` (it was on and the backend can continue a session), `resumed[]` (the calls that continued the synthesis session: `refine_plan:edits`, `generate_testing_plan`), `note` (why the chain didn't apply or ended before the testing plan, else `""`) |
-| `synth_retries` | 0 or 1 — whether synthesis needed the stub retry |
+| `session_chain` | `plan.chain_sessions`: `enabled` (it was on and the backend can continue a session), `resumed[]` (the calls that continued the session synthesis or the native plan started: `refine_plan:edits`, `generate_testing_plan`), `note` (why the chain didn't apply or ended before the testing plan, else `""`) |
+| `synth_retries` | 0 or 1 — whether synthesis needed the stub retry, or the native plan its retry (no plan, or no `## Files examined` section) |
 | `refine_status` | `no_concerns` / `applied_as_edits` / `no_edits_needed` (the critic's findings applied as exact edits, or none needed) / `applied` / `applied_after_retry` / `kept_draft` (the full-rewrite fallback) |
-| `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports. Listed at the end of `architecture-critic.md` |
+| `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports (the plan's `## Files examined` section under `native`). Listed at the end of `architecture-critic.md` |
 | `refine_unverified[]` | Findings the refiner declined but whose quoted reason is not in the plan or the explorer reports: left open, listed the same way |
-| `explorers.count`, `explorers.failed[]` | How many explorers ran and which failed |
+| `explorers.count`, `explorers.failed[]` | How many explorers ran and which failed. `langgraph` only: absent under `native`, so read it as optional |
 | `usage` | This tool's calls from the ledger, summed |
 
 **`review.json`** (beside `review.md`, written by `migite-review`):
@@ -263,6 +268,8 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
   "base_branch": "main",
   "stack": "rails",
   "task_type": "feature",
+  "strategy": "langgraph",
+  "strategy_note": "",
   "critic": { "clean": false, "critical": 0, "warning": 1, "note": 1 },
   "open_questions": 2,
   "plan_headings": ["## Summary", "## Scope", "## Approach", "## Test plan", "## Performance considerations",
@@ -277,6 +284,9 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
              "input_tokens": 1820, "output_tokens": 12904, "cache_read_input_tokens": 236240, "cache_creation_input_tokens": 23624 }
 }
 ```
+
+With `"strategy": "native"` the `explorers` key is absent and `plan_headings` ends with
+`"## Files examined"`.
 
 Reading one field from bash and from Python:
 

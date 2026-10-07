@@ -27,8 +27,9 @@ agent:
 | Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped (set `[thinking].effort` in `~/.kimi-code/config.toml`) | dropped |
 | Isolated headless calls | `permissions.headless_tools: isolated` (the default) | `--tools` (none, or `Read,Grep,Glob` for reviewers), `--strict-mcp-config`, `--safe-mode`, `--no-session-persistence` (left out on a session chain, below), `--exclude-dynamic-system-prompt-sections`, CLAUDE.md passed back via `--append-system-prompt`, `--max-budget-usd` for reviewers | no → one notice, then the full toolset | no → one notice, then the full toolset | no → one notice, then the full toolset |
 | Continue a headless call's session | `plan.chain_sessions` (synthesis, refine, testing plan) | `--resume <session id>`; a call that starts or continues the chain keeps its session | no → one notice, then a new session per call | no → one notice, then a new session per call | no → one notice, then a new session per call |
+| Headless plan mode | [`plan.strategy: native`](./configuration.md#plan-strategy): one read-only call that explores and writes the plan | `--permission-mode plan` | `--mode plan` | none — `-p` rejects `--plan`; one notice, then the explorers and synthesis plan instead | `--agent plan` (the read-only plan agent; built from the docs, not run live) |
 | Tool scope `jira.read` | the Jira fetch's agent fallback | the two Atlassian read tools via `--allowedTools` | no → only `acli` can fetch | no → only `acli` can fetch | no → only `acli` can fetch |
-| Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | none — `-p` rejects `--yolo`/`--auto`/`--plan` and always runs Kimi's auto policy | `auto`/`edits` → `--auto` |
+| Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | none — `-p` rejects `--yolo`/`--auto`/`--plan` and always runs Kimi's auto policy | `auto`/`edits` → `--auto`, `plan` → `--agent plan` |
 | Exit command shown by `run_phase` | interactive sessions | `/exit` | `/quit` | n/a — the headless phase returns on its own | `/exit` |
 | Project rules it reads | the implement prompt names them | `CLAUDE.md` | `AGENTS.md` and `.cursor/rules` | `AGENTS.md` | `AGENTS.md` |
 
@@ -142,7 +143,7 @@ class Agent:
     info: AgentInfo   # name, display_name, default_binary, models per tier, structured_output,
                       # effort, usage, scopes, prompt_via, max_arg_bytes, env_unset,
                       # exit_hint, instruction_files, permission_flags, session_mode,
-                      # isolation, resume
+                      # isolation, resume, plan_mode
     def ask_launch(self, req: AskRequest) -> Launch          # argv, stdin, env to set or unset
     def parse(self, stdout, returncode, req) -> AskResult    # that CLI's output in one shape
     def session_launch(self, req: SessionRequest) -> Launch

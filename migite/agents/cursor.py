@@ -25,6 +25,7 @@ class CursorAgent(Agent):
         prompt_via="arg",
         exit_hint="/quit",
         instruction_files="AGENTS.md and .cursor/rules",
+        plan_mode=True,                # --mode plan
     )
 
     def _permission(self, word: str) -> list[str]:

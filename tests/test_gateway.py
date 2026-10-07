@@ -228,6 +228,23 @@ class SessionChainTest(_FakeClaude):
         self.assertEqual(argv[argv.index("--resume") + 1], "s-1")
         self.assertNotIn("--no-session-persistence", argv)
 
+    def test_a_tools_override_replaces_the_role_s_policy_for_one_call(self):
+        # A chained call repeats the launch of the call that started its session.
+        argv, _ = self.call(tools="default", permission="plan")
+        for flag in ("--tools", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"):
+            self.assertNotIn(flag, argv)
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "plan")
+        argv, _ = self.call(tools="read")
+        self.assertEqual(argv[argv.index("--tools") + 1], ",".join(config.READ_TOOLS))
+        argv, _ = self.call()                                 # unset: think's own policy, isolated with no tools
+        self.assertIn("--safe-mode", argv)
+        self.assertNotIn(",".join(config.READ_TOOLS), argv)
+        self.assertNotIn("--permission-mode", argv)
+
+    def test_an_unknown_tools_override_is_refused_before_anything_runs(self):
+        with self.assertRaises(ValueError):
+            gateway.call_agent("x", "think", label="l", tools="everything")
+
     def test_an_agent_that_cannot_resume_says_so_once_and_starts_a_new_session_each_time(self):
         gateway.AGENT = agents.get("cursor", binary=str(ROOT / "tests" / "fake-cursor-agent"))
         err = io.StringIO()
