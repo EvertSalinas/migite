@@ -128,8 +128,9 @@ adapters        migite/agents/base.py        the interface and shared types
 
 - **Python tools** call `migite.gateway.call_agent(prompt, role, label=..., schema=..., scopes=...)`.
 - **Bash** calls `agent_ask <label> <role>` (headless, prompt on stdin), `agent_think` (the same
-  with a spinner), and `run_phase` (interactive). All three go through `migite/agent_cli.py`, whose
-  subcommands are `ask`, `session`, `info`, and `check`.
+  with a spinner), and `run_phase` (interactive; under `--automata` an `ask` on the `session` role
+  instead, on every backend). All three go through `migite/agent_cli.py`, whose subcommands are
+  `ask`, `session`, `info`, and `check`.
 - **The agent's description** (`python -m migite.agent_cli info --shell`) is cached as `MIGITE_AGENT_*` when
   the config loads, so bash messages and capability checks read variables, not CLI knowledge.
 
@@ -189,6 +190,9 @@ adapter.
   non-interactive and rejects `--yolo`/`--auto`/`--plan`. migite therefore runs the implement, gate
   fix, and PR-description phases headless as `kimi -p`, and Kimi's own auto policy governs
   permissions. `run_phase` prints "runs this phase headlessly" for it instead of an exit command.
+  Under `--automata` every backend runs those phases headless the same way, through
+  `agent_cli ask` (`kimi -p ... --output-format stream-json` here), so the Kimi difference only
+  shows in interactive runs.
 - Without structured output, the verdict comes from the markdown parser. It is anchored on the
   Verdict heading and tested against every past review, but a typed enum is stronger.
 - Cursor headless mode without `--force` only proposes changes; migite maps `auto` and `edits`

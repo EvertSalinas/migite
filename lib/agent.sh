@@ -134,6 +134,7 @@ write_prompt() {
 # model never overrides the config. A prompt too long
 # for one command-line argument (ui.prompt_inline_max) is passed as a pointer to
 # its prompt file; the gateway decides that, the same way for every agent.
+# Under --automata the session runs headless instead (run_phase_headless).
 run_phase() {
   local label="$1"
   local outfile="$2"
@@ -141,6 +142,10 @@ run_phase() {
   local permission_mode="${4:-${MIGITE_CFG_PERMISSIONS_INTERACTIVE:-auto}}"
   local prompt_file
   prompt_file=$(write_prompt "$label" "$prompt")
+  if automata; then
+    run_phase_headless "$label" "$outfile" "$prompt_file" "$permission_mode"
+    return 0
+  fi
   local agent_name exit_hint session_mode
   agent_name="$(agent_field display_name || echo "the agent")"
   exit_hint="$(agent_field exit_hint || echo "exit the session")"
@@ -206,6 +211,39 @@ run_phase() {
   fi
 }
 
+# run_phase_headless <label> <output_file> <prompt_file> <permission>
+# run_phase under --automata, on every agent: one headless call on the `session`
+# role (same model as the interactive session, the CLI's full toolset, a
+# models.roles_timeouts.session limit), so the session lands in the usage ledger.
+# Its final reply is kept under $LOG_DIR and printed; when the session didn't
+# write <output_file> itself, the reply becomes it. A failed session stops the
+# run, as an inline interactive session that exits non-zero does: run.json leaves
+# the phase running, so `migite --automata` runs it again.
+run_phase_headless() {
+  local label="$1" outfile="$2" prompt_file="$3" permission_mode="$4"
+  local reply
+  reply="$LOG_DIR/$TIMESTAMP-session-$(printf '%s' "$label" | tr -cs 'a-zA-Z0-9' '-').txt"
+
+  echo ""
+  echo -e "${CYAN}  Running $(agent_field display_name || echo "the agent") headless (--automata): ${BOLD}$label${RESET}"
+  echo -e "  ${CYAN}Output file: ${outfile}${RESET}"
+  echo -e "  ${CYAN}Permission mode: ${permission_mode}${RESET}"
+  [[ -n "${MIGITE_CFG_MODEL_SESSION:-}" ]] && echo -e "  ${CYAN}Model: ${MIGITE_CFG_MODEL_SESSION}${RESET}"
+  echo -e "  ${CYAN}Reply: ${reply}${RESET}"
+  echo ""
+
+  agent_ask "$label" session --permission "$permission_mode" < "$prompt_file" > "$reply" \
+    || error "The '$label' session failed (see above). Run the same command with --automata to run this phase again"
+  cat "$reply"
+  echo ""
+  if [[ ! -s "$outfile" && -s "$reply" ]]; then
+    mkdir -p "$(dirname "$outfile")"
+    cp "$reply" "$outfile"
+    warn "The session didn't write $outfile; its final reply is saved there instead"
+  fi
+  return 0
+}
+
 # agent_think [--quiet] [--permission P] <label> <role> <output_file> <prompt>
 # agent_ask in the background with a spinner. The prompt goes in on stdin, the
 # result lands in output_file and is printed unless --quiet. Returns the call's
@@ -234,12 +272,15 @@ agent_think() {
   printf '%s' "$prompt" | agent_ask "$label" "$role" ${extra[@]+"${extra[@]}"} > "$outfile" &
   local pid=$!
 
-  while kill -0 "$pid" 2>/dev/null; do
-    printf "\r  ${CYAN}${frames[$i]}${RESET}  working..."
-    i=$(( (i + 1) % ${#frames[@]} ))
-    sleep 0.1
-  done
-  printf "\r\033[K"  # clear spinner line
+  # No spinner under --automata: ten frames a second would flood a CI log.
+  if ! automata; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf "\r  ${CYAN}${frames[$i]}${RESET}  working..."
+      i=$(( (i + 1) % ${#frames[@]} ))
+      sleep 0.1
+    done
+    printf "\r\033[K"  # clear spinner line
+  fi
 
   wait "$pid"
   local exit_code=$?

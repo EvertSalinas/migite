@@ -137,9 +137,11 @@ class EffortTest(_Isolated):
 
 
 class TimeoutTest(_Isolated):
-    def test_no_override_by_default(self):
+    def test_no_override_by_default_except_the_automata_session(self):
         cfg = self.load()
-        self.assertTrue(all(v is None for v in cfg.timeouts_by_role().values()))
+        self.assertTrue(all(v is None for r, v in cfg.timeouts_by_role().items() if r != "session"))
+        # an --automata run's headless session is a whole phase: an hour, not the strong tier's 900s
+        self.assertEqual(cfg.timeout("session"), 3600)
         with self.assertRaises(KeyError):
             cfg.timeout("nonexistent_role")
 
@@ -159,6 +161,13 @@ class TimeoutTest(_Isolated):
         self.assertEqual(cfg.timeout("verdict"), 1800)       # strong tier override
         self.assertEqual(cfg.timeout("plan_refine"), 2400)   # standard role, role override
         self.assertIsNone(cfg.timeout("explore"))
+
+    def test_a_repo_roles_timeouts_keeps_the_session_default_and_can_change_it(self):
+        self.write_repo({"models": {"roles_timeouts": {"critic": 3000}}})
+        cfg = self.load()
+        self.assertEqual((cfg.timeout("critic"), cfg.timeout("session")), (3000, 3600))
+        self.write_repo({"models": {"roles_timeouts": {"session": 7200}}})
+        self.assertEqual(self.load().timeout("session"), 7200)
 
     def test_bad_timeout_values_are_errors(self):
         self.write_repo({"models": {"timeouts": {"strong": "soon"}}})

@@ -98,6 +98,12 @@ run_plan() {
   fi
 
   _pick_task_type() {
+    if automata; then
+      # migite-plan's own fallback when no type is known
+      TASK_TYPE="feature"
+      log "No --type given: planning as a feature (--automata). Pass --type to choose"
+      return 0
+    fi
     echo ""
     echo -e "${BOLD}  Task type:${RESET}"
     echo -e "  1. feature"
@@ -154,7 +160,7 @@ run_plan() {
     done
     echo ""
     local intake_choice
-    read -r -p "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" intake_choice
+    read_answer intake_choice "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" y
     case "${intake_choice:-y}" in
       e|E) ${EDITOR:-vim} "$INTAKE_FILE" ;;
       q|Q) error "Workflow aborted" ;;
@@ -207,7 +213,7 @@ run_plan() {
     done
     echo ""
     local audit_choice
-    read -r -p "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" audit_choice
+    read_answer audit_choice "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" y
     case "${audit_choice:-y}" in
       e|E) ${EDITOR:-vim} "$INTAKE_FILE" ;;
       q|Q) error "Workflow aborted" ;;
@@ -224,7 +230,18 @@ run_plan() {
     [[ -n "$JIRA_TICKET" ]] && fill_intake_field "$INTAKE_FILE" '<!-- ticket ID or N/A -->' "${JIRA_URL:-$JIRA_TICKET}"
     log "Created intake from template: $TASK_TYPE"
 
-    ${EDITOR:-vim} "$INTAKE_FILE"
+    if automata; then
+      # Nobody to fill the template in: plan from the task text, as a --jira run
+      # does from the ticket. A ticket key whose ticket couldn't be fetched is no
+      # intake at all.
+      [[ -n "$TASK" ]] || error "--automata has no intake to plan from: pass a task description, --jira <key> or --intake <file>"
+      if [[ -n "$JIRA_TICKET" && ! -s "$JIRA_CONTEXT_FILE" ]]; then
+        error "$JIRA_TICKET couldn't be fetched (see above), and under --automata nobody writes the intake. Fix the ticket source (migite doctor) or pass --intake <file>"
+      fi
+      log "Planning from the task text without opening the editor (--automata)"
+    else
+      ${EDITOR:-vim} "$INTAKE_FILE"
+    fi
   fi
 
   # Re-derive slug from the Title field after editing; rename dirs if it changed
@@ -288,7 +305,7 @@ run_plan() {
   elif [[ -n "$INTAKE_FILE_ARG" ]]; then
     echo ""
     local task_file_choice
-    read -r -p "$(echo -e "${YELLOW}Add supplementary details in a separate task.md before planning? [y/N]: ${RESET}")" task_file_choice
+    read_answer task_file_choice "$(echo -e "${YELLOW}Add supplementary details in a separate task.md before planning? [y/N]: ${RESET}")" N
     if [[ "$task_file_choice" =~ ^[Yy]$ ]]; then
       local TASK_FILE_TMP
       TASK_FILE_TMP=$(mktemp)
@@ -375,7 +392,7 @@ run_plan() {
     echo -e "${BOLD}────────────────────────────────────────${RESET}"
     echo ""
     local plan_choice
-    read -r -p "$(echo -e "${YELLOW}Use existing plan or redo? [u/r] (u=use existing plan, r=redo from scratch): ${RESET}")" plan_choice
+    read_answer plan_choice "$(echo -e "${YELLOW}Use existing plan or redo? [u/r] (u=use existing plan, r=redo from scratch): ${RESET}")" u
     case "$plan_choice" in
       r|R)
         _backup_plan_file
@@ -452,7 +469,7 @@ run_plan() {
 
   while true; do
     PLAN_GATE_ATTEMPTS=$((PLAN_GATE_ATTEMPTS + 1))
-    read_gate_choice "REVIEW GATE: plan" "Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort): "
+    read_gate_choice "REVIEW GATE: plan" "Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort): " y
     case "$GATE_CHOICE" in
       y|Y)
         snapshot_approved_plan
@@ -556,7 +573,7 @@ run_tdd() {
   echo ""
   local tdd_choice
   TDD_DECIDED=false
-  read -r -p "$(echo -e "${YELLOW}Phase 1.5 (TDD): Write spec files before implementation? [y/N]: ${RESET}")" tdd_choice
+  read_answer tdd_choice "$(echo -e "${YELLOW}Phase 1.5 (TDD): Write spec files before implementation? [y/N]: ${RESET}")" N
   if [[ "$tdd_choice" =~ ^[Yy]$ ]]; then
     TDD_DECIDED=true
     log "Phase 1.5/4 — Writing specs (TDD red phase)"

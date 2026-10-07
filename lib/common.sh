@@ -3,8 +3,8 @@
 #
 # Sourced first by bin/migite and by every standalone wrapper (migite-explore,
 # migite-audit, ...). Nothing here reads a run's globals: colours, output helpers,
-# desktop notifications, and the resolution of the Python interpreter that runs
-# the LangGraph tools. Expects MIGITE_HOME to be set by the caller (only a script
+# the --automata switch and exit statuses, desktop notifications, and the
+# resolution of the Python interpreter that runs the LangGraph tools. Expects MIGITE_HOME to be set by the caller (only a script
 # can find its own real path - see the preamble of any bin/ script).
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -32,9 +32,31 @@ log()     { echo -e "${CYAN}▶ $1${RESET}"; }
 success() { echo -e "${GREEN}✔ $1${RESET}"; }
 warn()    { echo -e "${YELLOW}⚠ $1${RESET}"; }
 error()   { echo -e "${RED}✘ $1${RESET}" >&2; exit 1; }
+
+# ── Automata (--automata) ─────────────────────────────────────────────────────
+# automata - true when this run is unattended (`migite --automata`): every prompt
+# takes its automata answer, nothing opens an editor, a tmux pane or a desktop
+# notification, and the agent sessions run headless. bin/migite sets
+# MIGITE_AUTOMATA=false before parsing, so only the flag turns it on.
+automata() {
+  [[ "${MIGITE_AUTOMATA:-false}" == "true" ]]
+}
+
+# migite_exit <code> - exit with one of the statuses an automata run reports on
+# purpose (2: stopped at the commit gate, 3: finished over blockers). migite's
+# EXIT trap keeps a code recorded here and reports any other non-zero exit as 1,
+# so a command that dies under set -e with status 2 can't read as "blocked".
+migite_exit() {
+  # shellcheck disable=SC2034  # read by bin/migite's EXIT trap and manifest_on_exit (lib/manifest.sh)
+  MIGITE_EXIT_STATUS="$1"
+  exit "$1"
+}
+
 # notify <subtitle> <message> — desktop notification, best effort. macOS via
-# osascript, Linux via notify-send, silent no-op anywhere else. Never fails the run.
+# osascript, Linux via notify-send, silent no-op anywhere else (and under
+# --automata, where nobody is at the desktop). Never fails the run.
 notify() {
+  automata && return 0
   [[ "${MIGITE_CFG_UI_NOTIFY:-auto}" == "off" ]] && return 0
   if command -v osascript &>/dev/null; then
     osascript -e "display notification \"$2\" with title \"Migite\" subtitle \"$1\" sound name \"Glass\"" 2>/dev/null || true

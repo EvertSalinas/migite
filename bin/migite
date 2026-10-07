@@ -88,7 +88,8 @@ Usage:
 
 Task options:
   --jira <key-or-url>     the Jira ticket this task is for
-  --type <type>           feature | bug | refactor | spike | config (default: asked)
+  --type <type>           feature | bug | refactor | spike | config
+                          (default: asked; feature under --automata)
   --intake <file>         start from a pre-written intake instead of a template
   --blueprint <file>      settled architecture from migite-blueprint, given to the planner
   --audit <report.md>     generate a remediation task from a migite-audit report
@@ -98,6 +99,9 @@ Task options:
                           (default: detected from the repo)
   --resume [run.json]     continue an interrupted run from its run manifest; without a
                           file, the newest unfinished run (or the one the options above name)
+  --automata              run unattended, for CI, a schedule or another agent: no prompts,
+                          editor, tmux or notifications; every gate takes its automata answer
+                          and the agent sessions run headless (docs/migite.md#automata)
 
 Amend options:
   --amend ["feedback"]    the feedback inline, or typed when prompted
@@ -109,6 +113,9 @@ Amend options:
 The run stops at two gates: after the plan, and before the commit. Nothing is committed for you.
 Running the same command again continues an interrupted run where it stopped (run.json in the
 run's folder); a finished one just prints where its files are.
+
+Exit status: 0 finished, 1 error. With --automata also 2: stopped at the commit gate
+(gates.commit.policy: strict, blockers remain), and 3: finished over blockers (lenient).
 
 Related commands, each with --help:
   migite-ticket  migite-explore  migite-blueprint  migite-audit  migite-pr-review
@@ -192,6 +199,10 @@ ATTACH_FILES=()
 RESUME_REQUESTED=false
 RESUME_FILE=""
 BASE_BRANCH=""
+# Only --automata turns unattended mode on (lib/common.sh's automata), never a
+# value left in the environment.
+# shellcheck disable=SC2034  # read by automata() in lib/common.sh
+MIGITE_AUTOMATA=false
 
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
@@ -282,6 +293,14 @@ while [[ $# -gt 0 ]]; do
         shift
       fi
       ;;
+    --automata)
+      # Unattended: every prompt takes its automata answer (lib/gate.sh), the
+      # sessions run headless (lib/agent.sh run_phase_headless), and the exit
+      # status says how the run ended (see --help).
+      # shellcheck disable=SC2034  # read by automata() in lib/common.sh
+      MIGITE_AUTOMATA=true
+      shift
+      ;;
     --attach)
       # Repeatable. Each file's raw content is folded into task.md (see
       # run_plan in plan.sh) so migite-plan sees it as plain prompt text —
@@ -325,6 +344,17 @@ fi
 
 [[ "$RESUME_REQUESTED" == "true" && "$AMEND_MODE" == "true" ]] \
   && error "--resume and --amend can't be combined; resume an amend run with: migite --resume <its run.json>"
+
+# --automata: nobody is there to write the intake or the amendment feedback in
+# an editor, so the command line has to carry the task.
+if automata; then
+  if [[ "$AMEND_MODE" == "true" ]]; then
+    [[ -n "$AMEND_FEEDBACK" || -n "$AMEND_FEEDBACK_FILE" ]] \
+      || error "--automata --amend needs the feedback on the command line: --amend \"<feedback>\" or --amend-file <file>"
+  elif [[ "$RESUME_REQUESTED" != "true" && -z "$TASK" && -z "$INTAKE_FILE_ARG" ]]; then
+    error "--automata needs a task: a task description, --jira <key>, --intake <file>, --audit <report> or --resume"
+  fi
+fi
 
 # A ticket browse URL passed as the plain task argument means --jira
 if [[ -z "$JIRA_TICKET" && -n "$TASK" && "$TASK" =~ ^https?://.*/browse/ ]]; then
@@ -386,6 +416,9 @@ MIGITE_USAGE_LEDGER="${MIGITE_USAGE_LEDGER:-$LOG_DIR/$TIMESTAMP-usage.jsonl}"
 export MIGITE_USAGE_LEDGER
 require_cmd "$(agent_binary)"
 log "Agent: $(agent_field display_name) ($(agent_binary))"
+if automata; then
+  log "Automata (--automata): no prompts, every gate takes its automata answer, the agent sessions run headless"
+fi
 # --stack on the command line beats `stack:` in the config, which beats auto-detection.
 [[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
 IMPLEMENT_CMD_PATH="$(prompt_path implement)"
@@ -395,12 +428,18 @@ done
 unset _prompt
 # On the way out (success, gate abort, or error alike): print what the run
 # spent, then refresh the task's index.md so it lists this run, even an aborted
-# one. An error also marks run.json failed (manifest_on_exit).
+# one. An error also marks run.json failed (manifest_on_exit). The exit status is
+# 0, 1, or a status an automata run chose with migite_exit (2 or 3, see --help):
+# any other failure, such as a command that dies under set -e with status 2, is
+# reported as 1 so a caller can trust the code.
 _migite_exit() {
   local rc=$?
   manifest_on_exit "$rc"
   [[ "$(cfg budget.print_summary true)" == "true" ]] && print_usage_summary
   [[ -n "${TASK_DIR:-}" ]] && write_task_index "$TASK_DIR"
+  if [[ "$rc" -ne 0 && "$rc" != "${MIGITE_EXIT_STATUS:-}" ]]; then
+    exit 1
+  fi
   return 0
 }
 trap _migite_exit EXIT
@@ -482,3 +521,15 @@ fi
 echo ""
 success "Workflow complete."
 print_run_files
+# --automata approved the commit gate over blockers (gates.commit.policy: lenient,
+# or a Y in an earlier interactive invocation): the run finished, and exits 3 so
+# the caller knows the code didn't pass cleanly.
+if automata; then
+  _blockers=$(manifest_review_blockers)
+  if [[ -n "$_blockers" ]]; then
+    warn "Finished over the blockers the commit gate approved (run.json phases.review.blockers):"
+    printf '%s\n' "$_blockers" | sed 's/^/    - /'
+    migite_exit 3
+  fi
+  unset _blockers
+fi

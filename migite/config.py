@@ -96,7 +96,10 @@ DEFAULTS: dict[str, Any] = {
         # Unset = the tier's default above. Raise these for a slow backend (e.g. a
         # reasoning model that routinely runs past 15 minutes).
         "timeouts": {"fast": None, "standard": None, "strong": None},
-        "roles_timeouts": {},            # optional per-role timeout override: {"refine_plan": 1800, ...}
+        # Optional per-role timeout override: {"refine_plan": 1800, ...}. session is set: an
+        # --automata run's headless sessions (implement, gate fixes, PR description) are
+        # whole phases, far longer than the strong tier's 900s. Interactive sessions have no limit.
+        "roles_timeouts": {"session": 3600},
     },
     "stack": "auto",                     # auto | rails | generic | <a stacks profile>  (MIGITE_STACK, or --stack)
     # Stack profiles: a non-Rails repo's lint and test commands as data (lib/stack.sh).
@@ -233,6 +236,7 @@ ROLE_TOOLS: dict[str, str] = {
     "refute": "read",
     "heal": "default",
     "jira": "default",
+    "session": "default",         # --automata runs run_phase's sessions headless: the interactive session's toolset
 }
 READ_TOOLS = ("Read", "Grep", "Glob")
 
@@ -348,6 +352,7 @@ models:
   #   strong: 1800                 # e.g. raise for a slow reasoning model
   # roles_timeouts:                # optional per-role timeout override, in seconds (beats the tier)
   #   think: 2400
+  #   session: 3600               # the default: an --automata run's headless sessions (implement, fixes, PR description)
 
 stack: auto                  # auto | rails | generic | a profile name from stacks  (or --stack on the command line)
 # stacks:                    # lint and test commands for a non-Rails repo, tried before rails. See docs/configuration.md
@@ -801,6 +806,10 @@ def load(repo_root: str | Path | None = None, *, env: Mapping[str, str] | None =
                 warnings.append(f"{path}: unknown key '{key}' (ignored)")
                 continue
             coerced = _coerce(key, value, str(path))
+            if key == "models.roles_timeouts":
+                # Role by role onto the layers below: a file that times one role keeps
+                # the session default and the roles every other file timed.
+                coerced = {**(_get_path(data, key) or {}), **coerced}
             _set_path(data, key, coerced)
             sources[key] = str(path)
         if file_stacks:

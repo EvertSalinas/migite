@@ -118,7 +118,7 @@ unit tests with the fake CLIs cover the code paths. When a live run is wanted, p
 ## Current work
 
 The 2026-10-06 evaluation and the 13-item work plan (instrumentation, cheaper testing plan,
-knowledge retrieval, stack profiles as data, `--yes`, resumed planning chain, native plan
+knowledge retrieval, stack profiles as data, `--automata` (the plan's `--yes`), resumed planning chain, native plan
 strategy, session metering, refuter calibration, Workflows decision, OpenCode live) are in the
 Claude doc "Migite Evaluation". Each item is one branch off `main`, one commit, the full test
 gate, and for items marked live, one real run measured against the baseline `usage.json`.

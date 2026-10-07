@@ -21,6 +21,7 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 - [Phase 4.2: Run summary](#phase-4-2-run-summary)
 - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
 - [Active memory injection](#active-memory-injection)
+- [Automata answers (`--automata`)](#automata-answers)
 - [tmux integration](#tmux-integration)
 
 ---
@@ -108,7 +109,7 @@ After the plan gate, migite asks whether to write spec files before implementati
 <a id="phase-2-implement"></a>
 ### Phase 2 — Implement (interactive)
 
-Claude implements the approved plan in an interactive session. Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written.
+Claude implements the approved plan in an interactive session (under [`--automata`](#automata-answers), one headless call on the `session` role instead). Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written.
 
 **Staged implementation (`--staged`):** If you pass `--staged`, migite parses the `### ` sub-sections from the plan's Scope section and treats each as an implementation layer. Claude runs one interactive session per layer. Between layers, migite shows a `git diff --stat` and opens a checkpoint gate:
 
@@ -451,6 +452,32 @@ The amend and resume paths pick the same way from the build's `intake.md` and `j
 
 ---
 
+<a id="automata-answers"></a>
+## Automata answers (`--automata`)
+
+Under [`--automata`](./migite.md#automata) nothing reads from the terminal. Each prompt prints with
+the answer it took and `(--automata)` after it:
+
+| Prompt | Answer |
+|---|---|
+| Task type (no `--type`, no `Type:` in the intake) | `feature` |
+| The template intake in `$EDITOR` | No editor: the task text (or the Jira ticket) is the intake. A ticket that couldn't be fetched, with no `--intake`, is an error |
+| Proceed with this intake? (`--intake`, `--audit`) | `y` |
+| Supplementary task.md (`--intake`) | `N` (`--attach` files are still saved) |
+| EXISTING PLAN FOUND | `u`, use it |
+| Plan gate | `y` |
+| Phase 1.5 TDD | `N` |
+| Stage checkpoint (`--staged`) | `c`, continue |
+| Browser check (`frontend.browser_check: ask`) | `N` (`on` still runs it, headless) |
+| Commit gate | `y` when nothing blocks. Lenient with blockers: `y`, recorded in `gate-overrides.md`, and the run exits 3. Strict with blockers: the run stops at the gate with exit 2 |
+| Anything worth remembering (Phase 3.5) | nothing |
+| Plan update, testing-plan update (Phase 3.8) | `y`, apply |
+| Amend: which task, the feedback in `$EDITOR` | Errors: pass `--jira <key>` (or run on the task's branch) and `--amend "..."` or `--amend-file` |
+| Amendment gate | `y` |
+
+The `f`, `e` and `n` branches are never taken, so their own prompts never come up. A new gate added
+without an automata answer stops an automata run with an error instead of waiting for input.
+
 <a id="tmux-integration"></a>
 ## tmux integration
 
@@ -459,6 +486,9 @@ If migite is running inside a tmux session (`$TMUX` is set), every interactive p
 If you close a pane before the phase completes, migite detects this and aborts with an error rather than hanging indefinitely.
 
 Outside tmux, all phases run inline in the current terminal.
+
+Under `--automata` there are no panes, whatever `ui.tmux` says: every phase runs inline, and the
+sessions run headless.
 
 ---
 

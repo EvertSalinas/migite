@@ -154,6 +154,7 @@ blockers remain and a capital `Y` overrides with a record.
 |-----------|---------|--------|
 | Repo exists, work is decided, ready to build | `migite --jira BB-1234` | plan, review, PR description, knowledge |
 | Feedback arrived after implementation (PR comments, QA) | `migite --amend "must be idempotent on retry"` | `NN-amend-<slug>/amendment.md`, then the normal implement → review flow |
+| Building from CI, a schedule, or another agent | `migite --automata --jira BB-1234` | the same run with no prompts; the exit status says ready (0), blocked (2) or finished over blockers (3), see [docs/migite.md](./docs/migite.md#automata) |
 | Big initiative, unsure if it's worth doing | `migite-explore "extract billing into a service" --intakes` | feasibility doc with a PROCEED / SPIKE / DEFER / NOT WORTH IT verdict, adversarial challenge, one intake per workstream |
 | No repo yet, defining a new project | `migite-blueprint --brief brief.md --name billing-api` | blueprint, milestone intakes, seed `knowledge.md` |
 | What's wrong with this codebase? | `migite-audit --focus jobs` | ranked findings, feedable into `migite --audit` |
@@ -291,8 +292,7 @@ feedback belongs in Issues, where it can be discussed and tracked.
 
 Roughly in the order they are likely to land:
 
-- **`--yes`, a non-interactive mode** so migite can run from CI or from another agent. The run manifest it builds on is in: every run writes `run.json` at each phase boundary and resumes from it ([docs/migite.md](./docs/migite.md#resuming-a-run)).
-- **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
+- **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode. Under `--automata` those sessions run headless, so they are metered.
 - **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
 - **One-line installer** to replace the clone-and-symlink block above.

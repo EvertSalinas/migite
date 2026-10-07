@@ -52,6 +52,7 @@ run_amend_mode() {
   fi
 
   if [[ -z "$AMEND_TARGET_SLUG" ]]; then
+    automata && error "--automata --amend can't pick the task to amend: pass --jira <key>, or run it on the task's branch"
     [[ -d "$REPO_VAULT_DIR" ]] || error "No task history found for $ORG/$REPO_NAME — nothing to amend"
     local AMEND_CANDIDATES=()
     while IFS= read -r d; do
@@ -103,6 +104,9 @@ run_amend_mode() {
   elif [[ -n "$AMEND_FEEDBACK" ]]; then
     AMEND_FEEDBACK_TEXT="$AMEND_FEEDBACK"
   else
+    # bin/migite already refuses --automata --amend without feedback; this keeps the
+    # editor from ever opening in an unattended run.
+    automata && error "--automata --amend needs the feedback on the command line: --amend \"<feedback>\" or --amend-file <file>"
     local AMEND_INPUT_FILE
     AMEND_INPUT_FILE=$(mktemp)
     printf '<!-- Describe the feedback/change for this amendment. Lines starting with <!-- are ignored. -->\n' > "$AMEND_INPUT_FILE"
@@ -276,7 +280,7 @@ Output the FULL updated testing plan — not just the delta. Keep steps that are
 
   # Gate: y=approve, f=feedback refine (one more Sonnet call), e=direct edit, q=abort
   while true; do
-    read_gate_choice "REVIEW GATE: amendment $AMEND_NUM" "Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly, q=abort): "
+    read_gate_choice "REVIEW GATE: amendment $AMEND_NUM" "Proceed with amendment? [y/f/e/q] (y=approve, f=feedback refine, e=edit directly, q=abort): " y
     case "$GATE_CHOICE" in
       y|Y)
         _regen_testing_plan

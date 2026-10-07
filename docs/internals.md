@@ -98,6 +98,11 @@ there every Python call is `python -m migite.<module>`, so the package, `prompts
   in `migite/gateway.py`, which asks the configured agent's adapter for machine-readable output and appends to the usage ledger
   named by `$MIGITE_USAGE_LEDGER`. tmux panes inherit the tmux server's environment, so the
   wrapper scripts re-export that variable.
+- **Unattended runs.** Under `--automata` (`automata` in `lib/common.sh`), `run_phase` doesn't open a
+  session: `run_phase_headless` sends the same prompt through `agent_ask` on the `session` role,
+  so every backend runs it headless and the gateway meters it like any other call (`ROLE_TOOLS`
+  gives that role the CLI's full toolset). The gates take their answer from `read_gate_choice`'s
+  third argument or `read_answer`, and `migite_exit` sets the exit statuses 2 and 3.
 - **Gemfile one level down.** `migite` always `cd`s to the repo root, but Bundler only searches
   upward for a `Gemfile`. `detect_stack` finds an app directory one level down and every
   `bundle_exec` runs from it, with `strip_app_prefix` rewriting the repo-relative paths `git diff`
@@ -299,5 +304,6 @@ report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`). It summaris
 beside it by model and by tool: this invocation's ledger lines appended to the run's earlier ones,
 exact repeats dropped, so a resumed or re-run build adds to the run's cost instead of replacing it. Interactive sessions (`run_phase`:
 implement, gate fixes, PR description) are not metered — the CLI only emits usage in `--print` mode.
+Under `--automata` they run as headless calls on the `session` role, so they are.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

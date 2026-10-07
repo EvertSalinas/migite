@@ -93,7 +93,10 @@ template_path() { _override_path templates "$1"; }
 #   ui.tmux = auto → only when already inside tmux ($TMUX set)
 #   ui.tmux = on   → same, but warn when not inside tmux (can't create a server for you)
 #   ui.tmux = off  → never
+# Never under --automata: there's nobody to watch a pane, and a failed pane waits
+# for Enter.
 use_tmux() {
+  automata && return 1
   case "$(cfg ui.tmux auto)" in
     off) return 1 ;;
     on)

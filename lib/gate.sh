@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# lib/gate.sh - the human gates: banner, review verdict, commit context.
+# lib/gate.sh - the human gates: banner, review verdict, commit context, and the
+# answers they take under --automata.
 #
 # Reads the run's globals (REVIEW_FILE, RSPEC_LOG, RUBOCOP_FINAL_*, TOOLING_ERROR,
 # FRONTEND_LINT_LOG, FRONTEND_LINT_DIRTY, BROWSER_CHECK_FILE, and for a stack
 # profile STACK_LINT_RESULT / STACK_TEST_RESULT) at call time; sets $GATE_CHOICE.
 
-# read_gate_choice <banner-line> <prompt-text> — sets $GATE_CHOICE
+# read_gate_choice <banner-line> <prompt-text> [automata-answer] — sets $GATE_CHOICE
 # Prints the standard gate banner then reads one line of input. Must be called
 # directly (not via command substitution) so the interactive prompt stays visible.
+# Under --automata nothing is read: the gate takes <automata-answer>, printed after
+# the prompt. A gate without one stops the run rather than wait for input that
+# never comes.
 read_gate_choice() {
   local banner="$1" prompt="$2"
   echo ""
@@ -15,7 +19,45 @@ read_gate_choice() {
   echo -e "${BOLD}  ${banner}${RESET}"
   echo -e "${BOLD}────────────────────────────────────────${RESET}"
   echo ""
+  if automata; then
+    [[ $# -ge 3 ]] || error "The '$banner' gate has no --automata answer"
+    read_answer GATE_CHOICE "$(echo -e "${YELLOW}${prompt}${RESET}")" "$3"
+    return 0
+  fi
   read -r -p "$(echo -e "${YELLOW}${prompt}${RESET}")" GATE_CHOICE
+}
+
+# read_answer <var> <prompt> <automata-answer> - one line of input into <var>,
+# for a prompt that isn't a gate (the task type, the TDD question, ...). Under
+# --automata nothing is read: <var> gets <automata-answer>, printed after the
+# prompt so the log shows what was decided.
+read_answer() {
+  local _ra_var="$1" _ra_prompt="$2" _ra_answer="$3"
+  if automata; then
+    echo -e "${_ra_prompt}${_ra_answer:-(Enter)}  ${CYAN}(--automata)${RESET}"
+    printf -v "$_ra_var" '%s' "$_ra_answer"
+    return 0
+  fi
+  read -r -p "$_ra_prompt" "${_ra_var?}"
+}
+
+# automata_commit_gate <policy> <blockers> - the commit gate's decision under
+# --automata, where nobody can fix or override: <blockers> is
+# _commit_gate_blockers' output (lib/phases/review.sh), one per line. Returns 0 to
+# approve: nothing blocks, or gates.commit.policy is lenient (the blockers are
+# printed; the run will exit 3). Returns 2 under strict with blockers, printed:
+# the run stops at the gate with that exit status.
+automata_commit_gate() {
+  local policy="$1" blockers="$2"
+  [[ -z "$blockers" ]] && return 0
+  if [[ "$policy" == "strict" ]]; then
+    warn "gates.commit.policy is strict and blockers remain - --automata stops at the commit gate:"
+    printf '%s\n' "$blockers" | sed 's/^/    - /'
+    return 2
+  fi
+  warn "Approving over blockers (--automata, gates.commit.policy: lenient); the run will exit 3:"
+  printf '%s\n' "$blockers" | sed 's/^/    - /'
+  return 0
 }
 
 # review_verdict <review.md> — echoes one of: needs_fixes | ready | unknown

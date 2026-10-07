@@ -129,7 +129,7 @@ When done, write notes on what you built to: $STAGE_OUTPUT_FILE"
       if [[ $STAGE_NUM -lt $STAGE_COUNT ]]; then
         echo ""
         git diff --stat 2>/dev/null | head -20 || true
-        read_gate_choice "STAGE CHECKPOINT: $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL" "Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=abort): "
+        read_gate_choice "STAGE CHECKPOINT: $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL" "Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=abort): " c
         case "${GATE_CHOICE:-c}" in
           r|R)
             STAGE_NUM=$((STAGE_NUM - 1))

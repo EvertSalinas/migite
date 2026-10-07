@@ -60,6 +60,14 @@ class InitTest(TmpDirTest):
         run_cli("init", "--file", str(self.file), "--set", "args.task=123")
         self.assertEqual(json.loads(self.file.read_text())["args"]["task"], "123")
 
+    def test_a_run_is_interactive_until_init_says_automata(self):
+        run_cli("init", "--file", str(self.file))
+        m = json.loads(self.file.read_text())
+        self.assertEqual(m["mode"], "interactive")
+        self.assertEqual(m["phases"]["review"]["blockers"], [])
+        run_cli("init", "--file", str(self.file), "--set", "mode=automata")
+        self.assertEqual(json.loads(self.file.read_text())["mode"], "automata")
+
 
 class UpdateTest(TmpDirTest):
     def setUp(self):
@@ -112,6 +120,17 @@ class UpdateTest(TmpDirTest):
         self.update("--set", "phases.deliver.status=running")
         self.assertEqual(self.load()["status"], "in_progress")
 
+    def test_the_commit_gate_blockers_are_a_list_replaced_on_every_decision(self):
+        self.update("--set-json", "phases.review.blockers=[]", "--add", "phases.review.blockers=review verdict is NEEDS FIXES",
+                    "--add", "phases.review.blockers=2 failures in rspec")
+        self.assertEqual(self.load()["phases"]["review"]["blockers"], ["review verdict is NEEDS FIXES", "2 failures in rspec"])
+        self.update("--set-json", "phases.review.blockers=[]")
+        self.assertEqual(self.load()["phases"]["review"]["blockers"], [])
+
+    def test_an_interactive_run_resumed_with_automata_becomes_one(self):
+        self.update("--set", "mode=automata")
+        self.assertEqual(self.load()["mode"], "automata")
+
     def test_failed_stays_until_a_resume_resets_it(self):
         self.update("--set", "status=failed")
         self.update("--set", "phases.plan.status=running")
@@ -121,7 +140,7 @@ class UpdateTest(TmpDirTest):
 
     def test_an_unknown_phase_or_status_is_refused_and_the_file_kept(self):
         before = self.file.read_text()
-        for bad in ("phases.lint.status=done", "phases.plan.status=finished", "status=paused"):
+        for bad in ("phases.lint.status=done", "phases.plan.status=finished", "status=paused", "mode=yes"):
             r = self.update("--set", bad)
             self.assertEqual(r.returncode, 2, bad)
             self.assertIn("runstate:", r.stderr)
@@ -182,15 +201,17 @@ class ShellExportTest(TmpDirTest):
     def test_bash_evals_the_export_back_to_the_same_values(self):
         task = "Fix the \"quoted\" $HOME thing; it's `odd`\nsecond line"
         run_cli("init", "--file", str(self.file), "--set", f"args.task={task}",
-                "--add", "args.attach=/x y.md", "--add", "args.attach=/z.md", "--set-json", "args.staged=true")
+                "--add", "args.attach=/x y.md", "--add", "args.attach=/z.md", "--set-json", "args.staged=true",
+                "--set", "mode=automata", "--add", "phases.review.blockers=review verdict is NEEDS FIXES")
         script = ('eval "$(python -m migite.runstate export --shell --file "$1")"; '
                   'printf "%s\\0" "$MANIFEST_ARGS_TASK" "${#MANIFEST_ARGS_ATTACH[@]}" "${MANIFEST_ARGS_ATTACH[0]}" '
                   '"$MANIFEST_ARGS_STAGED" "$MANIFEST_PHASES_TDD_DECIDED" "$MANIFEST_PHASES_PLAN_STATUS" '
-                  '"${#MANIFEST_PHASES_IMPLEMENT_STAGE_LABELS[@]}"')
+                  '"${#MANIFEST_PHASES_IMPLEMENT_STAGE_LABELS[@]}" "$MANIFEST_MODE" "${#MANIFEST_PHASES_REVIEW_BLOCKERS[@]}"')
         env = dict(os.environ, PYTHONPATH=str(ROOT), PATH=f"{Path(sys.executable).parent}:{os.environ['PATH']}")
         out = subprocess.run(["bash", "-c", script, "_", str(self.file)], capture_output=True, text=True, env=env)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.split("\0")[:-1], [task, "2", "/x y.md", "true", "", "pending", "0"])
+        self.assertEqual(out.stdout.split("\0")[:-1], [task, "2", "/x y.md", "true", "", "pending", "0",
+                                                      "automata", "1"])
 
     def test_names_are_prefixed_upper_case_paths(self):
         lines = runstate.shell_lines(runstate.new_manifest(), prefix="X_")

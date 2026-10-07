@@ -36,7 +36,7 @@ EOF
   # it did, a gotcha from testing manually). Ask before extracting so that input can
   # be folded in as authoritative rather than lost.
   local USER_KNOWLEDGE_FEEDBACK
-  read -r -p "$(echo -e "${CYAN}  Anything worth remembering from this run that migite might not catch? (optional, Enter to skip): ${RESET}")" USER_KNOWLEDGE_FEEDBACK
+  read_answer USER_KNOWLEDGE_FEEDBACK "$(echo -e "${CYAN}  Anything worth remembering from this run that migite might not catch? (optional, Enter to skip): ${RESET}")" ""
 
   local USER_FEEDBACK_BLOCK=""
   if [[ -n "$USER_KNOWLEDGE_FEEDBACK" ]]; then
@@ -412,7 +412,7 @@ fold_run_into_plan() {
   echo -e "${BOLD}────────────────────────────────────────────────────${RESET}"
 
   while true; do
-    read_gate_choice "PLAN UPDATE: $RUN_SLUG" "Apply these changes to plan.md? [y/e/n] (y=apply, e=apply then edit, n=keep the plan as it is): "
+    read_gate_choice "PLAN UPDATE: $RUN_SLUG" "Apply these changes to plan.md? [y/e/n] (y=apply, e=apply then edit, n=keep the plan as it is): " y
     case "$GATE_CHOICE" in
       y|Y|e|E)
         mkdir -p "$SCRATCHPAD_DIR/.plan-history"
@@ -490,7 +490,7 @@ update_testing_plan_from_run() {
   echo -e "${BOLD}────────────────────────────────────────────────────${RESET}"
 
   while true; do
-    read_gate_choice "TESTING PLAN UPDATE: $RUN_SLUG" "Apply these changes to testing-plan.md? [y/e/n] (y=apply, e=apply then edit, n=keep it as it is): "
+    read_gate_choice "TESTING PLAN UPDATE: $RUN_SLUG" "Apply these changes to testing-plan.md? [y/e/n] (y=apply, e=apply then edit, n=keep it as it is): " y
     case "$GATE_CHOICE" in
       y|Y|e|E)
         mv "$new_tp" "$TESTING_PLAN_FILE"

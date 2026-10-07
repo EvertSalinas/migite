@@ -272,6 +272,7 @@ models:
     strong: 1800
   roles_timeouts:                   # optional per-role timeout override, in seconds (beats the tier)
     think: 1800
+    session: 3600                   # the default: an --automata run's headless sessions
 ```
 
 The default tiering follows one rule: **a drafter is never weaker than the critic whose findings it
@@ -293,7 +294,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `amend`, `plan_refine`, `jira` | standard | `migite` amend mode, plan-gate refine, Jira fetch |
 | `testing_plan` | standard | `generate_testing_plan` (in `migite-plan`, or in Phase 3 with `plan.testing_plan_when: review`), and the testing-plan edits and regeneration in amend and fix rounds. It writes a checklist document from the finished plan, so it does not need the strong tier |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
-| `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description |
+| `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description. Under `--automata` each one is a headless call on this role |
 | `lens` | standard | `migite-explore` lenses |
 | `explore_synth`, `challenge`, `explore_refine` | strong | `migite-explore` synthesis, adversarial challenge, and the revision that applies it |
 | `analyst`, `extract` | standard | `migite-blueprint` analysts, milestone/knowledge extraction |
@@ -331,6 +332,12 @@ tier always gets the longer limit. To size a specific model or call, override pe
 `models.timeouts.<fast|standard|strong>` or per role with `models.roles_timeouts.<role>` (the
 role wins). Set a generous value when a reasoning backend routinely runs long — e.g.
 `models.timeouts.strong: 1800`. `migite config` prints each role's resolved `timeout=`.
+
+`models.roles_timeouts` merges role by role across the config files, so a file that times one
+role keeps the others. Its one default is `session: 3600`: under [`--automata`](./migite.md#automata)
+the implement, fix and PR-description sessions are headless calls on the `session` role, each a
+whole phase, far longer than the strong tier's 900s. A timed-out session stops the run (exit 1),
+and the same command with `--automata` runs that phase again. Interactive sessions have no limit.
 
 The testing plan used to run on the strong tier, so its generation had `thinking_timeout_seconds`
 (900s). On the standard tier it gets `timeout_seconds` (600s). A long testing plan on a slow
@@ -458,6 +465,11 @@ a tooling error, or remaining rubocop offenses depending on the two `require_*` 
 them. A capital **`Y`** approves anyway and appends the blockers to `gate-overrides.md` in the
 scratchpad (mirrored to the vault), so overrides leave a record.
 
+Under [`--automata`](./migite.md#automata) nobody can fix or override, so the policy decides the
+exit status: `lenient` approves over the blockers, records them like a `Y`, and the run exits 3;
+`strict` stops at the gate with the blockers printed and exits 2. With nothing blocking, both
+approve and the run exits 0. The `require_*` flags shape the blocker list in both modes.
+
 <a id="permissions"></a>
 ### `permissions`
 
@@ -494,6 +506,7 @@ the agent CLI's MCP servers, plugins, hooks or skills:
 | `critic`, `review_*`, `pr_review_*`, `audit_area`, `refute` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
 | `heal` | the CLI's full toolset (it edits files) |
 | `jira` | the CLI's full context (its scoped tools are MCP tools) |
+| `session` | the CLI's full toolset: under [`--automata`](./migite.md#automata) the implement, fix and PR-description sessions run as headless calls on this role |
 | every other role | no tools: the prompt carries everything |
 
 Your `~/.claude/CLAUDE.md` and the repo's `CLAUDE.md` files are still passed to every isolated
@@ -723,6 +736,9 @@ ui:
 `prompt_diff_max_bytes` bounds the branch diff in the amend and testing-plan prompts. They get
 `git diff --stat` for the whole change, then the diff cut to this size (its start and end), with
 the full diff saved under `logs.dir` for reference.
+
+Under [`--automata`](./migite.md#automata), `tmux`, `notify` and `editor` don't apply: nothing opens a
+pane, a notification or an editor.
 
 ---
 

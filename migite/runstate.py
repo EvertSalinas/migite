@@ -4,7 +4,8 @@
 migite writes run.json at every phase boundary, in the run's own folder
 (scratchpad/<task>/<run>/run.json, mirrored to the vault), so an interrupted run
 continues from its recorded position instead of restarting at the plan. It
-records the run's arguments, repo and layout, and one entry per phase
+records the run's mode (interactive, or automata for `migite --automata`), its
+arguments, repo and layout, and one entry per phase
 (plan, tdd, implement, heal, review, deliver) with its status and the gate
 counters a phase needs to resume. See docs/run-manifest-and-resume.md.
 
@@ -47,6 +48,8 @@ FILENAME = "run.json"
 PHASES = ("plan", "tdd", "implement", "heal", "review", "deliver")
 PHASE_STATUSES = ("pending", "running", "pending_gate", "done", "skipped", "failed")
 RUN_STATUSES = ("in_progress", "complete", "failed")
+# interactive: someone answers the gates; automata: `migite --automata`, unattended.
+MODES = ("interactive", "automata")
 FINISHED = ("done", "skipped")
 # A run folder: 00-build, or NN-amend-<slug> (lib/vault.sh's RUN_DIR_RE).
 RUN_DIR_RE = re.compile(r"^[0-9][0-9]+-(build|amend-[a-z0-9-]+)$")
@@ -69,6 +72,7 @@ def new_manifest() -> dict:
     m["updated_at"] = m["generated_at"]
     m["status"] = "in_progress"
     m["next_phase"] = PHASES[0]
+    m["mode"] = MODES[0]
     m["args"] = {
         "task": "", "task_type": "", "jira_ticket": "", "jira_url": "", "intake": "",
         "audit": "", "blueprint": "", "attach": [], "staged": False, "stack": "",
@@ -82,7 +86,7 @@ def new_manifest() -> dict:
         "tdd": {"status": "pending", "decided": None},
         "implement": {"status": "pending", "stage_num": 0, "stage_count": 0, "stage_labels": []},
         "heal": {"status": "pending", "heal_attempt": 0},
-        "review": {"status": "pending", "gate_attempts": 0, "tree_fingerprint": ""},
+        "review": {"status": "pending", "gate_attempts": 0, "tree_fingerprint": "", "blockers": []},
         "deliver": {"status": "pending"},
     }
     return m
@@ -160,6 +164,8 @@ def _check_value(dotted: str, value: Any) -> None:
     parts = dotted.split(".")
     if parts[0] == "status" and len(parts) == 1 and value not in RUN_STATUSES:
         raise ManifestError(f"status must be one of {', '.join(RUN_STATUSES)}, not {value!r}")
+    if parts[0] == "mode" and len(parts) == 1 and value not in MODES:
+        raise ManifestError(f"mode must be one of {', '.join(MODES)}, not {value!r}")
     if parts[0] == "phases":
         if len(parts) < 2 or parts[1] not in PHASES:
             raise ManifestError(f"{dotted!r}: phases are {', '.join(PHASES)}")

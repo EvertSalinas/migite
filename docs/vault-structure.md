@@ -30,7 +30,7 @@ Plain markdown and JSON; point it at an Obsidian vault if you want `[[wikilinks]
 │           │   ├── implementation-stage-N.md     ← --staged only
 │           │   ├── fix-rN.md                     ← one per commit-gate `f` round, from 1
 │           │   ├── review.md  +  review.json
-│           │   ├── gate-overrides.md             ← only with gates.commit.policy: strict, on a `Y`
+│           │   ├── gate-overrides.md             ← on a `Y` over blockers, or an --automata approval over them
 │           │   ├── summary.md                    ← what the run did and why, written at its end
 │           │   ├── testing-plan.md               ← the testing plan as the run left it
 │           │   ├── run.json                      ← the run manifest: how far the run got, for resuming

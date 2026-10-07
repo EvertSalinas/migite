@@ -151,6 +151,32 @@ use_agent opencode; check "instruction files: opencode → AGENTS.md" test "$(ag
 use_agent kimi;     check "session mode: kimi → headless" test "$(agent_field session_mode)" = "headless"
                     check "instruction files: kimi → AGENTS.md" test "$(agent_field instruction_files)" = "AGENTS.md"
 
+# run_phase under --automata: every backend's session is one headless ask on the
+# session role, with the CLI's full toolset, in the usage ledger
+use_agent claude
+ap_argv="$ag_dir/claude-argv.txt" ap_out="$ag_dir/impl-notes.md"
+shown=$(MIGITE_AUTOMATA=true FAKE_CLAUDE_MODE=envelope FAKE_CLAUDE_ARGV="$ap_argv" run_phase "Implementing" "$ap_out" "build the thing" 2>&1)
+check "run_phase --automata: claude runs headless on the session role (--print, bypassPermissions, the strong model)" \
+  grep -q -- "--print --output-format json --model claude-opus-5-5 --permission-mode bypassPermissions" "$ap_argv"
+check "run_phase --automata: the session keeps the CLI's full toolset (not an isolated call)" \
+  not grep -qE -- "--safe-mode|--tools" "$ap_argv"
+check "run_phase --automata: the session is in the usage ledger" grep -q '"label": "Implementing"' "$MIGITE_USAGE_LEDGER"
+check "run_phase --automata: a session that wrote no output file leaves its reply there" \
+  bash -c '[[ "$(cat "$1")" == echo:build\ the\ thing* && "$2" == *"its final reply is saved there"* ]]' _ "$ap_out" "$shown"
+check "run_phase --automata: says it runs headless, with no exit hint to type" \
+  bash -c '[[ "$1" == *"headless (--automata)"* && "$1" != *"/exit"* ]]' _ "$shown"
+printf 'notes the session wrote\n' > "$ap_out"
+MIGITE_AUTOMATA=true FAKE_CLAUDE_MODE=envelope run_phase "Implementing" "$ap_out" "build the thing" >/dev/null 2>&1
+check "run_phase --automata: an output file the session wrote is kept" test "$(cat "$ap_out")" = "notes the session wrote"
+out=$( (MIGITE_AUTOMATA=true FAKE_CLAUDE_MODE=exit1 run_phase "Implementing" "$ap_out" "build the thing") 2>&1 ); rc=$?
+check "run_phase --automata: a failed session stops the run" \
+  bash -c '[[ "$1" == 1 && "$2" == *"The '"'"'Implementing'"'"' session failed"* ]]' _ "$rc" "$out"
+use_agent kimi; : > "$FAKE_AGENT_ARGV"
+MIGITE_AUTOMATA=true FAKE_AGENT_MODE=ok run_phase "Implementing" "$ag_dir/kimi-notes.md" "build the thing" >/dev/null 2>&1
+check "run_phase --automata: kimi goes through its headless ask too (-p ... --output-format stream-json)" \
+  grep -q -- "-p build the thing --output-format stream-json" "$FAKE_AGENT_ARGV"
+unset ap_argv ap_out
+
 # doctor names the backend and runs the adapter's health check
 export MIGITE_AGENT=opencode
 check "doctor: reports the configured backend and finds its CLI" \

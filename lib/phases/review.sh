@@ -134,7 +134,7 @@ run_browser_check() {
     return 0
   fi
   if [[ "$mode" == "ask" ]]; then
-    read_gate_choice "BROWSER CHECK" "Views or JavaScript changed. Walk the testing plan in a browser before the review? [y/N]: "
+    read_gate_choice "BROWSER CHECK" "Views or JavaScript changed. Walk the testing plan in a browser before the review? [y/N]: " N
     if [[ ! "${GATE_CHOICE:-}" =~ ^[yY]$ ]]; then
       log "Browser check skipped"
       return 0
@@ -298,7 +298,8 @@ run_review() {
   # them, not just this run's: after an --amend the diff still holds the
   # original build, which only 00-build/implementation.md describes.
   local CHANGED_ALL
-  CHANGED_ALL=$(changed_all_files "$BASE_BRANCH")
+  # || true: an empty change set (grep -v matches nothing) isn't an error under pipefail
+  CHANGED_ALL=$(changed_all_files "$BASE_BRANCH" || true)
   local -a NOTES_FILES=()
   local _notes_f
   while IFS= read -r _notes_f; do
@@ -509,31 +510,62 @@ run_review() {
     [[ ${#b[@]} -gt 0 ]] && printf '%s\n' "${b[@]}"
     return 0
   }
+  # _record_gate_override <blockers> [note] - gate-overrides.md gets the blockers a
+  # Y (or an automata approval, named in the note) went over.
   _record_gate_override() {
-    local blockers="$1" f="$RUN_SCRATCH_DIR/gate-overrides.md"
+    local blockers="$1" note="${2:-}" f="$RUN_SCRATCH_DIR/gate-overrides.md"
     {
-      echo "## $DATE $(date +%H:%M) — commit gate approved over blockers"
+      echo "## $DATE $(date +%H:%M) — commit gate approved over blockers${note:+ ($note)}"
       printf '%s\n' "$blockers" | sed 's/^/- /'
       echo ""
     } >> "$f"
     sync_artifact "$f" "$RUN_VAULT_DIR/gate-overrides.md"
   }
+  # _gate_blocker_args <blockers> - GATE_BLOCKER_ARGS: the manifest_set flags that
+  # record them as phases.review.blockers (an empty list when nothing blocks).
+  local -a GATE_BLOCKER_ARGS=()
+  _gate_blocker_args() {
+    local b
+    GATE_BLOCKER_ARGS=(--set-json "phases.review.blockers=[]")
+    while IFS= read -r b; do
+      [[ -n "$b" ]] && GATE_BLOCKER_ARGS+=(--add "phases.review.blockers=$b")
+    done <<< "$1"
+    return 0
+  }
 
   while true; do
     show_commit_context
-    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): "
+    if automata; then
+      # Nobody can fix or override at this gate. Strict with blockers stops the
+      # run: the gate stays pending, with its blockers in run.json, and exit 2.
+      # Lenient approves over them, recorded like a Y, and the run exits 3.
+      local _auto_blockers _auto_rc=0
+      _auto_blockers=$(_commit_gate_blockers)
+      automata_commit_gate "$(cfg gates.commit.policy lenient)" "$_auto_blockers" || _auto_rc=$?
+      if [[ $_auto_rc -ne 0 ]]; then
+        _gate_blocker_args "$_auto_blockers"
+        manifest_boundary review pending_gate --set-json "phases.review.gate_attempts=$COMMIT_GATE_ATTEMPTS" \
+          --set "phases.review.tree_fingerprint=$REVIEWED_FINGERPRINT" "${GATE_BLOCKER_ARGS[@]}"
+        echo -e "  ${YELLOW}Fix them, then run the same command with --automata: lint and tests run again and the gate re-opens${RESET}"
+        migite_exit 2
+      fi
+      if [[ -n "$_auto_blockers" ]]; then
+        _record_gate_override "$_auto_blockers" "--automata, gates.commit.policy: lenient"
+      fi
+    fi
+    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): " y
     case "${GATE_CHOICE:-}" in
       y)
-        if [[ "$(cfg gates.commit.policy lenient)" == "strict" ]]; then
-          local _blockers
-          _blockers=$(_commit_gate_blockers)
-          if [[ -n "$_blockers" ]]; then
-            warn "gates.commit.policy is strict — approval refused while blockers remain:"
-            printf '%s\n' "$_blockers" | sed 's/^/    - /'
-            echo -e "  ${YELLOW}Fix them (f / n), or type a capital ${BOLD}Y${RESET}${YELLOW} to approve anyway — the override is recorded in gate-overrides.md${RESET}"
-            continue
-          fi
+        local _blockers
+        _blockers=$(_commit_gate_blockers)
+        if [[ -n "$_blockers" && "$(cfg gates.commit.policy lenient)" == "strict" ]]; then
+          warn "gates.commit.policy is strict — approval refused while blockers remain:"
+          printf '%s\n' "$_blockers" | sed 's/^/    - /'
+          echo -e "  ${YELLOW}Fix them (f / n), or type a capital ${BOLD}Y${RESET}${YELLOW} to approve anyway — the override is recorded in gate-overrides.md${RESET}"
+          continue
         fi
+        _gate_blocker_args "$_blockers"
+        manifest_set "${GATE_BLOCKER_ARGS[@]}"
         success "Approved — continuing"
         break
         ;;
@@ -545,6 +577,8 @@ run_review() {
           printf '%s\n' "$_blockers" | sed 's/^/    - /'
           _record_gate_override "$_blockers"
         fi
+        _gate_blocker_args "$_blockers"
+        manifest_set "${GATE_BLOCKER_ARGS[@]}"
         success "Approved — continuing"
         break
         ;;
