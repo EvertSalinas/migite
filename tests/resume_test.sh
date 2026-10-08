@@ -114,7 +114,7 @@ printf '{"verdict": "needs_fixes", "counts": {"critical": 1, "warning": 0, "note
 au_fp=$(cd "$rs_repo" && tree_fingerprint "$(json_field "$au_manifest" repo.base_branch)")
 "$MIGITE_PYTHON" -m migite.runstate update --file "$au_manifest" --set phases.implement.status=done \
   --set phases.heal.status=done --set phases.review.status=pending_gate --set "phases.review.tree_fingerprint=$au_fp" >/dev/null
-printf '{"ui": {"notify": "off", "tmux": "off"}, "gates": {"commit": {"policy": "strict"}}}\n' > "$rs_dir/strict.json"
+printf '{"ui": {"notify": "off", "tmux": "off"}, "gates": {"commit": {"policy": "strict", "automata_fix_rounds": 0}}}\n' > "$rs_dir/strict.json"
 out=$(RS_CONFIG="$rs_dir/strict.json" FAKE_CLAUDE_MODE=exit1 rs_migite --automata "Add widget" < /dev/null); rc=$?
 check "automata run 3: back at the commit gate on the review it stopped at" \
   bash -c '[[ "$1" == *"Phase implement already finished"* && "$1" == *"reusing"*"review.md"* ]]' _ "$out"
@@ -124,6 +124,19 @@ check "automata run 3: the gate stays pending, the run unfinished (not failed), 
   test "$(json_field "$au_manifest" phases.review.status)|$(json_field "$au_manifest" status)|$(json_field "$au_manifest" phases.review.blockers.0)" = "pending_gate|in_progress|review verdict is NEEDS FIXES"
 check "automata run 3: deliver never ran" \
   bash -c '[[ "$1" != *"Phase 3.5/4"* && "$2" == pending ]]' _ "$out" "$(json_field "$au_manifest" phases.deliver.status)"
+check "automata run 3: run.json records exit status 2 and the invocation as automata" \
+  bash -c '[[ "$1" == 2 && "$2" == *", automata, exit 2" ]]' _ \
+  "$(json_field "$au_manifest" exit_status)" "$(json_field "$au_manifest" invocations.1)"
+
+# Run 4: the same gate with gates.commit.automata_fix_rounds at its default (1).
+# The gate answers f before the policy decides; the fix session fails
+# (FAKE_CLAUDE_MODE=exit1), so the run stops with exit 1 and no override.
+printf '{"ui": {"notify": "off", "tmux": "off"}, "gates": {"commit": {"policy": "strict"}}}\n' > "$rs_dir/strict-fix.json"
+out=$(RS_CONFIG="$rs_dir/strict-fix.json" FAKE_CLAUDE_MODE=exit1 rs_migite --automata "Add widget" < /dev/null); rc=$?
+check "automata run 4: blockers remain, so the commit gate answers f with the fix round named" \
+  bash -c '[[ "$1" == *"--automata runs fix round 1 of 1"* && "$1" == *"COMMIT GATE"*"f  "*"(--automata)"* ]]' _ "$out"
+check "automata run 4: the fix session runs headless; its failure stops the run with exit 1, no override recorded" \
+  bash -c '[[ "$1" == 1 && "$2" == *"Fixing review findings"* ]] && test ! -e "$3"' _ "$rc" "$out" "$au_scratch/00-build/gate-overrides.md"
 
 unset -f rs_migite
 unset rs_dir rs_repo rs_scratch rs_manifest au_scratch au_manifest au_before au_fp
