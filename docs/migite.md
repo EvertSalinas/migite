@@ -318,7 +318,9 @@ feedback inline or in `--amend-file`, and the task from `--jira` or the branch n
 **What each prompt answers** is listed in [phases.md](./phases.md#automata-answers). In short: the
 plan is approved, TDD is declined, staged checkpoints continue, and the plan updates are applied.
 
-**The commit gate.** Under `gates.commit.policy: lenient` (the default), the gate approves even
+**The commit gate.** While blockers remain, the gate first answers `f` once
+(`gates.commit.automata_fix_rounds`, default 1): the agent fixes the review findings and the
+blockers headless, then lint, tests and the review run again. Under `gates.commit.policy: lenient` (the default), the gate then approves even
 when blockers remain: a NEEDS FIXES verdict, failing tests, or lint left over. The blockers are
 printed and recorded in `gate-overrides.md` and `run.json`, and the run exits 3. Under `strict`
 with blockers, the run stops at the gate and exits 2, with the blockers printed. Fix them, then

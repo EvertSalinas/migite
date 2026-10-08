@@ -239,7 +239,7 @@ Output ONLY the bullet points, no preamble. Each bullet starts with '- '."
 # a record for people of what this run did and why: what changed, decisions made
 # mid-run, deviations from the plan, fix rounds, outcome, follow-ups. The model
 # (the `summary` role, fast tier) writes only that narrative, from this run's own
-# files; the title, date and a "Run facts" section (verdict, fix rounds, heal
+# files; the title, date and a "Run facts" section (mode, verdict, fix rounds, heal
 # attempts, cost) come from bash, so they can't be misreported. A later amend
 # reads it in place of implementation.md once plan.md reflects this run. A failed
 # or empty call leaves no file.

@@ -634,7 +634,7 @@ $( [[ -n "$FIX_AMENDMENTS" ]] && printf '\n## Amendments (approved after the pla
 
 ## Review findings — address every issue below
 ${REVIEW_CONTENT}
-$( [[ -n "$FIX_BLOCKERS" ]] && printf '\n## Commit gate blockers — clear these too, then run the linter and the specs on the files you change\n%s\n' "$(sed 's/^/- /' <<< "$FIX_BLOCKERS")" )
+$( [[ -n "$FIX_BLOCKERS" ]] && printf '\n## Commit gate blockers — clear these too (lint and specs run again after this round)\n%s\n' "$(sed 's/^/- /' <<< "$FIX_BLOCKERS")" )
 
 ## Instructions
 - Fix every Critical and Warning finding listed above

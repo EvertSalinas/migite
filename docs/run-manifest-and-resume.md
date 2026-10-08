@@ -59,6 +59,9 @@ follows `gateway.envelope_base` (`schema_version`, `generated_at`).
   "schema_version": 1, "tool": "migite-run", "generated_at": "...", "updated_at": "...",
   "status": "in_progress | complete | failed",
   "next_phase": "plan | tdd | implement | heal | review | deliver | done",
+  "mode": "interactive | automata",
+  "exit_status": 0,
+  "invocations": [ "<start> to <end>, <mode>, exit <status>" ],
   "args":  { "task", "task_type", "jira_ticket", "jira_url", "intake", "audit",
              "blueprint", "attach": [], "staged", "stack",
              "amend": { "feedback", "file", "num" } },
@@ -90,6 +93,9 @@ follows `gateway.envelope_base` (`schema_version`, `generated_at`).
   unchanged between runs (documented caveat).
 - `phases.*.gate_attempts` and `tdd.decided` are state the non-interactive mode (`--automata`)
   consumes too; one state model serves both. That mode added `mode` and `phases.review.blockers`.
+- `exit_status` and `invocations` are written by `manifest_on_exit` on every exit, so an
+  audit can tell which invocation ran in which mode and how it ended (the status the caller saw,
+  other failures reported as 1). Only `mode` is overwritten; `invocations` keeps the history.
 
 ### Write points ("every phase boundary")
 
@@ -215,6 +221,11 @@ output file when the session wrote none. Where it departs:
   blockers like a `Y` (in `gate-overrides.md`), and the run exits 3. Exit statuses other than
   0, 2 and 3 are all reported as 1 (`migite_exit`, `_migite_exit`), and 2 and 3 don't mark the
   run failed.
+- **A fix round before the policy decides.** The first lenient runs shipped NEEDS FIXES reviews
+  with no fix attempt at all (agencia-gema quotations-sweep, 2026-10-07: a seed script that crashed
+  on its first record, 16 rubocop offenses). While blockers remain, the gate now answers `f` up to
+  `gates.commit.automata_fix_rounds` times (default 1, per invocation; `automata_fix_round_due`),
+  and the fix prompt carries the gate's blockers next to the review findings.
 - **The mode is in the manifest.** `mode: interactive | automata` is written by every
   invocation. An unfinished automata run resumed without `--automata` is refused before anything
   changes, so a run that spends money and edits code unattended is never continued implicitly.

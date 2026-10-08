@@ -436,7 +436,7 @@ commit-gate overrides, the note you typed at Phase 3.5, and `git diff --stat`. F
 - **What changed**, **Why**, **Decisions made during the run**, **Deviations from the plan**,
   **Fix rounds** and **Follow-ups**
 
-The title, the date, and a **Run facts** section (review verdict, fix rounds, commit-gate
+The title, the date, and a **Run facts** section (mode, review verdict, fix rounds, commit-gate
 re-reviews, auto-heal attempts, plan-gate rounds, plan update result, testing-plan update result
 on amend runs, headless model cost) are written by bash, not the
 model, so they can't be misreported. The only prompt that reads `summary.md` back is a later
@@ -495,13 +495,14 @@ the answer it took and `(--automata)` after it:
 | Phase 1.5 TDD | `N` |
 | Stage checkpoint (`--staged`) | `c`, continue |
 | Browser check (`frontend.browser_check: ask`) | `N` (`on` still runs it, headless) |
-| Commit gate | `y` when nothing blocks. Lenient with blockers: `y`, recorded in `gate-overrides.md`, and the run exits 3. Strict with blockers: the run stops at the gate with exit 2 |
+| Commit gate | `y` when nothing blocks. With blockers, `f` first, up to `gates.commit.automata_fix_rounds` times (default 1; not for a tooling error alone). Then lenient with blockers: `y`, recorded in `gate-overrides.md`, and the run exits 3. Strict with blockers: the run stops at the gate with exit 2 |
 | Anything worth remembering (Phase 3.5) | nothing |
 | Plan update, testing-plan update (Phase 3.8) | `y`, apply |
 | Amend: which task, the feedback in `$EDITOR` | Errors: pass `--jira <key>` (or run on the task's branch) and `--amend "..."` or `--amend-file` |
 | Amendment gate | `y` |
 
-The `f`, `e` and `n` branches are never taken, so their own prompts never come up. A new gate added
+The commit gate's `f` runs its fix session headless; the `e` and `n` branches are never taken, so
+their own prompts never come up. A new gate added
 without an automata answer stops an automata run with an error instead of waiting for input.
 
 <a id="tmux-integration"></a>

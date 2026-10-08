@@ -461,6 +461,7 @@ gates:
     policy: lenient           # lenient | strict
     require_clean_lint: true  # strict only: remaining rubocop offenses (a profile's failing lint) block approval
     require_green_specs: true # strict only: spec failures (a profile's failing tests) or a tooling error block approval
+    automata_fix_rounds: 1    # --automata only: fix rounds while blockers remain, before the policy decides (0 = none)
   plan:
     warn_after_rejections: 3  # warn that the task may be too large after N full redos (0 = never)
 ```
@@ -471,10 +472,15 @@ a tooling error, or remaining rubocop offenses depending on the two `require_*` 
 them. A capital **`Y`** approves anyway and appends the blockers to `gate-overrides.md` in the
 scratchpad (mirrored to the vault), so overrides leave a record.
 
-Under [`--automata`](./migite.md#automata) nobody can fix or override, so the policy decides the
-exit status: `lenient` approves over the blockers, records them like a `Y`, and the run exits 3;
-`strict` stops at the gate with the blockers printed and exits 2. With nothing blocking, both
-approve and the run exits 0. The `require_*` flags shape the blocker list in both modes.
+Under [`--automata`](./migite.md#automata) nobody can override. While blockers remain, the gate
+first answers `f` up to `automata_fix_rounds` times: the agent fixes the review findings and the
+blockers in a headless session, the testing plan is updated, and lint, tests and the review run
+again. A tooling error on its own gets no round, since a fix session can't repair the toolchain.
+The count is per invocation. Then the policy decides the exit status: `lenient` approves over the
+blockers, records them like a `Y`, and the run exits 3; `strict` stops at the gate with the
+blockers printed and exits 2. With nothing blocking, both approve and the run exits 0. The
+`require_*` flags shape the blocker list in both modes. A fix round costs one session, a
+testing-plan edit and a re-review; `automata_fix_rounds: 0` is the behaviour before the key existed.
 
 <a id="permissions"></a>
 ### `permissions`

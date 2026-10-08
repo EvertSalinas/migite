@@ -86,6 +86,8 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
   "status": "in_progress",
   "next_phase": "implement",
   "mode": "interactive",
+  "exit_status": 1,
+  "invocations": [ "2026-10-07T18:41:02Z to 2026-10-07T19:23:40Z, interactive, exit 1" ],
   "args":   { "task": "", "task_type": "feature", "jira_ticket": "BB-1234", "jira_url": "", "intake": "",
               "audit": "", "blueprint": "", "attach": [], "staged": false, "stack": "",
               "amend": { "feedback": "", "file": "", "num": "" } },
@@ -108,6 +110,8 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
 | `status` | `in_progress`, `complete` (every phase done or skipped), or `failed` (the last invocation exited with an error; the phase it was in stays `running`) |
 | `next_phase` | The first phase not done or skipped, or `done`. Derived on every write, never set directly |
 | `mode` | `interactive`, or `automata` for a run started (or resumed) with `--automata`. An unfinished automata run continues only with `--automata` again. A manifest without it is interactive |
+| `exit_status` | The exit status the last invocation reported (0-3, see [Exit status](./migite.md#automata)), or `null` before the first one ends |
+| `invocations` | One line per invocation, appended as it exits: `<start> to <end>, <mode>, <exit N>` (UTC). Shows a resume, a gap between invocations, and which ones ran unattended |
 | `phases.*.status` | `pending`, `running` (written as the phase begins, so a crash leaves it identifiable), `pending_gate` (its work finished, its gate wasn't approved: a `q`), `done`, `skipped`. Each change stamps `started_at` or `completed_at` |
 | `phases.plan.gate_attempts`, `phases.review.gate_attempts` | Rounds at the plan gate and re-reviews at the commit gate, carried across invocations |
 | `phases.tdd.decided` | The answer to the TDD question, so a resumed run doesn't ask it again |
