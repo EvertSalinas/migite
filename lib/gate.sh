@@ -42,11 +42,11 @@ read_answer() {
 }
 
 # automata_commit_gate <policy> <blockers> - the commit gate's decision under
-# --automata, where nobody can fix or override: <blockers> is
-# _commit_gate_blockers' output (lib/phases/review.sh), one per line. Returns 0 to
-# approve: nothing blocks, or gates.commit.policy is lenient (the blockers are
-# printed; the run will exit 3). Returns 2 under strict with blockers, printed:
-# the run stops at the gate with that exit status.
+# --automata once its fix rounds are spent (automata_fix_round_due), where nobody
+# can override: <blockers> is _commit_gate_blockers' output (lib/phases/review.sh),
+# one per line. Returns 0 to approve: nothing blocks, or gates.commit.policy is
+# lenient (the blockers are printed; the run will exit 3). Returns 2 under strict
+# with blockers, printed: the run stops at the gate with that exit status.
 automata_commit_gate() {
   local policy="$1" blockers="$2"
   [[ -z "$blockers" ]] && return 0
@@ -58,6 +58,18 @@ automata_commit_gate() {
   warn "Approving over blockers (--automata, gates.commit.policy: lenient); the run will exit 3:"
   printf '%s\n' "$blockers" | sed 's/^/    - /'
   return 0
+}
+
+# automata_fix_round_due <blockers> <rounds-done> <max-rounds> - true when the
+# commit gate under --automata should answer f (the agent fixes the findings, then
+# lint, tests and the review run again) before the policy decides: blockers remain,
+# fewer than gates.commit.automata_fix_rounds rounds ran in this invocation, and at
+# least one blocker is in the code. A tooling error alone is the toolchain, which a
+# fix session can't repair.
+automata_fix_round_due() {
+  local blockers="$1" done="$2" max="$3"
+  [[ -n "$blockers" && "$done" -lt "$max" ]] || return 1
+  grep -qv '^tooling error: ' <<< "$blockers"
 }
 
 # review_verdict <review.md> — echoes one of: needs_fixes | ready | unknown

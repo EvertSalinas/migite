@@ -114,6 +114,7 @@ DEFAULTS: dict[str, Any] = {
             "policy": "lenient",         # lenient = today's behaviour; strict = 'y' refused over blockers, 'Y' overrides
             "require_clean_lint": True,  # in strict mode, remaining rubocop offenses are a blocker
             "require_green_specs": True, # in strict mode, spec failures / tooling errors are a blocker
+            "automata_fix_rounds": 1,    # --automata: f rounds the gate answers while blockers remain, before the policy decides
         },
         "plan": {
             "warn_after_rejections": 3,  # warn that the task may be too large after N full redos
@@ -311,7 +312,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
 
 INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds",
             "models.timeouts.fast", "models.timeouts.standard", "models.timeouts.strong",
-            "gates.plan.warn_after_rejections",
+            "gates.plan.warn_after_rejections", "gates.commit.automata_fix_rounds",
             "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max",
             "ui.prompt_diff_max_bytes", "knowledge.inject_max_bytes")
 BOOL_KEYS = ("gates.commit.require_clean_lint", "gates.commit.require_green_specs",
@@ -381,6 +382,7 @@ gates:
     policy: lenient          # strict: 'y' is refused while blockers remain; 'Y' overrides and is logged
     require_clean_lint: true
     require_green_specs: true
+    automata_fix_rounds: 1   # --automata: fix rounds while blockers remain, before the policy decides (0 = none)
   plan:
     warn_after_rejections: 3
 

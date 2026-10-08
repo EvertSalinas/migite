@@ -143,14 +143,24 @@ manifest_enter() {
   manifest_boundary "$1" running
 }
 
-# manifest_on_exit <exit code> - from migite's EXIT trap: a non-zero exit marks
-# the run failed. The phase it was in stays running, which is what makes resume
-# re-run exactly that phase. A q at a gate exits 0 and leaves the run in_progress,
-# and so does a status an automata run exits with on purpose (migite_exit: 2 at
-# a blocked commit gate, 3 when it finished over blockers).
+# manifest_on_exit <exit code> - from migite's EXIT trap: records the exit status
+# the caller sees (exit_status, and one line in invocations with this
+# invocation's start, end and mode), and a non-zero exit marks the run failed.
+# The phase it was in stays running, which is what makes resume re-run exactly
+# that phase. A q at a gate exits 0 and leaves the run in_progress, and so does a
+# status an automata run exits with on purpose (migite_exit: 2 at a blocked commit
+# gate, 3 when it finished over blockers). Any other non-zero code is reported as
+# 1, as bin/migite's trap does.
 manifest_on_exit() {
-  [[ "$1" -ne 0 && "$1" != "${MIGITE_EXIT_STATUS:-}" ]] || return 0
-  manifest_set --set "status=failed"
+  local status="$1"
+  local -a sets=()
+  if [[ "$status" -ne 0 && "$status" != "${MIGITE_EXIT_STATUS:-}" ]]; then
+    status=1
+    sets+=(--set "status=failed")
+  fi
+  sets+=(--set-json "exit_status=$status"
+         --add "invocations=${MIGITE_STARTED_AT:-?} to $(date -u +%Y-%m-%dT%H:%M:%SZ), $(run_mode), exit $status")
+  manifest_set "${sets[@]}"
 }
 
 # manifest_find [runstate find flags...] - the newest manifest for this repo, in

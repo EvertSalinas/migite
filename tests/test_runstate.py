@@ -68,6 +68,18 @@ class InitTest(TmpDirTest):
         run_cli("init", "--file", str(self.file), "--set", "mode=automata")
         self.assertEqual(json.loads(self.file.read_text())["mode"], "automata")
 
+    def test_a_run_keeps_its_last_exit_status_and_every_invocation(self):
+        run_cli("init", "--file", str(self.file))
+        m = json.loads(self.file.read_text())
+        self.assertIsNone(m["exit_status"])
+        self.assertEqual(m["invocations"], [])
+        for line, status in (("a to b, interactive, exit 2", "2"), ("c to d, automata, exit 3", "3")):
+            run_cli("update", "--file", str(self.file), "--set-json", f"exit_status={status}",
+                    "--add", f"invocations={line}")
+        m = json.loads(self.file.read_text())
+        self.assertEqual(m["exit_status"], 3)
+        self.assertEqual(m["invocations"], ["a to b, interactive, exit 2", "c to d, automata, exit 3"])
+
 
 class UpdateTest(TmpDirTest):
     def setUp(self):

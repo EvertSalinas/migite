@@ -346,6 +346,7 @@ Summary: <one sentence: what this run delivered>
     printf 'Date: %s\n\n' "$DATE"
     cat "$summary_body"
     printf '\n\n## Run facts\n\n'
+    printf -- '- Mode: %s\n' "$(run_mode)"
     printf -- '- Review verdict: %s\n' "$verdict"
     printf -- '- Fix rounds: %s\n' "$fix_count"
     printf -- '- Re-reviews at the commit gate: %s\n' "${COMMIT_GATE_ATTEMPTS:-0}"

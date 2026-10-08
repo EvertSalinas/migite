@@ -29,6 +29,8 @@ DEV_LOG_BASE="${DEV_LOG_BASE:-$HOME/dev-log}"
 LOG_DIR="${LOG_DIR:-$HOME/.dev-workflow/logs}"
 DATE=$(date +%Y-%m-%d)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+# This invocation's start, for its entry in run.json's invocations (manifest_on_exit).
+MIGITE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MAX_HEAL_ATTEMPTS="${MAX_HEAL_ATTEMPTS:-3}"
 # The checkout this script lives in (one level up from bin/), through the
 # ~/.local/bin symlink, so lib/ and the Python modules are found regardless of

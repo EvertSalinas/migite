@@ -1,7 +1,8 @@
 # tests/automata_test.sh - what --automata changes in the shared helpers: the
 # gates and prompts take their automata answer without reading stdin, a gate
 # with no answer stops the run instead of hanging, the commit gate's decision
-# (strict with blockers stops with status 2), and no tmux pane or desktop
+# (a fix round while blockers remain, then strict with blockers stops with
+# status 2), and no tmux pane or desktop
 # notification. The headless sessions are in agents_test.sh; a whole automata
 # run, its run.json mode and the strict exit code from bin/migite are in
 # resume_test.sh.
@@ -42,6 +43,19 @@ check "automata_commit_gate: strict with nothing blocking approves" bash -c '[[ 
 out=$(automata_commit_gate strict "$au_blockers" 2>&1); rc=$?
 check "automata_commit_gate: strict with blockers returns 2 and prints every blocker" \
   bash -c '[[ "$1" == 2 && "$2" == *"strict"* && "$2" == *"- review verdict is NEEDS FIXES"* && "$2" == *"- 2 failures in rspec"* ]]' _ "$rc" "$out"
+
+check "automata_fix_round_due: blockers and a round left → the gate answers f" \
+  automata_fix_round_due "$au_blockers" 0 1
+check "automata_fix_round_due: the rounds are spent → the policy decides" \
+  not automata_fix_round_due "$au_blockers" 1 1
+check "automata_fix_round_due: gates.commit.automata_fix_rounds 0 → never" \
+  not automata_fix_round_due "$au_blockers" 0 0
+check "automata_fix_round_due: nothing blocks → no round" \
+  not automata_fix_round_due "" 0 1
+check "automata_fix_round_due: only a tooling error → no round (a fix session can't repair the toolchain)" \
+  not automata_fix_round_due "tooling error: bundler missing" 0 1
+check "automata_fix_round_due: a tooling error next to a code blocker → a round" \
+  automata_fix_round_due $'tooling error: bundler missing\nreview verdict is NEEDS FIXES' 0 1
 
 # ── exit statuses ────────────────────────────────────────────────────────────
 ( migite_exit 2 ); rc=$?

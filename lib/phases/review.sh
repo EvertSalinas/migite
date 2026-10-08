@@ -533,27 +533,40 @@ run_review() {
     return 0
   }
 
+  # Fix rounds --automata has answered with f in this invocation.
+  local AUTOMATA_FIX_ROUNDS=0
   while true; do
     show_commit_context
+    local _gate_answer=y
     if automata; then
-      # Nobody can fix or override at this gate. Strict with blockers stops the
-      # run: the gate stays pending, with its blockers in run.json, and exit 2.
-      # Lenient approves over them, recorded like a Y, and the run exits 3.
-      local _auto_blockers _auto_rc=0
+      # Nobody can override at this gate. While blockers remain, the agent gets up
+      # to gates.commit.automata_fix_rounds f rounds; then the policy decides.
+      # Strict with blockers stops the run: the gate stays pending, with its
+      # blockers in run.json, and exit 2. Lenient approves over them, recorded
+      # like a Y, and the run exits 3.
+      local _auto_blockers _auto_rc=0 _auto_max_fix
       _auto_blockers=$(_commit_gate_blockers)
-      automata_commit_gate "$(cfg gates.commit.policy lenient)" "$_auto_blockers" || _auto_rc=$?
-      if [[ $_auto_rc -ne 0 ]]; then
-        _gate_blocker_args "$_auto_blockers"
-        manifest_boundary review pending_gate --set-json "phases.review.gate_attempts=$COMMIT_GATE_ATTEMPTS" \
-          --set "phases.review.tree_fingerprint=$REVIEWED_FINGERPRINT" "${GATE_BLOCKER_ARGS[@]}"
-        echo -e "  ${YELLOW}Fix them, then run the same command with --automata: lint and tests run again and the gate re-opens${RESET}"
-        migite_exit 2
-      fi
-      if [[ -n "$_auto_blockers" ]]; then
-        _record_gate_override "$_auto_blockers" "--automata, gates.commit.policy: lenient"
+      _auto_max_fix=$(cfg gates.commit.automata_fix_rounds 1)
+      if automata_fix_round_due "$_auto_blockers" "$AUTOMATA_FIX_ROUNDS" "$_auto_max_fix"; then
+        AUTOMATA_FIX_ROUNDS=$((AUTOMATA_FIX_ROUNDS + 1))
+        warn "Blockers remain; --automata runs fix round $AUTOMATA_FIX_ROUNDS of $_auto_max_fix (gates.commit.automata_fix_rounds):"
+        printf '%s\n' "$_auto_blockers" | sed 's/^/    - /'
+        _gate_answer=f
+      else
+        automata_commit_gate "$(cfg gates.commit.policy lenient)" "$_auto_blockers" || _auto_rc=$?
+        if [[ $_auto_rc -ne 0 ]]; then
+          _gate_blocker_args "$_auto_blockers"
+          manifest_boundary review pending_gate --set-json "phases.review.gate_attempts=$COMMIT_GATE_ATTEMPTS" \
+            --set "phases.review.tree_fingerprint=$REVIEWED_FINGERPRINT" "${GATE_BLOCKER_ARGS[@]}"
+          echo -e "  ${YELLOW}Fix them, then run the same command with --automata: lint and tests run again and the gate re-opens${RESET}"
+          migite_exit 2
+        fi
+        if [[ -n "$_auto_blockers" ]]; then
+          _record_gate_override "$_auto_blockers" "--automata, gates.commit.policy: lenient"
+        fi
       fi
     fi
-    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): " y
+    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): " "$_gate_answer"
     case "${GATE_CHOICE:-}" in
       y)
         local _blockers
@@ -609,6 +622,10 @@ run_review() {
 $(cat "$_fix_amend_f")
 "
         done < <(unfolded_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md "$PLAN_FILE")
+        # What the gate blocks on beyond the review's own findings (failing specs,
+        # lint left after autocorrect): the review can miss them or truncate them.
+        local FIX_BLOCKERS
+        FIX_BLOCKERS=$(_commit_gate_blockers | grep -v '^tooling error: ' || true)
         local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
 
 ## Current plan (for context)
@@ -617,6 +634,7 @@ $( [[ -n "$FIX_AMENDMENTS" ]] && printf '\n## Amendments (approved after the pla
 
 ## Review findings — address every issue below
 ${REVIEW_CONTENT}
+$( [[ -n "$FIX_BLOCKERS" ]] && printf '\n## Commit gate blockers — clear these too, then run the linter and the specs on the files you change\n%s\n' "$(sed 's/^/- /' <<< "$FIX_BLOCKERS")" )
 
 ## Instructions
 - Fix every Critical and Warning finding listed above

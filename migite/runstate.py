@@ -7,7 +7,8 @@ continues from its recorded position instead of restarting at the plan. It
 records the run's mode (interactive, or automata for `migite --automata`), its
 arguments, repo and layout, and one entry per phase
 (plan, tdd, implement, heal, review, deliver) with its status and the gate
-counters a phase needs to resume. See docs/run-manifest-and-resume.md.
+counters a phase needs to resume, plus each invocation's mode and exit status.
+See docs/run-manifest-and-resume.md.
 
   python -m migite.runstate init   --file F [--set K=V]... [--set-json K=JSON]... [--add K=V]...
   python -m migite.runstate update --file F [--set K=V]... [--set-json K=JSON]... [--add K=V]...
@@ -73,6 +74,10 @@ def new_manifest() -> dict:
     m["status"] = "in_progress"
     m["next_phase"] = PHASES[0]
     m["mode"] = MODES[0]
+    # The last invocation's exit status (0-3, see `migite --help`), and one line per
+    # invocation: "<start> to <end>, <mode>, exit <status>" (lib/manifest.sh).
+    m["exit_status"] = None
+    m["invocations"] = []
     m["args"] = {
         "task": "", "task_type": "", "jira_ticket": "", "jira_url": "", "intake": "",
         "audit": "", "blueprint": "", "attach": [], "staged": False, "stack": "",
