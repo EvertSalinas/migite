@@ -256,7 +256,7 @@ migite-explore --from-exploration ~/…/exploration-billing-2026-08-18/explorati
 | Writes | `intake-NN-<slug>.md` only |
 | Never touches | `exploration.md` (your input) and `challenges.md` (the original run's output) |
 | Output dir | Defaults to the directory containing the exploration file; overridden by `--output`; if `--jira` is passed instead, goes to that ticket's `explore-<timestamp>/` folder regardless of where the source file lives |
-| Git repo | Not required when working directly on a file in the vault — **required if `--jira` is also passed**, to resolve org/repo for the ticket folder |
+| Git repo | Not required when working directly on a file in the vault — **required if `--jira` is also passed**, to resolve org/repo for the ticket folder. Run it from the repo the exploration belongs to: inside a repo its `.migite.yml` (backend, models) applies; outside one, only `~/.config/migite/config.yml` does |
 
 Warns if the document has no `## Workstreams` section rather than silently producing nothing.
 

@@ -152,17 +152,18 @@ done
 # ── Re-extract mode ───────────────────────────────────────────────────────────
 # Needs no git repo and no brief - it reads an existing exploration.md and
 # regenerates only the workstream intakes. exploration.md and challenges.md
-# are left untouched.
+# are left untouched. Inside a repo, its root is always passed so the repo's
+# .migite.yml (backend, models) applies; outside one, only the personal config does.
 if [[ -n "$FROM_EXPLORATION" ]]; then
   REEXTRACT_ARGS=(--from-exploration "$FROM_EXPLORATION")
   [[ -n "$OUTPUT_DIR" ]] && REEXTRACT_ARGS+=(--output "$OUTPUT_DIR")
-  if [[ -n "$JIRA" ]]; then
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-      echo "✘ --jira requires a git repository (to resolve org/repo for the vault path)." >&2
-      exit 1
-    fi
-    REEXTRACT_ARGS+=(--jira "$JIRA" --repo-root "$(git rev-parse --show-toplevel)")
+  if git rev-parse --is-inside-work-tree &>/dev/null; then
+    REEXTRACT_ARGS+=(--repo-root "$(git rev-parse --show-toplevel)")
+  elif [[ -n "$JIRA" ]]; then
+    echo "✘ --jira requires a git repository (to resolve org/repo for the vault path)." >&2
+    exit 1
   fi
+  [[ -n "$JIRA" ]] && REEXTRACT_ARGS+=(--jira "$JIRA")
   exec "$MIGITE_PYTHON" -m migite.tools.explore "${REEXTRACT_ARGS[@]}"
 fi
 

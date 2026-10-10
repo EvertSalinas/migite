@@ -836,7 +836,7 @@ def main() -> None:
         elif not output_dir:
             output_dir = str(Path(args.from_exploration).parent)
 
-        print(f"\n  migite-explore | re-extracting workstreams (extract={gateway.model_for('explore_refine') or 'default'})", flush=True)
+        print(f"\n  migite-explore | re-extracting workstreams (model={gateway.model_for('explore_refine') or 'default'})", flush=True)
         print(f"  Source: {args.from_exploration}", flush=True)
         print(f"  Output: {output_dir}\n", flush=True)
         try:
