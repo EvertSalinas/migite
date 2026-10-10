@@ -18,6 +18,24 @@
 # run_tdd expects PLAN_FILE, RUN_SCRATCH_DIR, RUN_VAULT_DIR, SCRATCHPAD_DIR, TASK_SLUG,
 # and sets TDD_DECIDED (true when specs were written first).
 
+# defer_testing_plan - plan.testing_plan_when: review. migite-plan leaves testing-plan.md
+# to Phase 3 (ensure_testing_plan, lib/phases/review.sh), which only writes a missing one.
+# A testing plan left over from an earlier plan describes a plan that no longer exists, so
+# it is set aside in .plan-history and both copies are removed: the vault copy too, or
+# resume_from_vault would bring it back. The run folders' snapshots keep the history.
+# Called after every migite-plan run; a no-op for plan.testing_plan_when: plan.
+defer_testing_plan() {
+  [[ "$(cfg plan.testing_plan_when plan)" == "review" ]] || return 0
+  if [[ -s "$TESTING_PLAN_FILE" ]]; then
+    local hist_dir="$SCRATCHPAD_DIR/.plan-history"
+    mkdir -p "$hist_dir"
+    cp "$TESTING_PLAN_FILE" "$hist_dir/testing-plan-$(date +%Y%m%d-%H%M%S).md"
+    warn "Setting aside the testing plan from the earlier plan; Phase 3 writes a new one from the new plan and the diff"
+  fi
+  rm -f "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+  return 0
+}
+
 run_plan() {
   echo ""
   log "Phase 1/4 — Planning"
@@ -80,6 +98,12 @@ run_plan() {
   fi
 
   _pick_task_type() {
+    if automata; then
+      # migite-plan's own fallback when no type is known
+      TASK_TYPE="feature"
+      log "No --type given: planning as a feature (--automata). Pass --type to choose"
+      return 0
+    fi
     echo ""
     echo -e "${BOLD}  Task type:${RESET}"
     echo -e "  1. feature"
@@ -136,7 +160,7 @@ run_plan() {
     done
     echo ""
     local intake_choice
-    read -r -p "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" intake_choice
+    read_answer intake_choice "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" y
     case "${intake_choice:-y}" in
       e|E) ${EDITOR:-vim} "$INTAKE_FILE" ;;
       q|Q) error "Workflow aborted" ;;
@@ -163,8 +187,19 @@ run_plan() {
       printf '- Do not change public API contracts or alter behaviour observable to callers\n\n'
       printf '## Acceptance Criteria\n'
       printf '- All critical findings resolved with no regressions\n'
-      printf '- `bundle exec rubocop` reports no new offenses\n'
-      printf '- `bundle exec rspec` remains green\n\n'
+      if stack_is_profile; then
+        # The profile's own commands (stacks.<name>), without the {files} placeholder.
+        local audit_lint audit_test
+        audit_lint="$(cfg "stacks.$STACK.lint")"; audit_test="$(cfg "stacks.$STACK.test")"
+        [[ -n "$audit_lint" ]] && printf -- '- `%s` reports no new problems\n' "${audit_lint// \{files\}/}"
+        [[ -n "$audit_test" ]] && printf -- '- `%s` remains green\n' "${audit_test// \{files\}/}"
+        printf '\n'
+      elif [[ "$STACK" == "generic" ]]; then
+        printf -- '- The existing tests remain green\n\n'
+      else
+        printf '- `bundle exec rubocop` reports no new offenses\n'
+        printf '- `bundle exec rspec` remains green\n\n'
+      fi
       printf '## Audit Findings (source of truth for this task)\n\n'
       cat "$AUDIT_FILE"
     } > "$INTAKE_FILE"
@@ -178,7 +213,7 @@ run_plan() {
     done
     echo ""
     local audit_choice
-    read -r -p "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" audit_choice
+    read_answer audit_choice "$(echo -e "${YELLOW}Proceed with this intake? [y/e/q] (y=proceed, e=edit, q=abort): ${RESET}")" y
     case "${audit_choice:-y}" in
       e|E) ${EDITOR:-vim} "$INTAKE_FILE" ;;
       q|Q) error "Workflow aborted" ;;
@@ -195,7 +230,18 @@ run_plan() {
     [[ -n "$JIRA_TICKET" ]] && fill_intake_field "$INTAKE_FILE" '<!-- ticket ID or N/A -->' "${JIRA_URL:-$JIRA_TICKET}"
     log "Created intake from template: $TASK_TYPE"
 
-    ${EDITOR:-vim} "$INTAKE_FILE"
+    if automata; then
+      # Nobody to fill the template in: plan from the task text, as a --jira run
+      # does from the ticket. A ticket key whose ticket couldn't be fetched is no
+      # intake at all.
+      [[ -n "$TASK" ]] || error "--automata has no intake to plan from: pass a task description, --jira <key> or --intake <file>"
+      if [[ -n "$JIRA_TICKET" && ! -s "$JIRA_CONTEXT_FILE" ]]; then
+        error "$JIRA_TICKET couldn't be fetched (see above), and under --automata nobody writes the intake. Fix the ticket source (migite doctor) or pass --intake <file>"
+      fi
+      log "Planning from the task text without opening the editor (--automata)"
+    else
+      ${EDITOR:-vim} "$INTAKE_FILE"
+    fi
   fi
 
   # Re-derive slug from the Title field after editing; rename dirs if it changed
@@ -259,7 +305,7 @@ run_plan() {
   elif [[ -n "$INTAKE_FILE_ARG" ]]; then
     echo ""
     local task_file_choice
-    read -r -p "$(echo -e "${YELLOW}Add supplementary details in a separate task.md before planning? [y/N]: ${RESET}")" task_file_choice
+    read_answer task_file_choice "$(echo -e "${YELLOW}Add supplementary details in a separate task.md before planning? [y/N]: ${RESET}")" N
     if [[ "$task_file_choice" =~ ^[Yy]$ ]]; then
       local TASK_FILE_TMP
       TASK_FILE_TMP=$(mktemp)
@@ -291,9 +337,10 @@ run_plan() {
     success "Attachment(s) saved to $TASK_FILE"
   fi
 
-  # Inject knowledge.md so Plan and Implement phases inherit repo-level memory
+  # Inject knowledge.md so Plan and Implement phases inherit repo-level memory,
+  # the entries closest to the intake and the ticket first
   KNOWLEDGE_FILE="$DEV_LOG_BASE/$ORG/$REPO_NAME/knowledge.md"
-  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE")
+  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE" "$INTAKE_FILE" "$JIRA_CONTEXT_FILE")
 
   # LangGraph plan script args — built once, reused in the gate loop on rejection
   local PLAN_SENTINEL="$SCRATCHPAD_DIR/.plan.done"
@@ -345,7 +392,7 @@ run_plan() {
     echo -e "${BOLD}────────────────────────────────────────${RESET}"
     echo ""
     local plan_choice
-    read -r -p "$(echo -e "${YELLOW}Use existing plan or redo? [u/r] (u=use existing plan, r=redo from scratch): ${RESET}")" plan_choice
+    read_answer plan_choice "$(echo -e "${YELLOW}Use existing plan or redo? [u/r] (u=use existing plan, r=redo from scratch): ${RESET}")" u
     case "$plan_choice" in
       r|R)
         _backup_plan_file
@@ -353,7 +400,8 @@ run_plan() {
         spawn_langgraph "Planning" "plan" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
-        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        defer_testing_plan
+        [[ -f "$TESTING_PLAN_FILE" ]] && sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
         sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
         sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
         success "Plan written to $PLAN_FILE"
@@ -368,7 +416,8 @@ run_plan() {
     spawn_langgraph "Planning" "plan" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
     [[ -f "$PLAN_SENTINEL" ]] || error "migite-plan did not complete — check agent log in $LOG_DIR"
     sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
-    sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+    defer_testing_plan
+    [[ -f "$TESTING_PLAN_FILE" ]] && sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
     sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
     sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
     success "Plan written to $PLAN_FILE"
@@ -380,7 +429,7 @@ run_plan() {
   # Human review gate
   # y — approve and continue
   # f - give feedback, refine plan in place (no re-exploration, one headless agent call)
-  # n — full redo (re-run all 7 explorers + synthesis + critic)
+  # n — full redo (re-run the planner: the explorers + synthesis, or the native plan call, then the critic)
   # q — abort
   # Carries on from run.json when a resumed run re-opens this gate
   PLAN_GATE_ATTEMPTS="${PLAN_GATE_ATTEMPTS:-0}"
@@ -420,7 +469,7 @@ run_plan() {
 
   while true; do
     PLAN_GATE_ATTEMPTS=$((PLAN_GATE_ATTEMPTS + 1))
-    read_gate_choice "REVIEW GATE: plan" "Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort): "
+    read_gate_choice "REVIEW GATE: plan" "Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n=full redo, q=abort): " y
     case "$GATE_CHOICE" in
       y|Y)
         snapshot_approved_plan
@@ -499,7 +548,8 @@ run_plan() {
         spawn_langgraph "Revising plan" "plan-r${PLAN_GATE_ATTEMPTS}" "$PLAN_MODULE" "${PLAN_LANGGRAPH_ARGS[@]}"
         [[ -f "$PLAN_SENTINEL" ]] || warn "migite-plan revision may not have completed — check agent log in $LOG_DIR"
         sync_artifact "$PLAN_FILE" "$PLAN_VAULT"
-        sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+        defer_testing_plan
+        [[ -f "$TESTING_PLAN_FILE" ]] && sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
         sync_artifact "$CRITIC_FILE" "$CRITIC_VAULT"
         sync_json "$SCRATCHPAD_DIR/plan.json" "$TASK_DIR/plan.json"
         _show_plan_diff "$_rerun_prev"
@@ -523,7 +573,7 @@ run_tdd() {
   echo ""
   local tdd_choice
   TDD_DECIDED=false
-  read -r -p "$(echo -e "${YELLOW}Phase 1.5 (TDD): Write spec files before implementation? [y/N]: ${RESET}")" tdd_choice
+  read_answer tdd_choice "$(echo -e "${YELLOW}Phase 1.5 (TDD): Write spec files before implementation? [y/N]: ${RESET}")" N
   if [[ "$tdd_choice" =~ ^[Yy]$ ]]; then
     TDD_DECIDED=true
     log "Phase 1.5/4 — Writing specs (TDD red phase)"

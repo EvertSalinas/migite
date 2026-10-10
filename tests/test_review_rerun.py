@@ -85,6 +85,42 @@ class DimsToRerunTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class TestingPlanOffRerunTest(unittest.TestCase):
+    """review.dimensions.testing_plan: off - the dimension is simply not in the names a re-review is given."""
+
+    def setUp(self):
+        self.tool = load_tool()
+        self.tp = "# Testing Plan\n1. check it"
+        self.off = ["correctness", "security", "test_coverage"]
+
+    def previous(self, **bodies):
+        dims = {"correctness": CLEAN, "security": CLEAN, "test_coverage": CLEAN, "testing_plan": CLEAN}
+        dims.update(bodies)
+        return {"dimensions": dims, "testing_plan_sha": self.tool._sha(self.tp)}
+
+    def test_a_changed_testing_plan_does_not_rerun_a_dimension_that_is_off(self):
+        rerun = self.tool.dims_to_rerun(self.previous(), self.tp + "\n2. new step", self.off)
+        self.assertEqual(rerun, ["correctness"])
+
+    def test_a_finding_from_when_it_was_on_is_neither_rerun_nor_carried(self):
+        prev = self.previous(testing_plan="- 🔴 **Critical** — step 3 is stale")
+        rerun = self.tool.dims_to_rerun(prev, self.tp, self.off)
+        self.assertNotIn("testing_plan", rerun)
+        carried = self.tool.carried_findings(prev, rerun, self.off)
+        self.assertFalse(any(b.startswith("### testing_plan") for b in carried))
+
+    def test_turning_it_back_on_reruns_it_because_the_last_review_never_ran_it(self):
+        prev = self.previous()
+        del prev["dimensions"]["testing_plan"]
+        self.assertIn("testing_plan", self.tool.dims_to_rerun(prev, self.tp, self.off + ["testing_plan"]))
+
+    def test_a_review_json_from_before_the_hash_was_recorded_still_reruns_it_when_on(self):
+        prev = self.previous()
+        del prev["testing_plan_sha"]
+        self.assertIn("testing_plan", self.tool.dims_to_rerun(prev, self.tp, self.off + ["testing_plan"]))
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
 class FanOutAndRecordTest(unittest.TestCase):
     def setUp(self):
         self.tool = load_tool()

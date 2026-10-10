@@ -83,6 +83,111 @@ class FrontendReviewerTest(unittest.TestCase):
         self.assertIn("Result: FAIL - the modal never opened", block)
 
 
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class StackLogLabelsTest(unittest.TestCase):
+    """The two tooling logs carry rubocop/rspec output on rails and a stacks.<name>
+    profile's lint/test output otherwise; the reviewer is told which."""
+
+    def setUp(self):
+        self.review = load_tool()
+        self.prompts = []
+
+        def fake_call_agent(prompt, role, label="", schema=None):
+            self.prompts.append(prompt)
+            return types.SimpleNamespace(text="✅ No issues in this dimension.", structured=None)
+        self.review.call_agent = fake_call_agent
+
+    def prompt(self, **overrides):
+        self.review.review_dimension({**state(rubocop_log="LINT OUTPUT", rspec_log="TEST OUTPUT", **overrides),
+                                      "dimension": "correctness", "description": "logic"})
+        return self.prompts[-1]
+
+    def test_rails_logs_are_called_rubocop_and_rspec(self):
+        prompt = self.prompt()
+        self.assertIn("## Rubocop results\nLINT OUTPUT", prompt)
+        self.assertIn("## RSpec results\nTEST OUTPUT", prompt)
+
+    def test_a_stack_profiles_logs_are_called_lint_and_test(self):
+        prompt = self.prompt(stack="node")
+        self.assertIn("## Lint results\nLINT OUTPUT", prompt)
+        self.assertIn("## Test results\nTEST OUTPUT", prompt)
+        self.assertNotIn("Rubocop", prompt)
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class StackChecklistTest(unittest.TestCase):
+    """What each reviewer checks comes from the stack's checklist (prompts/checklists/<stack>.md):
+    rails by default, generic for a stack without a file of its own."""
+
+    def setUp(self):
+        self.review = load_tool()
+        from migite import checklists
+        self.generic = checklists.load("generic", ROOT)
+
+    def test_rails_is_the_default(self):
+        self.assertIn("current_user", dict(self.review.active_dimensions(state()))["security"])
+
+    def test_a_profile_gets_the_generic_criteria_and_expertise(self):
+        st = state(criteria=self.generic.review, expertise="software", stack="node")
+        dims = dict(self.review.active_dimensions(st))
+        self.assertEqual(list(dims), ["correctness", "security", "test_coverage", "testing_plan"])
+        self.assertEqual(dims["security"], self.generic.review["security"])
+        sends = self.review.route_to_reviewers(st)
+        self.assertEqual({s.arg["expertise"] for s in sends}, {"software"})
+        prompts = []
+        self.review.call_agent = lambda prompt, role, label="", schema=None: (
+            prompts.append(prompt) or types.SimpleNamespace(text="✅ No issues.", structured=None))
+        self.review.review_dimension(sends[1].arg)
+        self.assertIn("You are a senior software engineer", prompts[0])
+        self.assertNotIn("current_user", prompts[0])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class TestingPlanToggleTest(unittest.TestCase):
+    """review.dimensions.testing_plan: off drops the testing-plan reviewer and tells the verdict why."""
+
+    def setUp(self):
+        self.review = load_tool()
+        self.prompts = []
+
+        def fake_call_agent(prompt, role, label="", schema=None):
+            self.prompts.append(prompt)
+            return types.SimpleNamespace(text="# Review: t\n\n## Verdict: READY TO COMMIT\n\nclean", structured=None)
+        self.review.call_agent = fake_call_agent
+
+    def dims(self, **overrides):
+        return [d for d, _ in self.review.active_dimensions(state(**overrides))]
+
+    def synth_prompt(self, **overrides):
+        self.review.synthesize_verdict({**state(), "review_cmd": "format", "amendments": [],
+                                        "findings": ["### correctness\n✅ No issues in this dimension."], **overrides})
+        return self.prompts[0]
+
+    def test_on_is_the_default_when_the_state_says_nothing(self):
+        self.assertIn("testing_plan", self.dims())
+        self.assertIn("testing_plan", self.dims(testing_plan_enabled=True))
+
+    def test_off_leaves_three_reviewers(self):
+        self.assertEqual(self.dims(testing_plan_enabled=False), ["correctness", "security", "test_coverage"])
+
+    def test_off_still_adds_the_frontend_reviewer_for_a_frontend_diff(self):
+        dims = self.dims(testing_plan_enabled=False, frontend_files=["app/views/items/index.html.erb"])
+        self.assertEqual(dims, ["correctness", "security", "test_coverage", "frontend"])
+
+    def test_off_sends_no_testing_plan_reviewer_even_on_a_full_review(self):
+        sends = self.review.route_to_reviewers({**state(testing_plan_enabled=False), "amendments": [], "rerun": []})
+        self.assertEqual([s.arg["dimension"] for s in sends], ["correctness", "security", "test_coverage"])
+
+    def test_the_verdict_is_told_the_reviewer_did_not_run_only_when_it_is_off(self):
+        off = self.synth_prompt(testing_plan_enabled=False)
+        self.assertIn("review.dimensions.testing_plan is off", off)
+        self.assertIn("N/A", off)
+        self.prompts.clear()
+        self.assertNotIn("review.dimensions.testing_plan", self.synth_prompt(testing_plan_enabled=True))
+        self.prompts.clear()
+        self.assertNotIn("review.dimensions.testing_plan", self.synth_prompt())
+
+
 CRITICAL = """- 🔴 **Critical** · `app/models/item.rb:2` · Unscoped lookup
   - **Problem:** finds items across accounts.
   - **Evidence:** `app/models/item.rb:2` `Item.find(id)`

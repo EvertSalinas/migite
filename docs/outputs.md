@@ -36,8 +36,8 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | File | Contents |
 |------|----------|
 | `plan.md` | The living plan: the design as it now stands, updated at the end of every run ([Phase 3.8](./phases.md#phase-3-8-plan-update)), with a `## Revision history` line per run |
-| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status and the findings it rejected, failed explorers, per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
-| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
+| `plan.json` | Machine-readable envelope beside `plan.md`: critic finding counts and clean flag, open-question count, plan headings, stub retries, refine status and the findings it rejected, the session chain (`plan.chain_sessions`), the planning strategy (`plan.strategy`), failed explorers (`langgraph` only), per-tool usage. Derived deterministically from the documents, so it can't disagree with them |
+| `testing-plan.md` | QA/dev verification steps: seed script, curls, teardown. Written in Phase 1, or at the start of Phase 3 with `plan.testing_plan_when: review`. Updated with exact edits on every `--amend` and fix round (regenerated in full only as a fallback), unlike `plan.md` |
 | `pr-description.md` | Ready to paste into GitHub. Regenerated at the end of every run, including every amendment |
 | `browser-check.md` | Only with `frontend.browser_check: ask` / `on` and a diff that touches views or JavaScript: the agent's PASS / FAIL / SKIPPED walk through the testing plan in a real browser, read by the `frontend` reviewer. See [Frontend](./phases.md#frontend) |
 | `.plan.done` | Sentinel written by migite-plan on success |
@@ -68,9 +68,9 @@ overwrite another's. See [vault-structure.md](./vault-structure.md) for the tree
 | `fix-r<N>.md` | Summary of what Claude changed during a commit-gate `f` fix pass, numbered from 1 within the run |
 | `summary.md` | The run's end-of-run record for people: a one-line `Summary:`, what changed and why, decisions made mid-run, deviations from the plan, fix rounds, follow-ups, and run facts. Written at [Phase 4.2](./phases.md#phase-4-2-run-summary). A later `--amend` reads it in place of `implementation.md` once `plan.md` reflects this run |
 | `testing-plan.md` | The task's testing plan as this run left it. The top-level `testing-plan.md` is updated by every amend and fix round, so these copies are its history |
-| `usage.jsonl` | Every headless model call the run made, one JSON line each, across all of its invocations: a resumed or re-run build appends to it rather than starting over |
-| `usage.json` | Summary of `usage.jsonl` (by model and by tool: calls, tokens, time, cost). Interactive sessions are not metered |
-| `gate-overrides.md` | Only with `gates.commit.policy: strict` — one entry per capital-`Y` approval over blockers, listing what was overridden |
+| `usage.jsonl` | Every headless model call the run made, one JSON line each, and one line per model for each interactive session (`session:<label>`, `kind: session`), across all of its invocations: a resumed or re-run build appends to it rather than starting over |
+| `usage.json` | Summary of `usage.jsonl` (by model, by tool, and by kind: calls, tokens, time, cost). `by_kind.call` is the headless calls alone, `by_kind.session` the sessions. Sessions are metered on Claude Code only |
+| `gate-overrides.md` | One entry per approval over blockers, listing what was overridden: a capital `Y` (the only way past them with `gates.commit.policy: strict`), or an `--automata` run under `lenient` |
 | `run.json` | The run manifest: how far the run got, written at every phase boundary, so running the same command again resumes it. See [below](#run-json) |
 
 If the scratchpad copy of any of the above is missing (cleaned, fresh clone, different
@@ -85,6 +85,9 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
   "schema_version": 1, "tool": "migite-run", "generated_at": "...", "updated_at": "...",
   "status": "in_progress",
   "next_phase": "implement",
+  "mode": "interactive",
+  "exit_status": 1,
+  "invocations": [ "2026-10-07T18:41:02Z to 2026-10-07T19:23:40Z, interactive, exit 1" ],
   "args":   { "task": "", "task_type": "feature", "jira_ticket": "BB-1234", "jira_url": "", "intake": "",
               "audit": "", "blueprint": "", "attach": [], "staged": false, "stack": "",
               "amend": { "feedback": "", "file": "", "num": "" } },
@@ -96,7 +99,7 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
     "tdd":       { "status": "skipped", "decided": false },
     "implement": { "status": "running", "stage_num": 0, "stage_count": 0, "stage_labels": [] },
     "heal":      { "status": "pending", "heal_attempt": 0 },
-    "review":    { "status": "pending", "gate_attempts": 0, "tree_fingerprint": "" },
+    "review":    { "status": "pending", "gate_attempts": 0, "tree_fingerprint": "", "blockers": [] },
     "deliver":   { "status": "pending" }
   }
 }
@@ -106,12 +109,16 @@ needs it runs — see [Resuming a run](./migite.md#resuming-a-run).
 |---|---|
 | `status` | `in_progress`, `complete` (every phase done or skipped), or `failed` (the last invocation exited with an error; the phase it was in stays `running`) |
 | `next_phase` | The first phase not done or skipped, or `done`. Derived on every write, never set directly |
+| `mode` | `interactive`, or `automata` for a run started (or resumed) with `--automata`. An unfinished automata run continues only with `--automata` again. A manifest without it is interactive |
+| `exit_status` | The exit status the last invocation reported (0-3, see [Exit status](./migite.md#automata)), or `null` before the first one ends |
+| `invocations` | One line per invocation, appended as it exits: `<start> to <end>, <mode>, <exit N>` (UTC). Shows a resume, a gap between invocations, and which ones ran unattended |
 | `phases.*.status` | `pending`, `running` (written as the phase begins, so a crash leaves it identifiable), `pending_gate` (its work finished, its gate wasn't approved: a `q`), `done`, `skipped`. Each change stamps `started_at` or `completed_at` |
 | `phases.plan.gate_attempts`, `phases.review.gate_attempts` | Rounds at the plan gate and re-reviews at the commit gate, carried across invocations |
 | `phases.tdd.decided` | The answer to the TDD question, so a resumed run doesn't ask it again |
 | `phases.implement.stage_*` | `--staged` only: the stage labels and how many stages finished |
 | `phases.heal.heal_attempt` | Heal attempts used |
 | `phases.review.tree_fingerprint` | The tree the current `review.md` reviewed, recorded at a `q`; a resumed gate reuses the review only while the code still matches |
+| `phases.review.blockers` | What blocked the commit gate at its last decision (verdict, tests, lint), or `[]`. Under `--automata` a non-empty list means exit 2 (strict, the gate still pending) or exit 3 (lenient, approved over them) |
 | `layout.slug`, `layout.run_slug` | The task and run folders. On resume every path is re-derived from these and today's config, so the stored paths are informational |
 
 Writes are atomic (a temp file, then a rename), so a crash mid-write never leaves a truncated
@@ -143,13 +150,16 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | `<ts>-<ticket>-heal-rspec.txt` | Heal loop rspec |
 | `<ts>-<ticket>-heal-frontend-lint.txt` | Heal loop erb_lint / eslint, when the diff touches views or JavaScript |
 | `<ts>-<ticket>-frontend-lint.txt` | Phase 3 erb_lint / eslint, when the diff touches views or JavaScript |
+| `<ts>-<ticket>-lint.txt`, `-test.txt` | Phase 3 lint and test output on a [stack profile](./configuration.md#stacks), in place of the rubocop and rspec logs (`-lint-autofix.txt`: its autofix) |
+| `<ts>-<ticket>-heal-lint.txt`, `-heal-test.txt` | Heal loop lint and test output on a stack profile (`-heal-lint-autofix.txt`: its autofix) |
 | `<ts>-<ticket>-heal-fix-N.txt` | Claude's heal output per attempt |
 | `<ts>-<ticket>-critic.txt` | Architecture critic raw output |
 | `<ts>-<ticket>-knowledge.txt` | Raw knowledge extraction |
 | `<ts>-<ticket>-improvements.txt` | Raw self-improvement notes |
 | `<ts>-prompt-<label>.txt` | Every prompt sent to interactive phases |
 | `<ts>-wrapper-<label>.sh` | tmux wrapper scripts |
-| `<ts>-usage.jsonl` | The run's usage ledger - one JSON line per headless agent call (tool, label, model, tokens, cost, duration, ok). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
+| `<ts>-usage.jsonl` | The run's usage ledger - one JSON line per headless agent call, and one per model for each interactive session (tool, label, model, tokens, cost, duration, ok, kind). Source for `usage.json` and the gate banner's running cost. Override the path with `MIGITE_USAGE_LEDGER` |
+| `<ts>-session-id-<label>.txt` | The id `run_phase` gave an interactive session, so its usage can be read back afterwards; empty when the agent CLI can't take one |
 
 ---
 
@@ -171,10 +181,11 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 | Verdict | Read from the `## Verdict` section of review.md by `review_verdict()` (`lib/gate.sh`) — `NEEDS FIXES`/`NEEDS CHANGES` → red, `READY TO COMMIT`/`READY TO MERGE`/`APPROVED` → green, anything else → "unknown". Anchored on the heading on purpose: the review format's `## Brakeman: PASS` line sits above the verdict, and a whole-file keyword grep used to match it first and show a green verdict on `NEEDS FIXES` reviews |
 | Spec failures | Failure count, DB connection failure, load errors, `0 examples`, or `skipped` — "all passed" is only claimed when examples actually ran |
 | Rubocop state | Offense count from the post-review re-run |
+| Tests, Lint | On a [stack profile](./configuration.md#stacks), in place of Specs and Rubocop: passed / clean, failed, not run (with the reason), or could not start, from the commands' exit codes. A command that could not start (exit 126/127) is also the tooling error line |
 | FE lint | erb_lint / eslint result, only when the diff touches views or JavaScript and the repo configures a linter |
 | Browser | The `Result:` line of `browser-check.md`, when the browser check ran |
 | Findings / Reason | From `review.json`: critical / warning / note counts and the one-line reason the verdict was decided. Only shown when the envelope exists (i.e. not after a hand-edit of `review.md`) |
-| Cost | Running total of headless model calls from the usage ledger — interactive sessions aren't metered |
+| Cost | Running total from the usage ledger: headless calls, and the interactive sessions so far on an agent that reports them (Claude Code) |
 
 | Key | Action |
 |-----|--------|
@@ -191,7 +202,7 @@ See [Vault structure](./vault-structure.md) for the full directory tree.
 
 The QA/dev verification steps (seed script, curls or browser actions, teardown) live in their own `testing-plan.md`, not inside `plan.md`. This is deliberate: `plan.md` is only updated at the end of a run, through edits you approve, while the testing plan is regenerated whenever behaviour changes (every amendment and fix round) and describes how to verify the code **as it exists right now**. Kept inside `plan.md`, its steps would lag until the run's plan update, or be lost if you declined it.
 
-`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan. Every `--amend` run (at the amendment gate, and again at [Phase 3.8](./phases.md#phase-3-8-plan-update) from what was actually built) and every commit-gate fix round then updates it with exact edits (`migite/doc_edits.py`): steps the change invalidates are rewritten or dropped, new behaviour gets new steps, and everything else stays as it was. That costs a few thousand output tokens instead of re-emitting the whole document. When no usable edit comes back, it is regenerated in full from the current testing plan, the change and the diff, as before. `migite-review`'s `testing_plan` specialist reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
+`migite-plan` writes `testing-plan.md` once during Phase 1, from the finished plan (with `plan.testing_plan_when: review` it leaves that to the start of Phase 3, which writes it from the plan and the diff, before the browser check and the reviewers read it; see [configuration](./configuration.md#plan)). Every `--amend` run (at the amendment gate, and again at [Phase 3.8](./phases.md#phase-3-8-plan-update) from what was actually built) and every commit-gate fix round then updates it with exact edits (`migite/doc_edits.py`): steps the change invalidates are rewritten or dropped, new behaviour gets new steps, and everything else stays as it was. That costs a few thousand output tokens instead of re-emitting the whole document. When no usable edit comes back, it is regenerated in full from the current testing plan, the change and the diff, as before. `migite-review`'s `testing_plan` specialist (skipped when `review.dimensions.testing_plan` is `off`) reads this file directly (not `plan.md`) and returns `NEEDS FIXES` if it's missing, empty, or placeholder-only — and if the task has amendments, checks that the steps match current behaviour, not the original plan's.
 
 Required shape:
 
@@ -217,7 +228,7 @@ User.find_by(email: "test.user@example.com")&.destroy
 
 Only generic emails (`test.user@example.com`, `admin.qa@example.com`) — never real addresses.
 
-One gap worth knowing: updates only happen on `--amend`, on commit-gate fix rounds, and on a full plan `n`-redo at the Phase 1 gate. The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
+One gap worth knowing: updates only happen on `--amend`, on commit-gate fix rounds, and on a full plan `n`-redo at the Phase 1 gate (with `review` timing there is nothing to redo at that gate, and a redo of an existing task's plan sets its old testing plan aside). The lightweight `f`/`e` plan-gate edits — feedback refine and direct `$EDITOR` edits, both pre-implementation — don't touch `testing-plan.md`, since nothing has been built yet for it to verify at that point.
 
 ---
 

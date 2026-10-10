@@ -21,6 +21,7 @@ banner see [outputs.md](./outputs.md); for a complete example run see
 - [Phase 4.2: Run summary](#phase-4-2-run-summary)
 - [Phase 4.5 — Self-improvement](#phase-4-5-self-improvement)
 - [Active memory injection](#active-memory-injection)
+- [Automata answers (`--automata`)](#automata-answers)
 - [tmux integration](#tmux-integration)
 
 ---
@@ -55,18 +56,44 @@ load_context
          │
     refine_plan   (Opus 5.5, incorporates critic findings)
          │
-    generate_testing_plan   (Opus 5.5, standalone QA/dev verification doc)
+    generate_testing_plan   (Sonnet 5, standalone QA/dev verification doc; skipped when `plan.testing_plan_when: review`)
          │
-    write_outputs   → plan.md + architecture-critic.md + testing-plan.md + sentinel
+    write_outputs   → plan.md + architecture-critic.md + testing-plan.md (not with `review` timing) + sentinel
 ```
 
 An eighth explorer, `views_frontend` (views, components, helpers, Stimulus controllers, the
 importmap), joins the seven when the task may touch the frontend. See
 [Frontend: views, Turbo and Stimulus](#frontend) for how that's decided.
 
-Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis, refinement, and the testing plan use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation — and runs read-only (`Read`, `Grep`, `Glob`) so it can verify the plan's claims against the repo. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
+Each call starts a new agent session by default. With `plan.chain_sessions: true`,
+`synthesize_plan`, `refine_plan` and `generate_testing_plan` continue one session instead, so each
+reads what the earlier calls sent from the prompt cache rather than being sent it again. The critic
+stays outside the session, since its read tools would change the session's tool set. The testing
+plan joins only when it runs on the same model as `think`. See
+[configuration](./configuration.md#plan-chain-sessions).
 
-**Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into both `synthesize_plan` and the explorers' keyword extraction. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
+With `plan.strategy: native` the agent's own plan mode does the exploring instead:
+
+```
+native_plan   (Opus 5.5 — role `native_plan`: one call in the agent's read-only plan mode,
+     │         with its own tools; it explores with its own subagents and writes the plan)
+architecture_critic → refine_plan → generate_testing_plan → write_outputs   (as above)
+```
+
+The call replaces `load_context`, the explorers and `synthesize_plan`. Its prompt is
+`prompts/native_plan.md` followed by the same task context, plan format (`prompts/plan.md`) and
+formatting rules synthesis gets, without explorer reports. The plan ends with a `## Files examined`
+section, one line per file the agent read and what it showed, which stays in `plan.md` and is the
+evidence the refiner quotes from in place of the explorer reports. A reply without a plan or
+without that section is retried once, in the same session when the backend can continue one. With
+`plan.chain_sessions: true` the chain starts at this call, and refine and the testing plan repeat
+its launch (plan mode, the CLI's tools) so they read the session from the cache. A backend with no
+headless plan mode (Kimi) prints one notice and plans with the explorers. See
+[configuration](./configuration.md#plan-strategy).
+
+Explorers use Haiku 4.5 for fast file analysis. Each reads changed files first (from `git diff <base branch>` — empty on a fresh branch, populated when resuming or amending), then ranks the rest by intake-keyword hits in path and content, weighted toward path matches. Plan synthesis and refinement use the strong tier (Opus 5.5 by default, role `think`) — the plan is the highest-leverage text in the run, and the refiner must not be weaker than the critic whose findings it applies. The testing plan is a checklist document written from the finished plan, so `generate_testing_plan` runs on the standard tier (Sonnet 5 by default, role `testing_plan`), which also gives it the standard tier's 600s timeout (see [timeouts](./configuration.md#models)). The architecture critic also uses the strong tier — it is the single highest-stakes call in the planner, where a missed finding propagates into implementation — and runs read-only (`Read`, `Grep`, `Glob`) so it can verify the plan's claims against the repo. All of this is configurable per role, see [docs/configuration.md](./configuration.md#models). `generate_testing_plan` writes `testing-plan.md` as its own file rather than a section of the plan — see [Testing Plan requirement](./outputs.md#testing-plan-requirement) for why.
+
+**Jira ticket fetching.** When `--jira` was used, `plan.sh` asks `migite-ticket` for the actual ticket (title, type, priority, status, description, acceptance criteria) before `migite-plan` runs. The source follows `tracker.provider`: Atlassian's `acli` when it is installed and logged in (no model call, no token), else one agent call through the Atlassian MCP tools inside the `jira.read` scope (see [tickets.md](./tickets.md)). The result is cached to `jira-context.md` in the scratchpad (mirrored to the vault, reused on redos so it isn't re-fetched every time) and fed into `synthesize_plan`, the explorers' keyword extraction, and the choice of [knowledge.md entries](#active-memory-injection) the prompts get. If no source can run or the fetch fails (no `acli` login, wrong key, no access), planning proceeds without it, same as a missing `knowledge.md`/audit/blueprint; the ticket key still works for slugging and vault naming regardless.
 
 After the agent finishes, the architecture critic findings are printed above the plan gate as a checklist. If the critic returns no usable findings (leaked tool-call syntax or an empty reply), `migite-plan` retries once and then writes a 🟡 warning marking the plan un-critiqued rather than aborting. The gate then opens:
 
@@ -108,7 +135,7 @@ After the plan gate, migite asks whether to write spec files before implementati
 <a id="phase-2-implement"></a>
 ### Phase 2 — Implement (interactive)
 
-Claude implements the approved plan in an interactive session. Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written.
+Claude implements the approved plan in an interactive session (under [`--automata`](#automata-answers), one headless call on the `session` role instead). Knowledge from `knowledge.md` is injected into the prompt so past repo lessons are in context before any code is written. When the session ends, what it spent goes in the usage ledger as `session:Implementing`, read back from Claude Code's transcript (every `run_phase` session is metered the same way; other agents print one notice and record nothing).
 
 **Staged implementation (`--staged`):** If you pass `--staged`, migite parses the `### ` sub-sections from the plan's Scope section and treats each as an implementation layer. Claude runs one interactive session per layer. Between layers, migite shows a `git diff --stat` and opens a checkpoint gate:
 
@@ -150,6 +177,18 @@ When the diff touches views or JavaScript, the loop also autofixes them with erb
 (when the repo configures them) and hands the agent only what autofix left. Spec failures that
 `tooling_failed` puts down to the toolchain (no browser for system specs, DB down) are never sent
 to the agent: changing application code can't fix a missing Chrome.
+
+**On a [stack profile](./configuration.md#stacks)** (`stacks.<name>`) the loop is the same, with
+the profile's commands in place of rubocop and rspec (`run_stack_heal_loop`):
+
+1. `autofix`, then `lint`, run over the changed files the `source` globs select.
+2. `test` runs over the files the `specs` globs select.
+3. Exit codes decide pass or fail.
+
+Only a lint or test that failed goes to the agent, each log capped by
+`heal.prompt_log_max_bytes`. A command that could not start (exit 126 or 127: not installed, not
+executable) is never sent; Phase 3 reports it as a tooling error. A profile has no `tooling_failed`
+patterns and no frontend linters.
 
 <a id="lint-test-selection"></a>
 ### Which files get linted and tested
@@ -196,10 +235,21 @@ Phase 3 and the commit-gate re-checks still run the whole rspec suite when no sp
 the pre-config behaviour. Set it to `false` in `.migite.yml` to make Phase 3 consistent with Phase
 2.5 (skip rspec and say so); the full suite needs a live DB and verifies nothing about the diff.
 
+**A stack profile picks its files with globs.** On a [`stacks.<name>`](./configuration.md#stacks)
+profile, `changed_stack_files` filters `changed_all_files` by the profile's `source` globs (for
+autofix and lint) and `specs` globs (for test). Only the globs come from the profile; the list
+underneath is the same tracked-plus-untracked, no-deletes, no-`scratchpad/` list. A command whose
+list is empty doesn't run, and says so (`Skipped: ...`), in every phase alike: a profile has no
+full-suite fallback, because a test command without `{files}` already is the whole suite.
+
 <a id="phase-3-review"></a>
 ### Phase 3 — Review (LangGraph)
 
-`migite-review` runs after the authoritative rubocop and rspec pass:
+`migite-review` runs after the authoritative rubocop and rspec pass (on a
+[stack profile](./configuration.md#stacks), the profile's autofix, lint and test, run by
+`run_stack_review_checks` and decided by exit code; the reviewers see them as the lint and test
+results, and the gate banner shows `Lint:` and `Tests:` lines). With `plan.testing_plan_when: review`, Phase 3 first writes `testing-plan.md` from `plan.md` and the diff (`ensure_testing_plan`), so the browser check and the `testing_plan` reviewer below read a testing plan that describes what was built; an existing one is kept, and a failed call only warns. See [configuration](./configuration.md#plan).
+
 
 ```
 load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, testing-plan.md)
@@ -207,7 +257,7 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
     ├── review: correctness      (logic vs plan, scope creep, acceptance criteria)
     ├── review: security         (auth, N+1, SQL injection, raw params, scopes)
     ├── review: test_coverage    (unit + request specs, factories, context wording)
-    ├── review: testing_plan     (testing-plan.md completeness — see below)
+    ├── review: testing_plan     (testing-plan.md completeness — see below; `review.dimensions.testing_plan: off` skips it)
     └── review: frontend         (only when the diff touches views or JavaScript - see Frontend)
          │
     verify_findings      → a second agent tries to disprove each Critical (see below)
@@ -218,6 +268,11 @@ load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, te
 ```
 
 All reviewers (four, or five with frontend) use Sonnet 5 and run in parallel; `synthesize_verdict` uses Opus 5. The commit gate then opens with a context banner showing the verdict, spec failures, and rubocop offense count.
+
+What each reviewer checks comes from the stack's [checklist](./configuration.md#checklists):
+`prompts/checklists/rails.md` on rails (the criteria in parentheses above), `generic.md` on generic
+and on a stack profile without a checklist of its own, with any `prompts.dir` override's sections on
+top. The refuter below takes its expertise and "how to work" block from the same file.
 
 **Findings are checked before they decide the verdict.** A reviewer can be confidently wrong about code
 it did read, and a wrong Critical turns into a wrong `NEEDS FIXES` and a wrong `f` fix round. So
@@ -254,7 +309,7 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 
 Use `f` when the review found something real and the fix is straightforward enough for Claude to handle. Use `e` when you want to read and annotate the review before acting. Use `n` when the fix involves a judgment call, a schema change, or something that needs your direct decision. Both `f` and `n` re-review afterwards through the same helper, and there's no cap on how many times you can loop through this.
 
-A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs every active dimension: the four core ones, plus frontend when the diff touches views or JavaScript. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
+A re-review runs only what the change could affect: correctness always, every dimension whose last result had findings (or whose reviewer failed), and the testing-plan dimension when the testing plan changed since. The clean dimensions carry their previous result into the verdict, marked as not re-run (`review-dimensions.json` beside `review.json`). The first review of a run always runs every active dimension: the four core ones (three with `review.dimensions.testing_plan: off`, see [configuration](./configuration.md#review)), plus frontend when the diff touches views or JavaScript. After an `f`, the testing plan is updated with exact edits (`edit_document`), with a full regeneration only when no usable edit comes back.
 
 The reviewers run with read-only tools (`Read`, `Grep`, `Glob`), no MCP servers or plugins, and a per-call cost cap (`budget.review_call_max_usd`); see [`permissions.headless_tools`](./configuration.md#permissions).
 
@@ -381,7 +436,7 @@ commit-gate overrides, the note you typed at Phase 3.5, and `git diff --stat`. F
 - **What changed**, **Why**, **Decisions made during the run**, **Deviations from the plan**,
   **Fix rounds** and **Follow-ups**
 
-The title, the date, and a **Run facts** section (review verdict, fix rounds, commit-gate
+The title, the date, and a **Run facts** section (mode, review verdict, fix rounds, commit-gate
 re-reviews, auto-heal attempts, plan-gate rounds, plan update result, testing-plan update result
 on amend runs, headless model cost) are written by bash, not the
 model, so they can't be misreported. The only prompt that reads `summary.md` back is a later
@@ -403,13 +458,52 @@ Before Phase 1 (Plan), Phase 1.5 (TDD specs), and Phase 2 (Implement), migite re
 
 ```
 ## Repository conventions and past lessons
-<newest knowledge.md entries, up to knowledge.inject_max_bytes>
-(N older entries not shown; all of them are in knowledge.md)
+<the knowledge.md entries closest to the task, up to knowledge.inject_max_bytes, newest first>
+(N other entries not shown; all of them are in knowledge.md)
 ```
 
-Entries go in newest first, up to [`knowledge.inject_max_bytes`](./configuration.md#knowledge) (default 8000); the last line appears only when older entries were left out. This means every new task starts with the most recent lessons from previous tasks in the same repo. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
+The entries are picked by [`knowledge.select`](./configuration.md#knowledge):
+
+- `relevant` (the default) ranks every entry by how many of the task's words its lessons use and fills [`knowledge.inject_max_bytes`](./configuration.md#knowledge) (default 8000) in that order.
+  - Ties go to the newer entry. An entry too big for the room left is skipped so a smaller one can use it.
+  - The task's words come from `intake.md` and, when `--jira` was used, `jira-context.md`.
+  - Template scaffolding doesn't count: front matter, `<!-- -->` hints, links, headings, the `**Type:**` line, `**Label:**` markers and empty labels. A `--jira` intake is usually the bare template, so the ticket supplies the words.
+  - Nor do an entry's dated `##` heading or its `[[wikilinks]]`.
+  - When no entry shares a word with the task (a bare intake with no ticket, say), the selection falls back to `recent`.
+- `recent` takes the newest entries first. The last line then reads "N older entries".
+
+Either way the picked entries print newest first, and the last line appears only when entries were left out. A two-year-old lesson about the code a ticket touches can reach the prompt, while the latest lessons still fill whatever room is left. Claude sees past N+1 pitfalls, auth patterns, business logic constraints, and architectural decisions before touching anything.
+
+The amend and resume paths pick the same way from the build's `intake.md` and `jira-context.md`. Inside `migite-plan`, synthesis gets the same selection, and each explorer gets one at 800 bytes (`EXPLORER_KNOWLEDGE_BYTES`).
 
 ---
+
+<a id="automata-answers"></a>
+## Automata answers (`--automata`)
+
+Under [`--automata`](./migite.md#automata) nothing reads from the terminal. Each prompt prints with
+the answer it took and `(--automata)` after it:
+
+| Prompt | Answer |
+|---|---|
+| Task type (no `--type`, no `Type:` in the intake) | `feature` |
+| The template intake in `$EDITOR` | No editor: the task text (or the Jira ticket) is the intake. A ticket that couldn't be fetched, with no `--intake`, is an error |
+| Proceed with this intake? (`--intake`, `--audit`) | `y` |
+| Supplementary task.md (`--intake`) | `N` (`--attach` files are still saved) |
+| EXISTING PLAN FOUND | `u`, use it |
+| Plan gate | `y` |
+| Phase 1.5 TDD | `N` |
+| Stage checkpoint (`--staged`) | `c`, continue |
+| Browser check (`frontend.browser_check: ask`) | `N` (`on` still runs it, headless) |
+| Commit gate | `y` when nothing blocks. With blockers, `f` first, up to `gates.commit.automata_fix_rounds` times (default 1; not for a tooling error alone). Then lenient with blockers: `y`, recorded in `gate-overrides.md`, and the run exits 3. Strict with blockers: the run stops at the gate with exit 2 |
+| Anything worth remembering (Phase 3.5) | nothing |
+| Plan update, testing-plan update (Phase 3.8) | `y`, apply |
+| Amend: which task, the feedback in `$EDITOR` | Errors: pass `--jira <key>` (or run on the task's branch) and `--amend "..."` or `--amend-file` |
+| Amendment gate | `y` |
+
+The commit gate's `f` runs its fix session headless; the `e` and `n` branches are never taken, so
+their own prompts never come up. A new gate added
+without an automata answer stops an automata run with an error instead of waiting for input.
 
 <a id="tmux-integration"></a>
 ## tmux integration
@@ -419,6 +513,9 @@ If migite is running inside a tmux session (`$TMUX` is set), every interactive p
 If you close a pane before the phase completes, migite detects this and aborts with an error rather than hanging indefinitely.
 
 Outside tmux, all phases run inline in the current terminal.
+
+Under `--automata` there are no panes, whatever `ui.tmux` says: every phase runs inline, and the
+sessions run headless.
 
 ---
 

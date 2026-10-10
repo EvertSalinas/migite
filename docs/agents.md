@@ -22,12 +22,15 @@ agent:
 |---|---|---|---|---|---|
 | Headless call, text out | planner, reviewers, knowledge, amendments, heal, standalone tools | `claude --print --output-format json`, prompt on stdin | `cursor-agent -p --output-format json --trust "prompt"` | `kimi -p "prompt" --output-format stream-json` | `opencode run --format json "message"` |
 | Interactive session with a first prompt | implement, gate fixes, PR description | `claude [--model m] -- "prompt"` | `cursor-agent [--model m] "prompt"` | none — no seeded TUI; the phase runs headless as `kimi [--model m] -p "prompt"` | `opencode --prompt "prompt" [--model m]` |
-| Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache, cost | none (zeros recorded) | none (zeros recorded) | cost and tokens summed from `step_finish` events |
+| Usage and cost in the ledger | `usage.json`, gate banner | tokens, cache (writes split 5m / 1h), cost, session id | none (zeros recorded) | none (zeros recorded) | cost and tokens summed from `step_finish` events |
+| Interactive session usage | `session:<label>` lines in `usage.json` (implement, fixes, PR description) | `--session-id <uuid>`, then the session's transcript under `~/.claude/projects/` and its subagents', summed per model and priced from `PRICES` in the adapter | none → one notice per run, sessions not metered | none → one notice per run (the phase is a `kimi -p` run outside the gateway) | none → one notice per run (whether OpenCode's session store has usage is unverified) |
 | Structured output | the `review.json` verdict | `--json-schema` | no → the reviewer parses markdown | no → the reviewer parses markdown | no → the reviewer parses markdown |
 | Effort level | `models.effort` | `--effort` (never sent to Haiku) | dropped | dropped (set `[thinking].effort` in `~/.kimi-code/config.toml`) | dropped |
-| Isolated headless calls | `permissions.headless_tools: isolated` (the default) | `--tools` (none, or `Read,Grep,Glob` for reviewers), `--strict-mcp-config`, `--safe-mode`, `--no-session-persistence`, `--exclude-dynamic-system-prompt-sections`, CLAUDE.md passed back via `--append-system-prompt`, `--max-budget-usd` for reviewers | no → one notice, then the full toolset | no → one notice, then the full toolset | no → one notice, then the full toolset |
+| Isolated headless calls | `permissions.headless_tools: isolated` (the default) | `--tools` (none, or `Read,Grep,Glob` for reviewers), `--strict-mcp-config`, `--safe-mode`, `--no-session-persistence` (left out on a session chain, below), `--exclude-dynamic-system-prompt-sections`, CLAUDE.md passed back via `--append-system-prompt`, `--max-budget-usd` for reviewers | no → one notice, then the full toolset | no → one notice, then the full toolset | no → one notice, then the full toolset |
+| Continue a headless call's session | `plan.chain_sessions` (synthesis, refine, testing plan) | `--resume <session id>`; a call that starts or continues the chain keeps its session | no → one notice, then a new session per call | no → one notice, then a new session per call | no → one notice, then a new session per call |
+| Headless plan mode | [`plan.strategy: native`](./configuration.md#plan-strategy): one read-only call that explores and writes the plan | `--permission-mode plan` | `--mode plan` | none — `-p` rejects `--plan`; one notice, then the explorers and synthesis plan instead | `--agent plan` (the read-only plan agent; built from the docs, not run live) |
 | Tool scope `jira.read` | the Jira fetch's agent fallback | the two Atlassian read tools via `--allowedTools` | no → only `acli` can fetch | no → only `acli` can fetch | no → only `acli` can fetch |
-| Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | none — `-p` rejects `--yolo`/`--auto`/`--plan` and always runs Kimi's auto policy | `auto`/`edits` → `--auto` |
+| Permission words | `permissions.*` | `auto` → `bypassPermissions`, `edits` → `acceptEdits`, `plan`, `ask` → `default` | `auto`/`edits` → `--force`, `plan` → `--mode plan`; `--trust` always in headless | none — `-p` rejects `--yolo`/`--auto`/`--plan` and always runs Kimi's auto policy | `auto`/`edits` → `--auto`, `plan` → `--agent plan` |
 | Exit command shown by `run_phase` | interactive sessions | `/exit` | `/quit` | n/a — the headless phase returns on its own | `/exit` |
 | Project rules it reads | the implement prompt names them | `CLAUDE.md` | `AGENTS.md` and `.cursor/rules` | `AGENTS.md` | `AGENTS.md` |
 
@@ -128,8 +131,10 @@ adapters        migite/agents/base.py        the interface and shared types
 
 - **Python tools** call `migite.gateway.call_agent(prompt, role, label=..., schema=..., scopes=...)`.
 - **Bash** calls `agent_ask <label> <role>` (headless, prompt on stdin), `agent_think` (the same
-  with a spinner), and `run_phase` (interactive). All three go through `migite/agent_cli.py`, whose
-  subcommands are `ask`, `session`, `info`, and `check`.
+  with a spinner), and `run_phase` (interactive; under `--automata` an `ask` on the `session` role
+  instead, on every backend). All three go through `migite/agent_cli.py`, whose subcommands are
+  `ask`, `session`, `session-usage` (meters an interactive session after it ends), `info`, and
+  `check`.
 - **The agent's description** (`python -m migite.agent_cli info --shell`) is cached as `MIGITE_AGENT_*` when
   the config loads, so bash messages and capability checks read variables, not CLI knowledge.
 
@@ -139,14 +144,18 @@ The interface each adapter implements (`migite/agents/base.py`):
 class Agent:
     info: AgentInfo   # name, display_name, default_binary, models per tier, structured_output,
                       # effort, usage, scopes, prompt_via, max_arg_bytes, env_unset,
-                      # exit_hint, instruction_files, permission_flags, session_mode
+                      # exit_hint, instruction_files, permission_flags, session_mode,
+                      # isolation, resume, plan_mode, session_usage
     def ask_launch(self, req: AskRequest) -> Launch          # argv, stdin, env to set or unset
     def parse(self, stdout, returncode, req) -> AskResult    # that CLI's output in one shape
-    def session_launch(self, req: SessionRequest) -> Launch
+    def session_launch(self, req: SessionRequest) -> Launch  # Launch.session_id: the id it records under
+    def session_usage(self, session_id, cwd, since) -> list[AskResult]   # per model; [] by default
     def version_argv(self) -> list[str]                      # for migite doctor
 ```
 
-Adapters are pure translation: they never start a process and never read the config.
+Adapters are pure translation: they never start a process and never read the config. The one
+exception that reads files is `session_usage`, which reads the CLI's own record of an ended
+session (Claude Code's transcript); an adapter without `session_usage` inherits the empty default.
 
 ## Adding an agent
 
@@ -185,10 +194,17 @@ adapter.
   the documented flags and output shapes and are covered by unit and contract tests with fake CLIs;
   the first real run on each should be watched, and `usage.json` will show whether usage parsed.
   Cursor's `/quit` exit hint is from its docs and also unverified.
+- A Claude Code session is metered from its transcript, so `/clear` inside it (which starts a new
+  transcript under a new id) leaves the rest of that session out of the ledger. Its cost comes from
+  `PRICES` in `migite/agents/claude.py`, which reproduces the CLI's own `total_cost_usd`; a model
+  with no row there is recorded at $0 with a notice, and `usage.json` lists it in `unpriced_models`.
 - Kimi Code cannot open a session with a first prompt: the TUI takes none, and `-p` is
   non-interactive and rejects `--yolo`/`--auto`/`--plan`. migite therefore runs the implement, gate
   fix, and PR-description phases headless as `kimi -p`, and Kimi's own auto policy governs
   permissions. `run_phase` prints "runs this phase headlessly" for it instead of an exit command.
+  Under `--automata` every backend runs those phases headless the same way, through
+  `agent_cli ask` (`kimi -p ... --output-format stream-json` here), so the Kimi difference only
+  shows in interactive runs.
 - Without structured output, the verdict comes from the markdown parser. It is anchored on the
   Verdict heading and tested against every past review, but a typed enum is stronger.
 - Cursor headless mode without `--force` only proposes changes; migite maps `auto` and `edits`

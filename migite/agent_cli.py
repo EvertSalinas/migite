@@ -12,10 +12,16 @@ parts live in migite/agents/<name>.py.
   python -m migite.agent_cli ask --role R --label L [--tool T] [--permission P] [--scope S]... [--thinking]
         one headless call: prompt on stdin, result text on stdout, one usage line
         in $MIGITE_USAGE_LEDGER. Exit 3 when a scope can't be honoured, 1 on failure.
-  python -m migite.agent_cli session --prompt-file F [--permission P]
+  python -m migite.agent_cli session --prompt-file F [--permission P] [--id-file F]
         one shell command line that opens an interactive session with the file's
         contents as the first message (a pointer to the file when it is too long),
-        on the model the `session` role resolves to from the config
+        on the model the `session` role resolves to from the config. --id-file
+        gives the session a fresh id and writes it there ("" when the agent can't
+        take one), for session-usage to find it by
+  python -m migite.agent_cli session-usage --label L --since EPOCH [--session-id ID] [--cwd DIR]
+        append what the interactive session that just ended spent to
+        $MIGITE_USAGE_LEDGER, one line per model; a notice instead when the agent
+        can't report it. Always exits 0
   python -m migite.agent_cli check
         the agent's binary, path, and version; exit 1 when the CLI is missing
 
@@ -45,7 +51,7 @@ SHELL_FIELDS = {
 
 
 def _capabilities(desc: dict) -> str:
-    caps = [c for c in ("structured_output", "effort", "usage") if desc.get(c)]
+    caps = [c for c in ("structured_output", "effort", "usage", "session_usage") if desc.get(c)]
     caps += [f"scope:{s}" for s in desc.get("scopes", [])]
     return " ".join(caps)
 
@@ -86,8 +92,17 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 
 def _cmd_session(args: argparse.Namespace) -> int:
     prompt = Path(args.prompt_file).read_text()
-    launch = gateway.session_launch(prompt, permission=args.permission, prompt_file=args.prompt_file)
+    launch = gateway.session_launch(prompt, permission=args.permission, prompt_file=args.prompt_file,
+                                    named=bool(args.id_file))
+    if args.id_file:
+        Path(args.id_file).write_text(launch.session_id)
     print(launch.shell())
+    return 0
+
+
+def _cmd_session_usage(args: argparse.Namespace) -> int:
+    gateway.record_session_usage(args.label, since=args.since, session_id=args.session_id or "",
+                                 cwd=args.cwd, tool=args.tool)
     return 0
 
 
@@ -112,6 +127,7 @@ def main() -> None:
         "info": sub.add_parser("info", help="describe the configured agent"),
         "ask": sub.add_parser("ask", help="one headless call: stdin prompt → stdout text"),
         "session": sub.add_parser("session", help="print the command that opens an interactive session"),
+        "session-usage": sub.add_parser("session-usage", help="meter the interactive session that just ended"),
         "check": sub.add_parser("check", help="is the agent CLI installed, and which version"),
     }
     for p in parsers.values():
@@ -131,6 +147,13 @@ def main() -> None:
     session = parsers["session"]
     session.add_argument("--prompt-file", required=True)
     session.add_argument("--permission", default=None, help="default: permissions.interactive")
+    session.add_argument("--id-file", default=None, help="name the session and write its id here")
+    usage = parsers["session-usage"]
+    usage.add_argument("--label", required=True, help="name of the session's lines in the usage ledger")
+    usage.add_argument("--since", type=float, required=True, help="when the session started, epoch seconds")
+    usage.add_argument("--session-id", default="", help="the id `session --id-file` wrote")
+    usage.add_argument("--cwd", default=None, help="the directory the session ran in (default: here)")
+    usage.add_argument("--tool", default="migite")
     parsers["check"].add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -141,7 +164,8 @@ def main() -> None:
         print(f"✘ {e}", file=sys.stderr)
         sys.exit(1)
 
-    handler = {"info": _cmd_info, "ask": _cmd_ask, "session": _cmd_session, "check": _cmd_check}[args.command]
+    handler = {"info": _cmd_info, "ask": _cmd_ask, "session": _cmd_session,
+               "session-usage": _cmd_session_usage, "check": _cmd_check}[args.command]
     sys.exit(handler(args))
 
 

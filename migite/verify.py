@@ -201,12 +201,15 @@ HOW_TO_WORK = """How to work:
    provides it, a guard clause elsewhere, a spec that covers it."""
 
 
-def refute_prompt(f: Finding, status: str, detail: str, context: str = "") -> str:
+def refute_prompt(f: Finding, status: str, detail: str, context: str = "",
+                  expertise: str = "Rails", how_to_work: str | None = None) -> str:
+    """The refuter's prompt. expertise and how_to_work come from the stack's checklist
+    (migite/checklists.py); the defaults are the rails ones, HOW_TO_WORK included."""
     path, line = location_of(f)
     where = f"`{path}:{line}`" if path and line else (f"`{path}`" if path else "(none given)")
     note = (f"\nA mechanical check found a problem with the reviewer's evidence: {detail}.\n"
             if status != "ok" else "")
-    return f"""You are a skeptical senior Rails engineer. A code reviewer reported the finding below.
+    return f"""You are a skeptical senior {expertise} engineer. A code reviewer reported the finding below.
 Your job is to try to DISPROVE it. Assume it may be wrong.
 {context}
 ## Finding ({f.severity})
@@ -214,7 +217,7 @@ Location: {where}
 Title: {f.title}
 Claim: {f.problem or f.title}
 {note}
-{HOW_TO_WORK}
+{how_to_work or HOW_TO_WORK}
 
 Verdicts:
 - CONFIRMED: you traced the problem to specific code and can quote the line(s) that prove it.
@@ -238,9 +241,10 @@ def parse_verdict(text: str) -> tuple[str, str, str] | None:
     return (m.group(1).upper(), ev.group(1).strip() if ev else "", _norm(why.group(1))[:600] if why else "")
 
 
-def _refute(f: Finding, status: str, detail: str, ask: Callable[[str, str], str], context: str, label: str) -> dict:
+def _refute(f: Finding, status: str, detail: str, ask: Callable[[str, str], str], context: str, label: str,
+            expertise: str = "Rails", how_to_work: str | None = None) -> dict:
     try:
-        parsed = parse_verdict(ask(refute_prompt(f, status, detail, context), label))
+        parsed = parse_verdict(ask(refute_prompt(f, status, detail, context, expertise, how_to_work), label))
     except Exception as e:
         return {"verdict": "failed", "reason": str(e)[:160]}
     if parsed is None:
@@ -276,9 +280,11 @@ def _apply(f: Finding, outcome: dict | None) -> list[str]:
 
 def verify_blocks(blocks: list[str], ask: Callable[[str, str], str], read_file: Callable[[str], str | None],
                   *, extra: str = "", context: str = "", skip: tuple = SKIP_DIMENSIONS,
+                  expertise: str = "Rails", how_to_work: str | None = None,
                   log: Callable[[str], None] = print) -> tuple[list[str], list[dict]]:
     """Run the evidence gate and the refuter over per-dimension blocks ("### <dim>\\n<findings>").
-    `ask(prompt, label)` returns the refuter's reply text or raises. Returns the blocks with
+    `ask(prompt, label)` returns the refuter's reply text or raises. `expertise` and
+    `how_to_work` come from the stack's checklist (refute_prompt). Returns the blocks with
     verified findings annotated, demoted or removed, and a record per refuted finding."""
     parsed = []           # (dimension, head, body, findings)
     jobs = []             # (block index, finding index, status, detail)
@@ -302,7 +308,7 @@ def verify_blocks(blocks: list[str], ask: Callable[[str, str], str], read_file: 
         with ThreadPoolExecutor(max_workers=min(4, len(run))) as pool:
             futures = {
                 (bi, fi): pool.submit(_refute, parsed[bi][3][fi], st, dt, ask, context,
-                                      f"refute:{parsed[bi][0]}:{fi + 1}")
+                                      f"refute:{parsed[bi][0]}:{fi + 1}", expertise, how_to_work)
                 for bi, fi, st, dt in run
             }
             outcomes = {key: fut.result() for key, fut in futures.items()}

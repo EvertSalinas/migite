@@ -434,7 +434,7 @@ the diff touches views or JavaScript) and a structured verdict.
   Reason:  The 422 path for an invoice without line items is unhandled and untested.
   Specs:   all passed
   Rubocop: clean
-  Cost:    17 calls, $2.94 so far (headless calls only)
+  Cost:    17 calls, $2.94 so far (headless calls and sessions)
 ────────────────────────────────────────────
 Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort):
 ```
@@ -485,13 +485,13 @@ description is an interactive session; the self-improvement pass is silent.
   Vault (read-only mirror): /Users/you/Documents/MyVault/dev-log/Acme/invoices-api/bb-1234
 
 ── Usage ───────────────────────────────────────
-  Model calls (headless only — interactive sessions not metered)
+  Model calls and sessions
 
-  model                              calls  in+cache tok  out tok    time     cost
-  claude-opus-5-5                        9       377,406   14,210    338s    $3.62
-  claude-haiku-4-5-20251001              7       165,438    2,710     41s    $0.33
-  claude-sonnet-5                        7       142,880    6,015     92s    $0.61
-  total                                 23       685,724   22,935    471s    $4.56
+  model                              calls turns  in+cache tok cached  out tok    time     cost
+  claude-opus-5-5                        9    15       377,406    49%   14,210    338s    $3.62
+  claude-haiku-4-5-20251001              7    41       165,438    71%    2,710     41s    $0.33
+  claude-sonnet-5                        7    16       142,880    46%    6,015     92s    $0.61
+  total                                 23    72       685,724    54%   22,935    471s    $4.56
   cache-creation tokens: 23,624 (each headless call re-sends Claude Code's system context)
   Ledger: /Users/you/.dev-workflow/logs/20260922-141502-usage.jsonl
 ────────────────────────────────────────────────

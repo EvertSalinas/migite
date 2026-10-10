@@ -4,13 +4,20 @@ headless call path + usage ledger. Uses tests/fake-claude on PATH so no
 real model call is made. Run: python3 -m unittest tests/test_gateway.py"""
 
 import importlib.util
+import io
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
+from contextlib import redirect_stderr
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -72,6 +79,33 @@ class CallClaudeTest(_FakeClaude):
         self.assertEqual([r["label"] for r in recs], ["explore:models", "synthesize_plan"])
         self.assertEqual(recs[0]["tool"], "migite-plan")
         self.assertEqual(recs[0]["turns"], 1)                     # fake-claude reports num_turns 1
+
+    def test_cache_write_split_and_session_reach_the_ledger(self):
+        self.mode("envelope")
+        r = gateway.call_agent("x", "knowledge", model="m", ledger=self.ledger)
+        self.assertEqual((r.usage.cache_creation_5m_input_tokens, r.usage.cache_creation_1h_input_tokens,
+                          r.usage.session_id), (20000, 3624, "fake"))
+        rec = gateway.read_ledger(self.ledger)[0]
+        self.assertEqual((rec["cache_creation_5m_input_tokens"], rec["cache_creation_1h_input_tokens"],
+                          rec["session_id"]), (20000, 3624, "fake"))
+
+    def test_an_older_envelope_has_no_cache_split_or_session(self):
+        claude = agents.get("claude")
+        usage = {"input_tokens": 10, "output_tokens": 39, "cache_creation_input_tokens": 23624}
+        for extra in ({}, {"cache_creation": None}):
+            with self.subTest(extra=extra):
+                env = json.dumps({"type": "result", "result": "ok", "is_error": False, "usage": {**usage, **extra}})
+                r = claude.parse(env, 0, agents.AskRequest(prompt="x", model="m"))
+                self.assertEqual((r.input_tokens, r.output_tokens, r.cache_creation_input_tokens), (10, 39, 23624))
+                self.assertEqual((r.cache_creation_5m_input_tokens, r.cache_creation_1h_input_tokens, r.session_id),
+                                 (0, 0, ""))
+
+    def test_a_session_role_call_is_a_session_in_the_ledger(self):
+        # --automata runs run_phase's sessions as headless calls on the session role.
+        self.mode("envelope")
+        gateway.call_agent("x", "session", label="session:Implementing", ledger=self.ledger)
+        gateway.call_agent("y", "knowledge", label="knowledge", ledger=self.ledger)
+        self.assertEqual([r["kind"] for r in gateway.read_ledger(self.ledger)], ["session", "call"])
 
     def test_ledger_env_var_is_honoured(self):
         self.mode("envelope")
@@ -171,6 +205,66 @@ class CallClaudeTest(_FakeClaude):
 
 
 
+class SessionChainTest(_FakeClaude):
+    """A call that starts or continues a session chain (plan.chain_sessions) keeps its session,
+    so the next call can continue it; every other isolated call still saves none."""
+
+    def setUp(self):
+        super().setUp()
+        # Keep the CLAUDE.md files on this machine out of the argv the checks read.
+        patcher = mock.patch.object(type(agents.get("claude")), "instructions", return_value="RULES")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def call(self, **chain):
+        argv_file = Path(self.tmp.name) / "argv.txt"
+        os.environ["FAKE_CLAUDE_ARGV"] = str(argv_file)
+        result = gateway.call_agent("x", "think", label="l", **chain)
+        return argv_file.read_text().split(), result
+
+    def test_an_isolated_call_saves_no_session_by_default(self):
+        argv, _ = self.call()
+        self.assertIn("--no-session-persistence", argv)
+        self.assertNotIn("--resume", argv)
+
+    def test_a_call_that_starts_a_chain_keeps_its_session_and_hands_back_its_id(self):
+        argv, result = self.call(keep_session=True)
+        self.assertNotIn("--no-session-persistence", argv)
+        self.assertNotIn("--resume", argv)
+        self.assertIn("--safe-mode", argv)                   # still isolated otherwise
+        self.assertEqual(result.usage.session_id, "fake")    # what the next call continues
+
+    def test_a_call_that_continues_a_chain_resumes_that_session_and_keeps_it(self):
+        argv, _ = self.call(resume="s-1")
+        self.assertEqual(argv[argv.index("--resume") + 1], "s-1")
+        self.assertNotIn("--no-session-persistence", argv)
+
+    def test_a_tools_override_replaces_the_role_s_policy_for_one_call(self):
+        # A chained call repeats the launch of the call that started its session.
+        argv, _ = self.call(tools="default", permission="plan")
+        for flag in ("--tools", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"):
+            self.assertNotIn(flag, argv)
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "plan")
+        argv, _ = self.call(tools="read")
+        self.assertEqual(argv[argv.index("--tools") + 1], ",".join(config.READ_TOOLS))
+        argv, _ = self.call()                                 # unset: think's own policy, isolated with no tools
+        self.assertIn("--safe-mode", argv)
+        self.assertNotIn(",".join(config.READ_TOOLS), argv)
+        self.assertNotIn("--permission-mode", argv)
+
+    def test_an_unknown_tools_override_is_refused_before_anything_runs(self):
+        with self.assertRaises(ValueError):
+            gateway.call_agent("x", "think", label="l", tools="everything")
+
+    def test_an_agent_that_cannot_resume_says_so_once_and_starts_a_new_session_each_time(self):
+        gateway.AGENT = agents.get("cursor", binary=str(ROOT / "tests" / "fake-cursor-agent"))
+        err = io.StringIO()
+        with redirect_stderr(err):
+            results = [gateway.call_agent("x", "think", label="l", resume="s-1", keep_session=True) for _ in range(2)]
+        self.assertEqual(err.getvalue().count("can't continue a headless call's session"), 1)
+        self.assertTrue(all(r.text.startswith("cursor:") for r in results))
+
+
 class GatewayTest(_FakeClaude):
     """Role resolution, permission words, scopes, the prompt pointer, sessions, reset, health check."""
 
@@ -238,6 +332,17 @@ class GatewayTest(_FakeClaude):
         argv = gateway.session_launch("do it").argv
         self.assertEqual(argv[argv.index("--model") + 1], "pinned-session")
 
+    def test_a_named_session_gets_a_fresh_id_on_its_command_line(self):
+        launch = gateway.session_launch("do it", named=True)
+        uuid.UUID(launch.session_id)                       # the CLI takes nothing but a UUID
+        self.assertEqual(launch.argv[launch.argv.index("--session-id") + 1], launch.session_id)
+        self.assertEqual(launch.argv[-2:], ["--", "do it"])
+        self.assertNotEqual(gateway.session_launch("do it", named=True).session_id, launch.session_id)
+        unnamed = gateway.session_launch("do it")
+        self.assertEqual((unnamed.session_id, "--session-id" in unnamed.argv), ("", False))
+        gateway.AGENT = agents.get("cursor")               # a CLI that can't be told an id
+        self.assertEqual(gateway.session_launch("do it", named=True).session_id, "")
+
     def test_reset_restores_the_built_in_state(self):
         gateway.AGENT = agents.get("opencode")
         gateway.ROLE_EFFORT = {"critic": "max"}
@@ -284,9 +389,64 @@ class HelpersTest(unittest.TestCase):
         self.assertIn("$0.51", table)
         self.assertIn("1 call(s) failed", table)
         self.assertIn("cache-creation tokens: 1,000", table)
+        self.assertEqual(set(s["by_kind"]), {"call"})              # lines without a kind are calls
+        self.assertNotIn("of which sessions", table)
+
+    def test_sessions_are_their_own_kind_and_unpriced_session_tokens_are_flagged(self):
+        call = {"tool": "migite", "label": "knowledge", "model": "sonnet", "input_tokens": 10, "output_tokens": 5,
+                "cost_usd": 0.10, "duration_ms": 1000, "ok": True, "turns": 1}
+        session = {**call, "label": "session:Implementing", "model": "opus", "input_tokens": 1000,
+                   "cost_usd": 1.50, "turns": 40, "kind": "session"}
+        unpriced = {**session, "model": "opus-next", "cost_usd": 0.0}
+        s = gateway.summarize([call, session, unpriced])
+        self.assertEqual(s["by_kind"]["call"]["calls"], 1)
+        self.assertEqual((s["by_kind"]["session"]["calls"], s["by_kind"]["session"]["turns"]), (2, 80))
+        self.assertAlmostEqual(s["by_kind"]["session"]["cost_usd"], 1.50)
+        self.assertAlmostEqual(s["total"]["cost_usd"], 1.60)
+        self.assertEqual(s["unpriced_models"], ["opus-next"])
+        self.assertIn("interactive sessions", s["note"])
+        table = gateway.format_summary(s)
+        self.assertIn("of which sessions: 2 line(s), 80 turns, 2,000 in+cache tok, $1.50", table)
+        self.assertIn("⚠ session tokens on opus-next are counted at $0", table)
+        # The cache-creation footer explains headless calls' re-sent context, so it counts only theirs.
+        s = gateway.summarize([{**call, "cache_creation_input_tokens": 300},
+                               {**session, "cache_creation_input_tokens": 90000}])
+        self.assertEqual(s["by_kind"]["session"]["cache_creation_input_tokens"], 90000)
+        self.assertIn("cache-creation tokens: 300 (each headless call", gateway.format_summary(s))
+
+    def test_a_ledger_mixing_old_and_new_records_summarizes_the_cache_share(self):
+        old = {"ts": "t", "tool": "migite-plan", "label": "synthesize_plan", "model": "opus", "input_tokens": 100,
+               "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 900,
+               "cost_usd": 0.30, "duration_ms": 1000, "ok": True}            # no turns, no cache split, no session
+        new = {"ts": "t", "tool": "migite-plan", "label": "refine_plan", "model": "opus", "input_tokens": 100,
+               "output_tokens": 10, "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 900,
+               "cache_creation_5m_input_tokens": 900, "cache_creation_1h_input_tokens": 0, "cost_usd": 0.20,
+               "duration_ms": 1000, "ok": True, "turns": 1, "session_id": "s-1"}
+        haiku = {**new, "label": "explore", "model": "haiku", "input_tokens": 100, "cache_read_input_tokens": 900,
+                 "cache_creation_input_tokens": 0, "cache_creation_5m_input_tokens": 0, "cost_usd": 0.10,
+                 "session_id": "s-2"}
+        no_usage = {**new, "tool": "migite", "label": "knowledge", "model": "", "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                    "cache_creation_5m_input_tokens": 0, "cost_usd": 0.0, "turns": 0, "session_id": ""}
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.jsonl"
+            ledger.write_text("".join(json.dumps(r) + "\n" for r in (old, new, haiku, no_usage)))
+            recs = gateway.read_ledger(ledger)
+        self.assertEqual(len(recs), 4)
+        loaded = [gateway.UsageRecord(**r) for r in recs]           # old lines still load as records
+        self.assertEqual((loaded[0].cache_creation_5m_input_tokens, loaded[0].session_id), (0, ""))
+        s = gateway.summarize(recs)
+        self.assertEqual((s["by_model"]["opus"]["input_tokens"], s["by_model"]["opus"]["cache_read_input_tokens"]),
+                         (5000, 3000))
+        self.assertEqual(s["by_tool"]["migite-plan"]["cache_read_input_tokens"], 3900)
+        table = gateway.format_summary(s)
+        self.assertRegex(table, r"opus\s+2\s+1\s+5,000\s+60%\s")             # 3,000 of 5,000 read from cache
+        self.assertRegex(table, r"haiku\s+1\s+1\s+1,000\s+90%\s")
+        self.assertRegex(table, r"\(unknown\)\s+1\s+-\s+0\s+-\s")           # no tokens reported: no share
+        self.assertRegex(table, r"total\s+4\s+2\s+6,000\s+65%\s")           # 3,900 of 6,000
 
     def test_format_summary_empty(self):
-        self.assertIn("No headless model calls", gateway.format_summary(gateway.summarize([])))
+        self.assertIn("No model calls recorded", gateway.format_summary(gateway.summarize([])))
 
     def test_get_field(self):
         obj = {"a": {"b": [10, {"c": "x"}]}, "flag": False}
@@ -294,6 +454,131 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(gateway.get_field(obj, "a.b.0"), 10)
         self.assertIsNone(gateway.get_field(obj, "a.z"))
         self.assertIsNone(gateway.get_field(obj, "a.b.9"))
+
+
+TRANSCRIPTS = ROOT / "tests" / "fixtures" / "transcripts"
+SESSION_ID = "11111111-2222-3333-4444-555555555555"
+SESSION_START = datetime(2026, 10, 6, 9, 59, tzinfo=timezone.utc).timestamp()
+
+
+class SessionUsageTest(unittest.TestCase):
+    """An interactive session read back from Claude Code's transcript. The fixtures under
+    tests/fixtures/transcripts/ are one Opus session and its Haiku subagent, with lines that
+    carry no usage, a message written as two lines, a truncated line, a <synthetic> message
+    and a turn from before the session started. They go in a throwaway CLAUDE_CONFIG_DIR."""
+
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        os.environ["CLAUDE_CONFIG_DIR"] = str(root / "claude")
+        self.projects = root / "claude" / "projects"
+        self.repo = root / "repo"
+        self.repo.mkdir()
+        # The folder Claude Code keeps a working directory's transcripts in.
+        self.folder = self.projects / re.sub(r"[^A-Za-z0-9]", "-", str(self.repo.resolve()))
+        self.ledger = str(root / "usage.jsonl")
+        gateway.reset()
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        gateway.reset()
+        self.tmp.cleanup()
+
+    def transcript(self, name=SESSION_ID, *, folder=None, mtime=None, subagent=True, edit=None):
+        folder = folder or self.folder
+        folder.mkdir(parents=True, exist_ok=True)
+        main = folder / f"{name}.jsonl"
+        text = (TRANSCRIPTS / "claude-session.jsonl").read_text()
+        main.write_text(edit(text) if edit else text)
+        if subagent:
+            (folder / name / "subagents").mkdir(parents=True)
+            shutil.copy(TRANSCRIPTS / "claude-subagent.jsonl", folder / name / "subagents" / "agent-a1.jsonl")
+        if mtime is not None:
+            os.utime(main, (mtime, mtime))
+        return main
+
+    def meter(self, **kwargs):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            recs = gateway.record_session_usage("session:Implementing", since=SESSION_START, cwd=str(self.repo),
+                                                ledger=self.ledger, **kwargs)
+        return {r.model: r for r in recs}, err.getvalue()
+
+    def test_a_named_session_is_summed_per_model_with_its_subagents(self):
+        self.transcript(folder=self.projects / "-somewhere-else")   # found by its id, in any folder
+        recs, err = self.meter(session_id=SESSION_ID)
+        self.assertEqual(set(recs), {"claude-opus-5-5", "claude-haiku-4-5-20251001"})
+        opus, haiku = recs["claude-opus-5-5"], recs["claude-haiku-4-5-20251001"]
+        # msg_1 is written as two lines and counted once; the 09:00 turn predates the session.
+        self.assertEqual((opus.input_tokens, opus.output_tokens, opus.cache_read_input_tokens,
+                          opus.cache_creation_input_tokens, opus.cache_creation_1h_input_tokens), (7, 1000, 40000, 21000, 21000))
+        self.assertEqual((opus.turns, opus.duration_ms, opus.session_id), (2, 60_000, SESSION_ID))
+        self.assertAlmostEqual(opus.cost_usd, 0.196028)        # 7x$4 + 1,000x$20 + 40,000x$0.20 + 21,000x$8 per MTok
+        self.assertEqual((haiku.input_tokens, haiku.output_tokens, haiku.cache_read_input_tokens,
+                          haiku.cache_creation_5m_input_tokens, haiku.turns, haiku.duration_ms), (150, 300, 4000, 4000, 2, 20_000))
+        self.assertAlmostEqual(haiku.cost_usd, 0.00705)
+        lines = gateway.read_ledger(self.ledger)
+        self.assertEqual([(r["label"], r["kind"], r["tool"], r["ok"]) for r in lines],
+                         [("session:Implementing", "session", "migite", True)] * 2)
+        self.assertIn("✔ session:Implementing metered", err)
+
+    def test_the_ledger_and_the_log_never_carry_message_content(self):
+        self.transcript()
+        _, err = self.meter(session_id=SESSION_ID)
+        self.assertTrue(Path(self.ledger).is_file())
+        self.assertNotIn("SECRET-CONTENT-MARKER", Path(self.ledger).read_text())
+        self.assertNotIn("SECRET-CONTENT-MARKER", err)
+
+    def test_without_an_id_the_newest_transcript_for_the_directory_since_the_start_is_used(self):
+        self.transcript("before-the-session", subagent=False, mtime=SESSION_START - 3600)
+        self.transcript("another-repo", folder=self.projects / "-another-repo", mtime=SESSION_START + 600)
+        self.transcript("an-earlier-session", subagent=False, mtime=SESSION_START + 60)
+        self.transcript(mtime=SESSION_START + 120)
+        for session_id in ("", "00000000-0000-0000-0000-000000000000"):   # none, or one with no transcript
+            with self.subTest(session_id=session_id):
+                Path(self.ledger).unlink(missing_ok=True)
+                recs, _ = self.meter(session_id=session_id)
+                self.assertEqual(recs["claude-opus-5-5"].session_id, SESSION_ID)
+                self.assertEqual(recs["claude-opus-5-5"].input_tokens, 7)
+                self.assertIn("claude-haiku-4-5-20251001", recs)
+
+    def test_a_session_with_no_transcript_is_not_metered_and_says_so(self):
+        recs, err = self.meter(session_id=SESSION_ID)
+        self.assertEqual(recs, {})
+        self.assertFalse(Path(self.ledger).exists())
+        self.assertIn("found no record of session:Implementing's usage", err)
+
+    def test_an_agent_that_cannot_report_sessions_records_nothing(self):
+        self.transcript()
+        gateway.AGENT = agents.get("cursor")
+        recs, err = self.meter(session_id=SESSION_ID)
+        self.assertEqual(recs, {})
+        self.assertFalse(Path(self.ledger).exists())
+        self.assertIn("can't report an interactive session's usage", err)
+
+    def test_a_model_without_a_price_is_recorded_at_zero_with_a_notice(self):
+        # An exact id is priced, never its neighbour: a newer Opus is not billed as Opus 5.
+        self.transcript(edit=lambda t: t.replace("claude-opus-5-5", "claude-opus-5-7"))
+        recs, err = self.meter(session_id=SESSION_ID)
+        self.assertEqual(recs["claude-opus-5-7"].cost_usd, 0.0)
+        self.assertEqual(recs["claude-opus-5-7"].output_tokens, 1000)
+        self.assertGreater(recs["claude-haiku-4-5-20251001"].cost_usd, 0)
+        self.assertIn("no price for claude-opus-5-7", err)
+        summary = gateway.summarize(gateway.read_ledger(self.ledger))
+        self.assertEqual(summary["unpriced_models"], ["claude-opus-5-7"])
+
+    def test_a_usage_block_in_an_unexpected_shape_is_skipped_and_the_rest_still_counts(self):
+        self.transcript(subagent=False, edit=lambda t: t.replace('"input_tokens":5,', '"input_tokens":{"n":5},'))
+        recs, _ = self.meter(session_id=SESSION_ID)
+        self.assertEqual((recs["claude-opus-5-5"].turns, recs["claude-opus-5-5"].output_tokens), (1, 300))
+
+    def test_a_session_that_cannot_be_read_warns_instead_of_failing_the_run(self):
+        with mock.patch.object(gateway.AGENT, "session_usage", side_effect=OSError("disk gone")):
+            recs, err = self.meter(session_id=SESSION_ID)
+        self.assertEqual(recs, {})
+        self.assertIn("could not read session:Implementing's usage: disk gone", err)
 
 
 class CliTest(unittest.TestCase):

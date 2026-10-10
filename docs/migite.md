@@ -4,7 +4,7 @@ The command-line reference for `migite` and its run modes. The reference is spli
 
 | Doc | Covers |
 |-----|--------|
-| **this file** | command line, `--type` and `--stack`, amend / intake / blueprint / audit modes, design principles, resuming a run |
+| **this file** | command line, `--type` and `--stack`, amend / intake / blueprint / audit modes, design principles, resuming a run, automata runs |
 | [phases.md](./phases.md) | what each phase does and calls, every gate key, which files get linted and tested, memory injection, tmux |
 | [outputs.md](./outputs.md) | every file a run writes, the commit-gate banner, the testing-plan requirement |
 
@@ -22,6 +22,7 @@ every prompt and output file. Configuration keys are in [configuration.md](./con
 - [Audit mode](#audit-mode)
 - [Design principles](#design-principles)
 - [Resuming a run](#resuming-a-run)
+- [Automata runs (`--automata`)](#automata)
 
 ---
 
@@ -36,8 +37,9 @@ migite --intake <file> [--blueprint <file>] # pre-written intake, optional bluep
 migite --audit <report.md> [--jira KEY]     # remediation task generated from a migite-audit report
 migite --attach <file> ...                  # fold reference material into the planner's context (repeatable)
 migite --staged                             # one implement session per Scope sub-section, checkpoint between
-migite --stack rails|generic                # override stack detection
+migite --stack rails|generic|<profile>      # override stack detection
 migite --resume [run.json]                  # continue an interrupted run; a plain re-run of the same command does too
+migite --automata --jira BB-1234            # unattended, for CI or another agent: no prompts, editor or tmux; see the exit status
 migite --amend ["feedback"] | --amend-file <file> [--jira KEY]   # scope a delta against a built task
 migite doctor [--repo <path>]               # read-only health check
 migite migrate-vault [--dry-run]            # move pre-run-folder task folders into run folders
@@ -58,18 +60,21 @@ An option migite doesn't recognise is an error that points at `--help`, not a ta
 | `spike` | Investigation or proof of concept; the plan is a recommendation, not a dev plan | `templates/spike.md` |
 | `config` | Infrastructure, environment, or gem changes | `templates/config.md` |
 
-`plan.sh` copies the template into the scratchpad and opens `$EDITOR` on it. `templates.dir` in
-the config overrides any of them per project.
+`plan.sh` copies the template into the scratchpad and opens `$EDITOR` on it (under
+[`--automata`](#automata) it plans from the bare template instead). `templates.dir` in the config
+overrides any of them per project.
 
 <a id="stack-values"></a>
 **`--stack` values**
 
 | Value | When it's used |
 |-------|----------------|
-| `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down. Runs rubocop/rspec via `bundle_exec` from the app's directory. |
+| a profile name | A [`stacks.<name>`](./configuration.md#stacks) profile from the config (`node`, `python`, ...). Auto-detected by its `detect` files, before `rails`. Heal and review run its `autofix`, `lint` and `test` commands on the changed files its globs select; exit codes decide. Explores with the same language-agnostic globs as `generic`. |
+| `rails` | Auto-detected when a `Gemfile` exists at the repo root or one level down and no profile matched. Runs rubocop/rspec via `bundle_exec` from the app's directory. |
 | `generic` | Everything else. Skips rubocop/rspec/`bundle`; plan and review still run against the diff, with language-agnostic explore globs instead of Rails' MVC split. |
 
-Precedence: `--stack` on the command line, then `stack:` in the config, then detection.
+Precedence: `--stack` on the command line, then `stack:` in the config, then detection (profiles,
+then `rails`, then `generic`).
 
 <a id="amend-mode"></a>
 ### Amend mode (`--amend`)
@@ -111,7 +116,7 @@ ONE Sonnet call ── reads plan.md + each run's implementation.md
                    (summary.md for runs plan.md already reflects)
                    + unfolded amendments + latest review.md
                    + git diff --stat + diff capped at ui.prompt_diff_max_bytes
-                   + recent knowledge.md entries + your feedback
+                   + the knowledge.md entries closest to the task + your feedback
       │
 NN-amend-<slug>/amendment.md → gate [y/f/e/q]
       │ (on y)
@@ -256,6 +261,7 @@ command again and migite continues from the recorded position instead of startin
 | review `pending_gate` (`q` at the commit gate) | Lint and specs run again, then the gate re-opens. `review.md` is reused when the code is the same as the code it reviewed; any change, including edits you made after `n`, gets a new review |
 | deliver `running` | Phase 3.5 to 4.5 run again as one: the knowledge question and the PR session come back |
 | `status: complete` | Prints where the run's files are and exits 0. Use `migite --amend` for a follow-up |
+| `mode: automata` (unfinished) | Continues only with `--automata` again, see [Automata runs](#automata) |
 
 The run is found by its arguments, so a task whose intake `Title:` renamed its folder is still
 found from the original command: the newest manifest whose Jira key, intake file, or task text
@@ -285,3 +291,64 @@ Underneath, and for a task from before run manifests:
 | `.plan.done` sentinel missing after agent | Hard error on the initial plan generation; only a warning (gate still opens) if it's missing after an `n`-redo from the plan gate |
 | `.review.done` sentinel missing after agent | Warning — review output may be incomplete |
 | `--amend` targeting a task whose scratchpad no longer exists | `resume_from_vault()` recovers `plan.md`/`implementation.md`/`review.md`/`testing-plan.md`/`intake.md` from the vault mirror before amend mode checks for an existing plan |
+
+---
+
+<a id="automata"></a>
+## Automata runs (`--automata`)
+
+`--automata` runs a task end to end with nobody at the keyboard, for CI, a scheduled routine or
+another agent. Nothing reads from the terminal. No editor, tmux pane or desktop notification
+opens. Every gate takes its automata answer, and the exit status says how the run ended.
+
+```bash
+migite --automata --jira BB-1234                 # a ticket: its content is fetched for planning
+migite --automata "add a health-check endpoint"  # a task description: planned from the bare template
+migite --automata --intake ./intake.md           # a pre-written intake
+migite --automata --resume                       # continue the newest unfinished run
+```
+
+**The task has to be on the command line.** Nobody is there to write an intake, so `--automata` with
+no task description, `--jira`, `--intake`, `--audit` or `--resume` is an error. A task description
+or a Jira ticket is planned from the type's template as it is, without opening `$EDITOR`. A ticket
+whose content couldn't be fetched, and that has no `--intake`, is an error: a key alone is no
+intake. Without `--type` the task is planned as a `feature`. `--automata --amend` needs the
+feedback inline or in `--amend-file`, and the task from `--jira` or the branch name.
+
+**What each prompt answers** is listed in [phases.md](./phases.md#automata-answers). In short: the
+plan is approved, TDD is declined, staged checkpoints continue, and the plan updates are applied.
+
+**The commit gate.** While blockers remain, the gate first answers `f` once
+(`gates.commit.automata_fix_rounds`, default 1): the agent fixes the review findings and the
+blockers headless, then lint, tests and the review run again. Under `gates.commit.policy: lenient` (the default), the gate then approves even
+when blockers remain: a NEEDS FIXES verdict, failing tests, or lint left over. The blockers are
+printed and recorded in `gate-overrides.md` and `run.json`, and the run exits 3. Under `strict`
+with blockers, the run stops at the gate and exits 2, with the blockers printed. Fix them, then
+run the same command with `--automata` again: lint and tests run again, and the gate re-opens.
+
+**Exit status**
+
+| Code | Meaning |
+|---|---|
+| 0 | Finished, and nothing blocked the commit gate (or a finished run was invoked again) |
+| 1 | Error: a failed phase or session, missing input, or an automata run resumed without `--automata`. Any other failure is reported as 1 too |
+| 2 | Stopped at the commit gate: `gates.commit.policy: strict` and blockers remain. `run.json` keeps the gate `pending_gate`, with the blockers in `phases.review.blockers` |
+| 3 | Finished over blockers under `lenient`. The blockers are in `gate-overrides.md` and `phases.review.blockers` |
+
+**The agent sessions run headless.** Implement, staged stages, TDD specs, the browser check and
+the PR description each become one headless call on the `session` role, on every backend. The call
+uses the model an interactive session gets, `permissions.interactive` (`auto` unless you changed
+it), and the CLI's full toolset. Because it is a headless call, the session is metered in the
+usage ledger like every other call, as `session:<label>`, the label an interactive session gets
+too. The trade-offs:
+
+- Nothing streams while it works. The log shows the session starting, then its final reply.
+- It is capped by `models.roles_timeouts.session` (3600s by default), where an interactive session
+  has no limit.
+- When the session didn't write its output file, its final reply is saved there.
+- A session that fails or times out stops the run with exit 1. `run.json` leaves that phase
+  `running`, so `migite --automata` with the same arguments runs it again.
+
+**Resuming.** `run.json` records `mode: automata`. An unfinished automata run continues only with
+`--automata` again. The same command without it is refused before anything changes. An
+interactive run can be finished with `--automata`, and from then on it is an automata run.

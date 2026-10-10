@@ -1,8 +1,9 @@
 # Run manifest and resume
 
 Status: the run manifest and resume are implemented (`migite/runstate.py`, `lib/manifest.sh`;
-user-facing behaviour in [migite.md](./migite.md#resuming-a-run)). Companion roadmap item:
-non-interactive `--yes` mode - designed here, to land separately (see "Non-goals").
+user-facing behaviour in [migite.md](./migite.md#resuming-a-run)). The non-interactive mode designed
+here landed later as `--automata` (see "The non-interactive mode" at the end, and
+[migite.md](./migite.md#automata)).
 
 Where the implementation departs from the design below:
 
@@ -58,6 +59,9 @@ follows `gateway.envelope_base` (`schema_version`, `generated_at`).
   "schema_version": 1, "tool": "migite-run", "generated_at": "...", "updated_at": "...",
   "status": "in_progress | complete | failed",
   "next_phase": "plan | tdd | implement | heal | review | deliver | done",
+  "mode": "interactive | automata",
+  "exit_status": 0,
+  "invocations": [ "<start> to <end>, <mode>, exit <status>" ],
   "args":  { "task", "task_type", "jira_ticket", "jira_url", "intake", "audit",
              "blueprint", "attach": [], "staged", "stack",
              "amend": { "feedback", "file", "num" } },
@@ -87,8 +91,11 @@ follows `gateway.envelope_base` (`schema_version`, `generated_at`).
   through the existing `resume_from_vault` pattern.
 - `run.json` resumes the **workflow position**, not git state: the worktree is assumed
   unchanged between runs (documented caveat).
-- `phases.*.gate_attempts` and `tdd.decided` are the state a future `--yes` mode will
-  consume; recording them now keeps one state model for both features.
+- `phases.*.gate_attempts` and `tdd.decided` are state the non-interactive mode (`--automata`)
+  consumes too; one state model serves both. That mode added `mode` and `phases.review.blockers`.
+- `exit_status` and `invocations` are written by `manifest_on_exit` on every exit, so an
+  audit can tell which invocation ran in which mode and how it ended (the status the caller saw,
+  other failures reported as 1). Only `mode` is overwritten; `invocations` keeps the history.
 
 ### Write points ("every phase boundary")
 
@@ -166,8 +173,7 @@ Every "done" transition also stamps `completed_at`; every write bumps `updated_a
 - **Mid-plan resume:** `plan` not done → `run_plan` runs and may re-derive the slug;
   the manifest moves with the renamed scratchpad dir and is refreshed afterwards.
 - **`deliver` is one boundary:** an interruption between the PR description and the
-  improvement notes re-runs Phase 4 (interactive) on resume. Acceptable until `--yes`
-  makes Phase 4 headless.
+  improvement notes re-runs Phase 4 on resume (interactive, or headless under `--automata`).
 - **`--amend`** keeps working; the amendment number is stamped into `args.amend`, but
   amend mode still regenerates its amendment document on each invocation.
 - **Usage ledger:** `layout.usage_ledger` is restored so the cost total continues across
@@ -198,19 +204,38 @@ resume matrix, implement/heal split), `docs/internals.md` (`migite/runstate.py`,
 wording in `docs/getting-started.md` and `docs/workflows/build-a-task.md`, and the
 README roadmap (manifest/resume half done; `--yes` split into its own item).
 
-## Non-goals — `--yes` non-interactive mode (next iteration)
+## The non-interactive mode (`--automata`)
 
-Designed now so the manifest schema fits; not implemented in this change:
+Designed here as a non-goal of the manifest change, so the schema would fit, and built later as
+`--automata` (the design called it `--yes`). User-facing behaviour is in
+[migite.md](./migite.md#automata), and each prompt's answer is in [phases.md](./phases.md#automata-answers).
+As designed: plan `y`, existing plan `u`, intake `y`, TDD `N`, stage checkpoint `c`, amendment `y`,
+the knowledge prompt empty, and `run_phase` through a headless `agent_ask` whose reply becomes the
+output file when the session wrote none. Where it departs:
 
-- `--yes` flag plus `ui.non_interactive` config (→ `MIGITE_CFG_UI_NON_INTERACTIVE`).
-- Gate auto-answers: plan `y`, existing-plan `u`, intake `y`, TDD `N`, stage checkpoint
-  `c`, amendment `y`, knowledge prompt empty.
-- **Commit gate:** auto-approve only a clean verdict; when `_commit_gate_blockers` is
-  non-empty (needs_fixes verdict, failed specs, dirty lint), **fail the run with a
-  non-zero exit** listing the blockers — never silently take the `Y` override.
-- **Implement in CI:** route `run_phase` through a headless `agent_ask` with the
-  implement prompt; the reply becomes `implementation.md` (one-shot, no interactive
-  refinement).
+- **No `ui.non_interactive` config key.** Only the flag turns the mode on, so a repo's config
+  can't make every run unattended.
+- **Lenient approves over blockers.** The design failed every run with blockers. Instead,
+  `gates.commit.policy` decides: `strict` stops at the gate with exit 2, the gate left
+  `pending_gate` and the blockers in `phases.review.blockers`; `lenient` approves, records the
+  blockers like a `Y` (in `gate-overrides.md`), and the run exits 3. Exit statuses other than
+  0, 2 and 3 are all reported as 1 (`migite_exit`, `_migite_exit`), and 2 and 3 don't mark the
+  run failed.
+- **A fix round before the policy decides.** The first lenient runs shipped NEEDS FIXES reviews
+  with no fix attempt at all (agencia-gema quotations-sweep, 2026-10-07: a seed script that crashed
+  on its first record, 16 rubocop offenses). While blockers remain, the gate now answers `f` up to
+  `gates.commit.automata_fix_rounds` times (default 1, per invocation; `automata_fix_round_due`),
+  and the fix prompt carries the gate's blockers next to the review findings.
+- **The mode is in the manifest.** `mode: interactive | automata` is written by every
+  invocation. An unfinished automata run resumed without `--automata` is refused before anything
+  changes, so a run that spends money and edits code unattended is never continued implicitly.
+- **Sessions run on the `session` role with the CLI's full toolset** (`ROLE_TOOLS`), capped by
+  `models.roles_timeouts.session` (3600s by default). A failed session stops the run with the
+  phase left `running`, as an inline interactive session that exits non-zero does.
+- **More answers than the design listed:** task type `feature`, no editor on a template intake (a
+  Jira ticket that couldn't be fetched is an error), supplementary task.md `N`, browser check
+  `N`, the plan and testing-plan updates `y`, and errors where amend mode would pick a task or
+  open an editor.
 
 ## Behavioral change to note
 

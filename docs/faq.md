@@ -11,10 +11,12 @@ or OpenCode via `agent.backend`) and uses that CLI's own login.
 
 **What does a run cost?**
 It is printed at the end of every run and written to `usage.json`; the commit-gate banner shows
-the running total. Only headless calls are metered (planner, reviewers, knowledge, amendments);
-the interactive implement and PR-description sessions are not, because the CLI reports usage
-only in `--print` mode. Expect roughly $3 to $5 in headless calls for a feature on the default
-tiering, less with `think` pinned to Sonnet. Set `budget.max_usd_per_run` for a soft cap.
+the running total. Headless calls (planner, reviewers, knowledge, amendments) are metered as they
+run. On Claude Code, so are the interactive implement, fix and PR-description sessions: the CLI
+reports nothing when one ends, so migite reads its transcript and prices the tokens. `usage.json`
+keeps the two apart under `by_kind`. Expect roughly $3 to $5 in headless calls for a feature on the
+default tiering, less with `think` pinned to Sonnet; the sessions come on top. Set
+`budget.max_usd_per_run` for a soft cap.
 
 **Why does every headless call show about 23k cache-creation tokens?**
 That is Claude Code's own system context being sent with each headless call. It is a
@@ -76,11 +78,15 @@ The heal loop delivers clean input to the reviewer; it does not replace the revi
 its own authoritative pass so a stale or partial heal never reaches the commit gate.
 
 **Does migite work on non-Rails projects?**
-Partly. A repo with no `Gemfile` is the `generic` stack: plan, implement, review, knowledge, and
-PR description all run; rubocop, rspec, and the heal loop are skipped; explorers use
-language-agnostic globs. Running another stack's lint and test commands is on the roadmap.
-`migite-explore` and `migite-blueprint` are already stack-agnostic; `migite-audit` and
-`migite-pr-review` still use Rails checklists.
+Yes, with a [stack profile](./configuration.md#stacks). A `stacks.<name>` block in `.migite.yml`
+names the repo's detect files, its lint, autofix and test commands, and the globs that pick each
+command's changed files; heal and review then run them, and exit codes decide. Without a profile,
+a repo with no `Gemfile` is the `generic` stack: plan, implement, review, knowledge, and PR
+description all run; lint, tests, and the heal loop are skipped. Either way, explorers use
+language-agnostic globs. `migite-explore` and `migite-blueprint` are already stack-agnostic;
+`migite-audit`, `migite-pr-review` and Phase 3's reviewers check what the stack's
+[checklist](./configuration.md#checklists) says: Rails' own on rails, a language-neutral one
+everywhere else, and your `checklists/<name>.md` when you write one.
 
 **How do I use a cheaper or a stronger model for one step?**
 Pin the role in `.migite.yml`: `models: { roles: { think: claude-sonnet-5 } }`. Roles cover

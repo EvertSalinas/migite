@@ -78,7 +78,12 @@ is [Build a task](./build-a-task.md) from the plan gate on.
 migite-audit
 ```
 
-All seven layers. Takes longer than one layer, and the report is long; that is the point of `--focus`.
+All seven layers on a Rails app. Takes longer than one layer, and the report is long; that is the point of `--focus`.
+
+On a non-Rails repo the areas are five language-neutral lenses instead (security, data access, error
+handling, design, tests), from `prompts/checklists/generic.md`. To audit your own layers, write a
+[checklist](../configuration.md#checklists) for the stack with `## audit: <area>` sections and their
+`Files:` globs.
 
 ### Other layers
 

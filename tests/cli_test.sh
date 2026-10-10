@@ -26,6 +26,8 @@ help_ok "migite-explore --help"     "--from-exploration <file>"           bash "
 help_ok "migite-blueprint --help"   "--from-blueprint <file>"             bash "$MIGITE_HOME/bin/migite-blueprint" --help
 help_ok "migite-audit --help"       "--focus <area>"                      bash "$MIGITE_HOME/bin/migite-audit" --help
 help_ok "migite-pr-review -h"       "--branch <branch>"                   bash "$MIGITE_HOME/bin/migite-pr-review" -h
+help_ok "migite-audit --help: --stack picks the checklist"     "--stack <stack>" bash "$MIGITE_HOME/bin/migite-audit" --help
+help_ok "migite-pr-review --help: --stack picks the checklist" "--stack <stack>" bash "$MIGITE_HOME/bin/migite-pr-review" --help
 
 # every flag the entrypoint parses is in its help
 flags=$(grep -oE '^    --[a-z-]+\)' "$MIGITE_HOME/bin/migite" | tr -d ' )' | sort -u)
@@ -40,6 +42,13 @@ check "migite: an unknown option is an error that points at --help" \
 out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --resume --amend 2>&1); rc=$?
 check "migite --resume --amend: refused, with how to resume an amend run" \
   bash -c '[[ "$1" != 0 && "$2" == *"can'"'"'t be combined"*"migite --resume <its run.json>"* ]]' _ "$rc" "$out"
+help_ok "migite --help: --automata and the exit statuses it adds" "3: finished over blockers" bash "$MIGITE_HOME/bin/migite" --help
+out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --automata 2>&1 < /dev/null); rc=$?
+check "migite --automata with no task: an error naming what to pass, not an editor" \
+  bash -c '[[ "$1" == 1 && "$2" == *"--automata needs a task"*"--jira <key>"*"--intake <file>"* ]]' _ "$rc" "$out"
+out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --automata --amend 2>&1 < /dev/null); rc=$?
+check "migite --automata --amend with no feedback: an error, not an editor" \
+  bash -c '[[ "$1" == 1 && "$2" == *"--automata --amend needs the feedback"*"--amend-file <file>"* ]]' _ "$rc" "$out"
 out=$(cd "$cli_dir/repo" && bash "$MIGITE_HOME/bin/migite" --resume missing/run.json 2>&1); rc=$?
 check "migite --resume <file>: a manifest that doesn't exist is an error" \
   bash -c '[[ "$1" != 0 && "$2" == *"Run manifest not found: missing/run.json"* ]]' _ "$rc" "$out"

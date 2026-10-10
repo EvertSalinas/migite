@@ -21,9 +21,9 @@ migite doctor - read-only health check for a repo and your migite install
 Usage:
   migite doctor [--repo <path>]
 
-Checks the stack detection, the agent CLI and its version, where --jira gets tickets,
-git and Python, bundle (rails stack), the frontend linters and system-spec driver
-(rails stack), the configuration, the four phase prompts,
+Checks the stack detection (and a stacks.<name> profile's commands), the agent CLI and
+its version, where --jira gets tickets, git and Python, bundle (rails stack), the frontend
+linters and system-spec driver (rails stack), the configuration, the four phase prompts,
 scratchpad and vault drift, orphaned sentinels, and duplicate knowledge entries.
 It changes nothing, and exits 1 when it finds an issue.
 
@@ -69,9 +69,45 @@ run_doctor() {
   local doc_dev_log_base="${DEV_LOG_BASE:-$HOME/dev-log}"
 
   # ── Stack detection — read-only, never errors (generic is the catch-all
-  # profile, see STACK_PROFILES in lib/stack.sh).
+  # profile, see STACK_PROFILES in lib/stack.sh). Doctor runs before the config
+  # is loaded, so it reads it here for the stacks.<name> profiles and `stack:`,
+  # best effort: a config that doesn't load leaves the built-in detection, and
+  # the Configuration check below reports why.
+  local doc_cfg_env STACK_OVERRIDE=""
+  if doc_cfg_env=$("$MIGITE_PYTHON" -m migite.config --repo-root "$REPO_ROOT" env 2>/dev/null); then
+    eval "$doc_cfg_env"
+    [[ "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
+  fi
+  # An explicit stack that can't resolve here (`stack: rails` with no Gemfile)
+  # makes detect_stack exit; report it and fall back to detection instead.
+  if [[ -n "$STACK_OVERRIDE" ]] && ! (detect_stack) &>/dev/null; then
+    echo "✘ stack: $STACK_OVERRIDE is set in the config but doesn't fit this repo - showing the detected stack"
+    issues=$((issues + 1))
+    STACK_OVERRIDE=""
+  fi
   detect_stack
-  echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+  if stack_is_profile; then
+    local doc_why="set by stack: in the config"
+    [[ -n "$STACK_DETECTED_BY" ]] && doc_why="matched $STACK_DETECTED_BY"
+    echo "✔ Stack: $STACK (stacks.$STACK profile, $doc_why) - app dir: ${APP_REL_PATH:-.}"
+    # Each configured command, and whether its program resolves. A leading
+    # VAR=value assignment can't be checked this way and is shown as-is.
+    local doc_kind doc_cmd doc_prog
+    for doc_kind in autofix lint test; do
+      doc_cmd="$(cfg "stacks.$STACK.$doc_kind")"
+      [[ -n "$doc_cmd" ]] || continue
+      read -r doc_prog _ <<< "$doc_cmd"
+      if [[ "$doc_prog" == *=* ]] || command -v "$doc_prog" &>/dev/null \
+         || (cd "$REPO_ROOT" && command -v "$doc_prog" &>/dev/null); then
+        echo "ℹ $doc_kind: $doc_cmd"
+      else
+        echo "✘ $doc_kind: $doc_cmd ($doc_prog does not resolve - the check would report it could not start)"
+        issues=$((issues + 1))
+      fi
+    done
+  else
+    echo "✔ Stack: $STACK — app dir: ${APP_REL_PATH:-.}"
+  fi
 
   # ── Tool resolution ────────────────────────────────────────────────────────
   local doc_tool doc_agent_name

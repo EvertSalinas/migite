@@ -27,7 +27,88 @@
 # When $STACK == "generic" (no recognized stack profile matched — see
 # detect_stack in lib/stack.sh), rubocop/rspec are skipped entirely, both here
 # and in the commit-gate re-run loop; the LangGraph review still runs against
-# the plan + diff, just without tooling logs.
+# the plan + diff, just without tooling logs. A configured profile
+# (stacks.<name>) runs its own lint and test commands instead
+# (run_stack_review_checks), into the same RUBOCOP_LOG / RSPEC_LOG variables.
+
+# run_stack_review_checks - Phase 3's lint and tests for a configured profile:
+# autofix then lint over the changed files the profile's `source` globs select,
+# then the test command over its `specs` matches (lib/stack.sh run_stack_lint /
+# run_stack_test). Exit codes decide; one that could not start (126/127) sets
+# TOOLING_ERROR rather than reading as a failure. Writes RUBOCOP_LOG and
+# RSPEC_LOG, the names every later reader takes, and sets STACK_LINT_RESULT /
+# STACK_TEST_RESULT (passed | failed | skipped | unavailable) for the gate.
+run_stack_review_checks() {
+  local rc
+  TOOLING_ERROR=""
+  echo ""
+  log "Running the $STACK lint on changed files..."
+  rc=0
+  run_stack_lint "$BASE_BRANCH" "$RUBOCOP_LOG" true || rc=$?
+  STACK_LINT_RESULT=$(stack_check_result "$rc" "$RUBOCOP_LOG")
+  case "$STACK_LINT_RESULT" in
+    passed)  success "Lint clean" ;;
+    failed)  warn "Lint problems remain after autofix (exit $rc); the review will address them" ;;
+    skipped) warn "$(head -1 "$RUBOCOP_LOG")" ;;
+    unavailable)
+      TOOLING_ERROR="The $STACK lint could not start (exit $rc): $(cfg "stacks.$STACK.lint")"
+      warn "$TOOLING_ERROR" ;;
+  esac
+  echo ""
+  log "Running the $STACK tests on changed files..."
+  rc=0
+  run_stack_test "$BASE_BRANCH" "$RSPEC_LOG" || rc=$?
+  STACK_TEST_RESULT=$(stack_check_result "$rc" "$RSPEC_LOG")
+  case "$STACK_TEST_RESULT" in
+    passed)  success "Tests passed" ;;
+    failed)  warn "Tests failed (exit $rc)" ;;
+    skipped) warn "$(head -1 "$RSPEC_LOG")" ;;
+    unavailable)
+      TOOLING_ERROR="${TOOLING_ERROR:-The $STACK tests could not start (exit $rc): $(cfg "stacks.$STACK.test")}"
+      warn "The $STACK tests could not start (exit $rc)" ;;
+  esac
+  return 0
+}
+
+# ensure_testing_plan - plan.testing_plan_when: review. migite-plan left testing-plan.md
+# out; this writes it from plan.md and the change as built, before the browser check and
+# the reviewers read it. The change is the diff capped at ui.prompt_diff_max_bytes
+# (prompt_diff) plus the name of every changed file, since the diff leaves untracked new
+# files out. A testing plan that exists is kept (it carries amendment and fix-round
+# edits), so a resume, an amend run and a re-review never write over one. A failed or
+# empty call warns and goes on without it: the testing-plan reviewer reports it missing,
+# and the next re-review tries again. Needs MIGITE_PYTHON, PLAN_FILE, BASE_BRANCH,
+# TESTING_PLAN_FILE and TESTING_PLAN_VAULT; reads CHANGED_FRONTEND when run_review set it.
+ensure_testing_plan() {
+  [[ "$(cfg plan.testing_plan_when plan)" == "review" ]] || return 0
+  [[ -s "$TESTING_PLAN_FILE" ]] && return 0
+  if [[ ! -s "$PLAN_FILE" ]]; then
+    warn "plan.testing_plan_when is review but there is no plan.md to write the testing plan from"
+    return 0
+  fi
+  local change_file out rc=0
+  change_file=$(mktemp)
+  out=$(mktemp)
+  {
+    prompt_diff "$BASE_BRANCH"
+    printf '\nFiles changed (tracked and new):\n'
+    changed_all_files "$BASE_BRANCH" || true
+  } > "$change_file"
+  local -a args=(--plan "$PLAN_FILE" --out "$out" --diff "$change_file")
+  [[ -n "${CHANGED_FRONTEND:-}" ]] && args+=(--frontend)
+  log "Writing the testing plan from the plan and the diff (plan.testing_plan_when: review)..."
+  "$MIGITE_PYTHON" -m migite.testing_plan --repo-root "${REPO_ROOT:-$PWD}" "${args[@]}" || rc=$?
+  if [[ $rc -eq 0 && -s "$out" ]]; then
+    mv "$out" "$TESTING_PLAN_FILE"
+    sync_artifact "$TESTING_PLAN_FILE" "$TESTING_PLAN_VAULT"
+    success "testing-plan.md written to $TESTING_PLAN_FILE"
+  else
+    rm -f "$out"
+    warn "The testing plan could not be written; reviewing without it"
+  fi
+  rm -f "$change_file"
+  return 0
+}
 
 # run_browser_check - Phase 3.1, opt-in via frontend.browser_check (off | ask |
 # on). Only when the diff touches the frontend and a testing plan exists: an
@@ -53,7 +134,7 @@ run_browser_check() {
     return 0
   fi
   if [[ "$mode" == "ask" ]]; then
-    read_gate_choice "BROWSER CHECK" "Views or JavaScript changed. Walk the testing plan in a browser before the review? [y/N]: "
+    read_gate_choice "BROWSER CHECK" "Views or JavaScript changed. Walk the testing plan in a browser before the review? [y/N]: " N
     if [[ ! "${GATE_CHOICE:-}" =~ ^[yY]$ ]]; then
       log "Browser check skipped"
       return 0
@@ -114,6 +195,12 @@ run_review() {
   BROWSER_CHECK_FILE="$SCRATCHPAD_DIR/browser-check.md"
   CHANGED_FRONTEND=""
   FRONTEND_LINT_DIRTY=false
+  STACK_LINT_RESULT=""
+  STACK_TEST_RESULT=""
+  if stack_is_profile; then
+    RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-lint.txt"
+    RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-test.txt"
+  fi
   local RUBOCOP_FINAL_LOG=""
 
   # One frontend lint sweep over $CHANGED_FRONTEND (autofix and check in the
@@ -146,6 +233,10 @@ run_review() {
     CHANGED_SPECS=""
     echo "Generic stack — no lint tooling configured." > "$RUBOCOP_LOG"
     echo "Generic stack — no test tooling configured." > "$RSPEC_LOG"
+  elif stack_is_profile; then
+    CHANGED_RUBY=""
+    CHANGED_SPECS=""
+    run_stack_review_checks
   else
     echo ""
     log "Running rubocop on changed Ruby files..."
@@ -207,7 +298,8 @@ run_review() {
   # them, not just this run's: after an --amend the diff still holds the
   # original build, which only 00-build/implementation.md describes.
   local CHANGED_ALL
-  CHANGED_ALL=$(changed_all_files "$BASE_BRANCH")
+  # || true: an empty change set (grep -v matches nothing) isn't an error under pipefail
+  CHANGED_ALL=$(changed_all_files "$BASE_BRANCH" || true)
   local -a NOTES_FILES=()
   local _notes_f
   while IFS= read -r _notes_f; do
@@ -228,6 +320,7 @@ run_review() {
     fi
   fi
 
+  ensure_testing_plan
   run_browser_check
 
   local REVIEW_SENTINEL="$SCRATCHPAD_DIR/.review.done"
@@ -241,8 +334,8 @@ run_review() {
     --review-output    "$REVIEW_FILE"
     --sentinel         "$REVIEW_SENTINEL"
     --base-branch      "$BASE_BRANCH"
+    --stack            "$STACK"
   )
-  [[ -f "$TESTING_PLAN_FILE" ]] && REVIEW_LANGGRAPH_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
   # Amendments are approved scope; the reviewer needs the ones plan.md doesn't
   # reflect yet (this run's, until Phase 3.8 folds it in, and any whose fold was
   # skipped). Without them it graded amended code against the plan and reported
@@ -255,6 +348,12 @@ run_review() {
   # Frontend inputs for migite-review, rebuilt before every review run: a fix
   # round can add or remove view/JavaScript changes. Empty on a backend-only
   # diff, which is what keeps the frontend reviewer from running.
+  local -a TESTING_PLAN_REVIEW_ARGS=()
+  _testing_plan_review_args() {
+    TESTING_PLAN_REVIEW_ARGS=()
+    [[ -f "$TESTING_PLAN_FILE" ]] && TESTING_PLAN_REVIEW_ARGS+=(--testing-plan "$TESTING_PLAN_FILE")
+    return 0
+  }
   local -a FRONTEND_REVIEW_ARGS=()
   _frontend_review_args() {
     FRONTEND_REVIEW_ARGS=()
@@ -266,6 +365,7 @@ run_review() {
     return 0
   }
   _frontend_review_args
+  _testing_plan_review_args
 
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
@@ -282,6 +382,7 @@ run_review() {
   else
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON" "$REVIEW_DIMS_JSON"
     spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+      ${TESTING_PLAN_REVIEW_ARGS[@]+"${TESTING_PLAN_REVIEW_ARGS[@]}"} \
       ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
     sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
@@ -318,6 +419,9 @@ run_review() {
       log "Generic stack — no lint/test tooling to re-run"
       CHANGED_RUBY=""
       CHANGED_SPECS=""
+    elif stack_is_profile; then
+      log "Re-running checks..."
+      run_stack_review_checks
     else
       log "Re-running checks..."
       CHANGED_RUBY=$(changed_ruby_files "$BASE_BRANCH")
@@ -353,8 +457,11 @@ run_review() {
     fi
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
+    ensure_testing_plan
     _frontend_review_args
+    _testing_plan_review_args
     spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
+      ${TESTING_PLAN_REVIEW_ARGS[@]+"${TESTING_PLAN_REVIEW_ARGS[@]}"} \
       ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"} \
       --previous "$REVIEW_DIMS_JSON"
     sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
@@ -377,6 +484,17 @@ run_review() {
   _commit_gate_blockers() {
     local -a b=()
     [[ "$(review_verdict "$REVIEW_FILE")" == "needs_fixes" ]] && b+=("review verdict is NEEDS FIXES")
+    if stack_is_profile; then
+      # Exit codes, not log patterns (run_stack_review_checks).
+      if [[ "$(cfg gates.commit.require_green_specs true)" == "true" ]]; then
+        [[ -n "${TOOLING_ERROR:-}" ]] && b+=("tooling error: $TOOLING_ERROR")
+        [[ "${STACK_TEST_RESULT:-}" == "failed" ]] && b+=("tests failed ($STACK)")
+      fi
+      [[ "$(cfg gates.commit.require_clean_lint true)" == "true" && "${STACK_LINT_RESULT:-}" == "failed" ]] \
+        && b+=("lint problems remain ($STACK)")
+      [[ ${#b[@]} -gt 0 ]] && printf '%s\n' "${b[@]}"
+      return 0
+    fi
     if [[ "$(cfg gates.commit.require_green_specs true)" == "true" ]]; then
       [[ -n "${TOOLING_ERROR:-}" ]] && b+=("tooling error: $TOOLING_ERROR")
       local fl
@@ -392,31 +510,75 @@ run_review() {
     [[ ${#b[@]} -gt 0 ]] && printf '%s\n' "${b[@]}"
     return 0
   }
+  # _record_gate_override <blockers> [note] - gate-overrides.md gets the blockers a
+  # Y (or an automata approval, named in the note) went over.
   _record_gate_override() {
-    local blockers="$1" f="$RUN_SCRATCH_DIR/gate-overrides.md"
+    local blockers="$1" note="${2:-}" f="$RUN_SCRATCH_DIR/gate-overrides.md"
     {
-      echo "## $DATE $(date +%H:%M) — commit gate approved over blockers"
+      echo "## $DATE $(date +%H:%M) — commit gate approved over blockers${note:+ ($note)}"
       printf '%s\n' "$blockers" | sed 's/^/- /'
       echo ""
     } >> "$f"
     sync_artifact "$f" "$RUN_VAULT_DIR/gate-overrides.md"
   }
+  # _gate_blocker_args <blockers> - GATE_BLOCKER_ARGS: the manifest_set flags that
+  # record them as phases.review.blockers (an empty list when nothing blocks).
+  local -a GATE_BLOCKER_ARGS=()
+  _gate_blocker_args() {
+    local b
+    GATE_BLOCKER_ARGS=(--set-json "phases.review.blockers=[]")
+    while IFS= read -r b; do
+      [[ -n "$b" ]] && GATE_BLOCKER_ARGS+=(--add "phases.review.blockers=$b")
+    done <<< "$1"
+    return 0
+  }
 
+  # Fix rounds --automata has answered with f in this invocation.
+  local AUTOMATA_FIX_ROUNDS=0
   while true; do
     show_commit_context
-    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): "
+    local _gate_answer=y
+    if automata; then
+      # Nobody can override at this gate. While blockers remain, the agent gets up
+      # to gates.commit.automata_fix_rounds f rounds; then the policy decides.
+      # Strict with blockers stops the run: the gate stays pending, with its
+      # blockers in run.json, and exit 2. Lenient approves over them, recorded
+      # like a Y, and the run exits 3.
+      local _auto_blockers _auto_rc=0 _auto_max_fix
+      _auto_blockers=$(_commit_gate_blockers)
+      _auto_max_fix=$(cfg gates.commit.automata_fix_rounds 1)
+      if automata_fix_round_due "$_auto_blockers" "$AUTOMATA_FIX_ROUNDS" "$_auto_max_fix"; then
+        AUTOMATA_FIX_ROUNDS=$((AUTOMATA_FIX_ROUNDS + 1))
+        warn "Blockers remain; --automata runs fix round $AUTOMATA_FIX_ROUNDS of $_auto_max_fix (gates.commit.automata_fix_rounds):"
+        printf '%s\n' "$_auto_blockers" | sed 's/^/    - /'
+        _gate_answer=f
+      else
+        automata_commit_gate "$(cfg gates.commit.policy lenient)" "$_auto_blockers" || _auto_rc=$?
+        if [[ $_auto_rc -ne 0 ]]; then
+          _gate_blocker_args "$_auto_blockers"
+          manifest_boundary review pending_gate --set-json "phases.review.gate_attempts=$COMMIT_GATE_ATTEMPTS" \
+            --set "phases.review.tree_fingerprint=$REVIEWED_FINGERPRINT" "${GATE_BLOCKER_ARGS[@]}"
+          echo -e "  ${YELLOW}Fix them, then run the same command with --automata: lint and tests run again and the gate re-opens${RESET}"
+          migite_exit 2
+        fi
+        if [[ -n "$_auto_blockers" ]]; then
+          _record_gate_override "$_auto_blockers" "--automata, gates.commit.policy: lenient"
+        fi
+      fi
+    fi
+    read_gate_choice "COMMIT GATE" "Proceed? [y/f/e/n/q] (y=commit, f=$(agent_field display_name) fixes, e=edit directly, n=fix it yourself, q=abort): " "$_gate_answer"
     case "${GATE_CHOICE:-}" in
       y)
-        if [[ "$(cfg gates.commit.policy lenient)" == "strict" ]]; then
-          local _blockers
-          _blockers=$(_commit_gate_blockers)
-          if [[ -n "$_blockers" ]]; then
-            warn "gates.commit.policy is strict — approval refused while blockers remain:"
-            printf '%s\n' "$_blockers" | sed 's/^/    - /'
-            echo -e "  ${YELLOW}Fix them (f / n), or type a capital ${BOLD}Y${RESET}${YELLOW} to approve anyway — the override is recorded in gate-overrides.md${RESET}"
-            continue
-          fi
+        local _blockers
+        _blockers=$(_commit_gate_blockers)
+        if [[ -n "$_blockers" && "$(cfg gates.commit.policy lenient)" == "strict" ]]; then
+          warn "gates.commit.policy is strict — approval refused while blockers remain:"
+          printf '%s\n' "$_blockers" | sed 's/^/    - /'
+          echo -e "  ${YELLOW}Fix them (f / n), or type a capital ${BOLD}Y${RESET}${YELLOW} to approve anyway — the override is recorded in gate-overrides.md${RESET}"
+          continue
         fi
+        _gate_blocker_args "$_blockers"
+        manifest_set "${GATE_BLOCKER_ARGS[@]}"
         success "Approved — continuing"
         break
         ;;
@@ -428,6 +590,8 @@ run_review() {
           printf '%s\n' "$_blockers" | sed 's/^/    - /'
           _record_gate_override "$_blockers"
         fi
+        _gate_blocker_args "$_blockers"
+        manifest_set "${GATE_BLOCKER_ARGS[@]}"
         success "Approved — continuing"
         break
         ;;
@@ -458,6 +622,10 @@ run_review() {
 $(cat "$_fix_amend_f")
 "
         done < <(unfolded_run_files "$SCRATCHPAD_DIR" "$TASK_DIR" amendment.md "$PLAN_FILE")
+        # What the gate blocks on beyond the review's own findings (failing specs,
+        # lint left after autocorrect): the review can miss them or truncate them.
+        local FIX_BLOCKERS
+        FIX_BLOCKERS=$(_commit_gate_blockers | grep -v '^tooling error: ' || true)
         local FIX_PROMPT="${KNOWLEDGE_INJECT}You are fixing issues identified by an autonomous code reviewer.
 
 ## Current plan (for context)
@@ -466,6 +634,7 @@ $( [[ -n "$FIX_AMENDMENTS" ]] && printf '\n## Amendments (approved after the pla
 
 ## Review findings — address every issue below
 ${REVIEW_CONTENT}
+$( [[ -n "$FIX_BLOCKERS" ]] && printf '\n## Commit gate blockers — clear these too (lint and specs run again after this round)\n%s\n' "$(sed 's/^/- /' <<< "$FIX_BLOCKERS")" )
 
 ## Instructions
 - Fix every Critical and Warning finding listed above

@@ -36,6 +36,19 @@ check "json_field: null value exits 1" \
 check "json_field: missing file exits 1" \
   not json_field "$mr_dir/absent.json" verdict
 
+# ── plan.json under each plan.strategy ───────────────────────────────────────
+# The native planner has no explorers, so plan.json leaves `explorers` out: a bash
+# reader treats it as optional (json_field exits 1) instead of reading a zero count.
+printf '{"strategy":"native","strategy_note":"","critic":{"clean":false}}\n' > "$mr_dir/plan-native.json"
+printf '{"strategy":"langgraph","strategy_note":"","explorers":{"count":7,"failed":[]}}\n' > "$mr_dir/plan-langgraph.json"
+check "plan.json: strategy names the planner that wrote the plan" \
+  test "$(json_field "$mr_dir/plan-native.json" strategy)" = "native"
+check "plan.json: a native plan has no explorers count" \
+  not json_field "$mr_dir/plan-native.json" explorers.count
+check "plan.json: a langgraph plan keeps its explorers count" \
+  test "$(json_field "$mr_dir/plan-langgraph.json" explorers.count)" = "7"
+rm -f "$mr_dir/plan-native.json" "$mr_dir/plan-langgraph.json"
+
 # ── review_verdict prefers review.json ───────────────────────────────────────
 # The markdown says READY; the envelope beside it says needs_fixes → envelope wins.
 cp "$SCRIPT_DIR/fixtures/reviews/next-line-ready.md" "$mr_dir/review.md"

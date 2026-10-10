@@ -24,6 +24,7 @@ from migite import gateway
 from migite import config
 from migite import paths
 from migite import verify
+from migite import checklists as checklists_lib
 
 # Defaults from config's single table; main() replaces them from the loaded
 # config (one role per dimension, plus `pr_verdict`).
@@ -36,48 +37,12 @@ VAULT_BASE = os.environ.get("DEV_LOG_BASE", str(Path.home() / "dev-log"))
 # whole-string match only).
 BRANCH_TICKET_RE = re.compile(r"[A-Za-z]+-\d+")
 
-PR_REVIEW_DIMENSIONS = [
-    (
-        "correctness",
-        """\
-- Logic errors or bugs in the implementation
-- Edge cases not handled (nil values, empty collections, boundary conditions)
-- Incorrect conditionals, off-by-one errors, or flipped logic
-- Methods that can return unexpected types or nils
-- Unintended behaviour changes — side effects beyond the PR's stated scope""",
-    ),
-    (
-        "security",
-        """\
-- Controller actions not covered by Pundit policy or manual authorization check
-- Collections or records not scoped to current_user / current_account
-- N+1 queries introduced by the PR (associations loaded inside loops or serializers)
-- Raw SQL without ActiveRecord parameterisation
-- Actions missing strong params or accepting raw params
-- Sensitive data exposed in serializer or log output
-- Hardcoded secrets, tokens, or credentials""",
-    ),
-    (
-        "test_coverage",
-        """\
-- New public methods without unit specs
-- New endpoints without request specs covering success, 401 (unauthorized), and 422 (invalid input)
-- Context blocks that don't start with 'when', 'with', or 'without' (RSpec convention)
-- Missing factory definitions for new models or associations
-- Tests that call real external services instead of stubbing them
-- Specs that assert implementation details rather than behaviour""",
-    ),
-    (
-        "conventions_and_migrations",
-        """\
-- Business logic inline in controller actions (belongs in a service object)
-- Rubocop-flagged violations in the diff
-- Migrations that: add a NOT NULL column without a default or data migration, lack `down` / reversible
-- Foreign keys in migrations without a corresponding `add_index`
-- Background jobs that are non-idempotent or lack an explicit queue
-- Rails anti-patterns: find instead of find_by!, rescue Exception, memoization with ||= on falsy values""",
-    ),
-]
+# What each reviewer checks comes from the stack's checklist (migite/checklists.py,
+# prompts/checklists/<stack>.md). The rails one is the default when no --stack is
+# given; main() loads the stack's own, with any prompts.dir override on top.
+MIGITE_HOME = Path(__file__).resolve().parents[2]   # migite/tools/<x>.py → the checkout
+RAILS_CHECKLIST = checklists_lib.load("rails", MIGITE_HOME)
+PR_REVIEW_DIMENSIONS = RAILS_CHECKLIST.pr_review_dimensions()
 
 
 # ── Agent call ───────────────────────────────────────────────────────────────────
@@ -104,6 +69,12 @@ class PRReviewState(TypedDict):
     output: str
     skip_tests: bool
     jira: str
+    stack: str              # rails, generic or a stacks.<name> profile
+    dimensions: list        # [(dimension, checks)] from the stack's checklist
+    expertise: str          # "a senior <expertise> engineer"
+    refute_how: str | None  # the checklist's refute section; None = verify.HOW_TO_WORK
+    lint_log_file: str      # a profile's lint / test output, run by bin/migite-pr-review
+    test_log_file: str
     diff: str
     commits: str
     changed_files: list
@@ -125,6 +96,8 @@ class DimensionInput(TypedDict):
     rubocop_log: str
     rspec_log: str
     branch: str
+    stack: str
+    expertise: str
 
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────────
@@ -165,7 +138,7 @@ def load_pr(state: PRReviewState) -> dict:
         full = Path(repo_root) / rel_path
         try:
             content = full.read_text(errors="replace")[:2500]
-            chunk = f"### {rel_path}\n```ruby\n{content}\n```"
+            chunk = f"### {rel_path}\n```{checklists_lib.fence(state.get('stack', 'rails'), rel_path)}\n{content}\n```"
             file_parts.append(chunk)
             total += len(chunk)
         except Exception:
@@ -175,7 +148,16 @@ def load_pr(state: PRReviewState) -> dict:
     rubocop_log = ""
     rspec_log   = ""
 
-    if not state["skip_tests"]:
+    stack = state.get("stack", "rails")
+    if not state["skip_tests"] and stack != "rails":
+        # bin/migite-pr-review ran a profile's lint and tests (lib/stack.sh); generic has neither.
+        def profile_log(path: str, kind: str) -> str:
+            if path and Path(path).is_file():
+                return Path(path).read_text(errors="replace")[:3000]
+            return f"(not run: the {stack} stack has no {kind} command)"
+        rubocop_log = profile_log(state.get("lint_log_file", ""), "lint")
+        rspec_log = profile_log(state.get("test_log_file", ""), "test")
+    elif not state["skip_tests"]:
         ruby_src = [f for f in changed_files if f.endswith(".rb") and not f.endswith("_spec.rb")]
         spec_files = [f for f in changed_files if f.endswith("_spec.rb")]
 
@@ -212,7 +194,8 @@ def load_pr(state: PRReviewState) -> dict:
 
 
 def route_to_reviewers(state: PRReviewState) -> list[Send]:
-    print(f"  ▶ Dispatching {len(PR_REVIEW_DIMENSIONS)} parallel reviewers", flush=True)
+    dimensions = state.get("dimensions") or PR_REVIEW_DIMENSIONS
+    print(f"  ▶ Dispatching {len(dimensions)} parallel reviewers", flush=True)
     return [
         Send("review_dimension", {
             "dimension":    dim,
@@ -223,8 +206,10 @@ def route_to_reviewers(state: PRReviewState) -> list[Send]:
             "rubocop_log":  state["rubocop_log"],
             "rspec_log":    state["rspec_log"],
             "branch":       state["branch"],
+            "stack":        state.get("stack", "rails"),
+            "expertise":    state.get("expertise", "Rails"),
         })
-        for dim, checks in PR_REVIEW_DIMENSIONS
+        for dim, checks in dimensions
     ]
 
 
@@ -232,7 +217,8 @@ def review_dimension(state: DimensionInput) -> dict:
     dim = state["dimension"]
     print(f"    ◦ {dim}  ({gateway.model_for(f'pr_review_{dim}') or 'default'})", flush=True)
 
-    prompt = f"""You are a senior Rails engineer reviewing a pull request on branch **{state['branch']}**.
+    lint_label, test_label = checklists_lib.log_labels(state.get("stack", "rails"))
+    prompt = f"""You are a senior {state.get('expertise', 'Rails')} engineer reviewing a pull request on branch **{state['branch']}**.
 Your focus: **{dim}** only. Do not repeat issues covered by other dimensions.
 
 ## Commits
@@ -244,10 +230,10 @@ Your focus: **{dim}** only. Do not repeat issues covered by other dimensions.
 ## Full file contents (context)
 {state['file_contents'][:6000]}
 
-## Rubocop
+## {lint_label}
 {state['rubocop_log'][:1500] or '(not run)'}
 
-## RSpec
+## {test_label}
 {state['rspec_log'][:1500] or '(not run)'}
 
 Check for:
@@ -329,6 +315,8 @@ def verify_findings(state: PRReviewState) -> dict:
         read_file=verify.make_reader(state["repo_root"], ref=state["branch"]),
         extra=state["diff"],
         context=context,
+        expertise=state.get("expertise", "Rails"),
+        how_to_work=state.get("refute_how"),
     )
     return {"verified": blocks, "refuted": refuted}
 
@@ -461,7 +449,10 @@ def main() -> None:
     ap.add_argument("--base",       default=None, help="Base branch (default: auto-detect origin/HEAD, then main/master/develop)")
     ap.add_argument("--repo-root",  required=True)
     ap.add_argument("--output",     default="", help="Output file path (default: vault)")
-    ap.add_argument("--skip-tests", action="store_true", help="Skip rubocop + rspec")
+    ap.add_argument("--skip-tests", action="store_true", help="Skip the lint and tests (rubocop + rspec on rails)")
+    ap.add_argument("--stack",      default="rails", help="rails, generic or a stacks.<name> profile: picks the checklist")
+    ap.add_argument("--lint-log",   default="", help="A stack profile's lint output (bin/migite-pr-review runs it)")
+    ap.add_argument("--test-log",   default="", help="A stack profile's test output (bin/migite-pr-review runs it)")
     ap.add_argument("--jira",       default="", help="Jira ticket key or URL (optional — groups this review under the ticket's existing folder)")
     args = ap.parse_args()
 
@@ -483,6 +474,12 @@ def main() -> None:
 
     if not args.base:
         args.base = paths.detect_base_branch(args.repo_root)
+    try:
+        checklist = checklists_lib.load(args.stack, MIGITE_HOME, cfg.override_dir("prompts", args.repo_root))
+    except checklists_lib.ChecklistError as e:
+        print(f"✘ {e}", file=sys.stderr)
+        sys.exit(1)
+    dimensions = checklist.pr_review_dimensions()
 
     jira = args.jira
     jira_key = None
@@ -526,8 +523,9 @@ def main() -> None:
         else str(Path(VAULT_BASE) / org / repo_name / f"pr-review-{safe_branch}-{today}.md")
     )
 
-    print(f"\n  migite-pr-review | " + "  ".join(f"{d}={gateway.model_for(f'pr_review_{d}') or 'default'}" for d, _ in PR_REVIEW_DIMENSIONS) + f"  refute={gateway.model_for(verify.REFUTE_ROLE) or 'default'}  verdict={gateway.model_for('pr_verdict') or 'default'}", flush=True)
-    print(f"  Branch: {args.branch}  Base: {args.base}  Repo: {org}/{repo_name}", flush=True)
+    print(f"\n  migite-pr-review | " + "  ".join(f"{d}={gateway.model_for(f'pr_review_{d}') or 'default'}" for d, _ in dimensions) + f"  refute={gateway.model_for(verify.REFUTE_ROLE) or 'default'}  verdict={gateway.model_for('pr_verdict') or 'default'}", flush=True)
+    print(f"  Branch: {args.branch}  Base: {args.base}  Repo: {org}/{repo_name}  Stack: {args.stack}", flush=True)
+    print(f"  Checklist: {' + '.join(checklist.files)}", flush=True)
     if jira:
         print(f"  Jira: {jira}", flush=True)
 
@@ -540,6 +538,12 @@ def main() -> None:
             "output":        output,
             "skip_tests":    args.skip_tests,
             "jira":          jira,
+            "stack":         args.stack,
+            "dimensions":    dimensions,
+            "expertise":     checklist.expertise,
+            "refute_how":    checklist.refute,
+            "lint_log_file": args.lint_log,
+            "test_log_file": args.test_log,
             "diff":          "",
             "commits":       "",
             "changed_files": [],

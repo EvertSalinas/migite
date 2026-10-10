@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# lib/gate.sh - the human gates: banner, review verdict, commit context.
+# lib/gate.sh - the human gates: banner, review verdict, commit context, and the
+# answers they take under --automata.
 #
 # Reads the run's globals (REVIEW_FILE, RSPEC_LOG, RUBOCOP_FINAL_*, TOOLING_ERROR,
-# FRONTEND_LINT_LOG, FRONTEND_LINT_DIRTY, BROWSER_CHECK_FILE) at call time;
-# sets $GATE_CHOICE.
+# FRONTEND_LINT_LOG, FRONTEND_LINT_DIRTY, BROWSER_CHECK_FILE, and for a stack
+# profile STACK_LINT_RESULT / STACK_TEST_RESULT) at call time; sets $GATE_CHOICE.
 
-# read_gate_choice <banner-line> <prompt-text> — sets $GATE_CHOICE
+# read_gate_choice <banner-line> <prompt-text> [automata-answer] — sets $GATE_CHOICE
 # Prints the standard gate banner then reads one line of input. Must be called
 # directly (not via command substitution) so the interactive prompt stays visible.
+# Under --automata nothing is read: the gate takes <automata-answer>, printed after
+# the prompt. A gate without one stops the run rather than wait for input that
+# never comes.
 read_gate_choice() {
   local banner="$1" prompt="$2"
   echo ""
@@ -15,7 +19,57 @@ read_gate_choice() {
   echo -e "${BOLD}  ${banner}${RESET}"
   echo -e "${BOLD}────────────────────────────────────────${RESET}"
   echo ""
+  if automata; then
+    [[ $# -ge 3 ]] || error "The '$banner' gate has no --automata answer"
+    read_answer GATE_CHOICE "$(echo -e "${YELLOW}${prompt}${RESET}")" "$3"
+    return 0
+  fi
   read -r -p "$(echo -e "${YELLOW}${prompt}${RESET}")" GATE_CHOICE
+}
+
+# read_answer <var> <prompt> <automata-answer> - one line of input into <var>,
+# for a prompt that isn't a gate (the task type, the TDD question, ...). Under
+# --automata nothing is read: <var> gets <automata-answer>, printed after the
+# prompt so the log shows what was decided.
+read_answer() {
+  local _ra_var="$1" _ra_prompt="$2" _ra_answer="$3"
+  if automata; then
+    echo -e "${_ra_prompt}${_ra_answer:-(Enter)}  ${CYAN}(--automata)${RESET}"
+    printf -v "$_ra_var" '%s' "$_ra_answer"
+    return 0
+  fi
+  read -r -p "$_ra_prompt" "${_ra_var?}"
+}
+
+# automata_commit_gate <policy> <blockers> - the commit gate's decision under
+# --automata once its fix rounds are spent (automata_fix_round_due), where nobody
+# can override: <blockers> is _commit_gate_blockers' output (lib/phases/review.sh),
+# one per line. Returns 0 to approve: nothing blocks, or gates.commit.policy is
+# lenient (the blockers are printed; the run will exit 3). Returns 2 under strict
+# with blockers, printed: the run stops at the gate with that exit status.
+automata_commit_gate() {
+  local policy="$1" blockers="$2"
+  [[ -z "$blockers" ]] && return 0
+  if [[ "$policy" == "strict" ]]; then
+    warn "gates.commit.policy is strict and blockers remain - --automata stops at the commit gate:"
+    printf '%s\n' "$blockers" | sed 's/^/    - /'
+    return 2
+  fi
+  warn "Approving over blockers (--automata, gates.commit.policy: lenient); the run will exit 3:"
+  printf '%s\n' "$blockers" | sed 's/^/    - /'
+  return 0
+}
+
+# automata_fix_round_due <blockers> <rounds-done> <max-rounds> - true when the
+# commit gate under --automata should answer f (the agent fixes the findings, then
+# lint, tests and the review run again) before the policy decides: blockers remain,
+# fewer than gates.commit.automata_fix_rounds rounds ran in this invocation, and at
+# least one blocker is in the code. A tooling error alone is the toolchain, which a
+# fix session can't repair.
+automata_fix_round_due() {
+  local blockers="$1" done="$2" max="$3"
+  [[ -n "$blockers" && "$done" -lt "$max" ]] || return 1
+  grep -qv '^tooling error: ' <<< "$blockers"
 }
 
 # review_verdict <review.md> — echoes one of: needs_fixes | ready | unknown
@@ -102,8 +156,23 @@ show_commit_context() {
     fi
   fi
 
+  # A stack profile's lint and tests, decided by exit code (run_stack_review_checks
+  # in lib/phases/review.sh); the Specs / Rubocop lines below are Rails' patterns.
+  if [[ -n "${STACK_TEST_RESULT:-}${STACK_LINT_RESULT:-}" ]]; then
+    case "${STACK_TEST_RESULT:-}" in
+      failed)      echo -e "  Tests:   ${RED}${BOLD}⚠ failed - check $RSPEC_LOG before approving${RESET}" ;;
+      unavailable) echo -e "  Tests:   ${RED}${BOLD}⚠ could not start - see the tooling error above${RESET}" ;;
+      skipped)     echo -e "  Tests:   ${YELLOW}not run ($(head -1 "$RSPEC_LOG" 2>/dev/null | sed 's/^Skipped: //'))${RESET}" ;;
+      passed)      echo -e "  Tests:   ${GREEN}passed${RESET}" ;;
+    esac
+    case "${STACK_LINT_RESULT:-}" in
+      failed)      echo -e "  Lint:    ${RED}${BOLD}problems remain - check $RUBOCOP_LOG${RESET}" ;;
+      unavailable) echo -e "  Lint:    ${RED}${BOLD}⚠ could not start - see the tooling error above${RESET}" ;;
+      skipped)     echo -e "  Lint:    ${YELLOW}not run ($(head -1 "$RUBOCOP_LOG" 2>/dev/null | sed 's/^Skipped: //'))${RESET}" ;;
+      passed)      echo -e "  Lint:    ${GREEN}clean${RESET}" ;;
+    esac
   # Spec failures / tooling failures (via tooling_failed — one pattern list)
-  if [[ -f "${RSPEC_LOG:-}" ]]; then
+  elif [[ -f "${RSPEC_LOG:-}" ]]; then
     local failure_line spec_tooling_msg
     failure_line=$(grep -oE '[1-9][0-9]* failure[s]?' "$RSPEC_LOG" | head -1 || echo "")
     if [[ -n "$failure_line" ]]; then
@@ -117,8 +186,10 @@ show_commit_context() {
     fi
   fi
 
-  # Rubocop post-review state
-  if [[ -n "${RUBOCOP_FINAL_OFFENSES:-}" && "${RUBOCOP_FINAL_OFFENSES}" != "0" ]]; then
+  # Rubocop post-review state (a stack profile's lint is shown above)
+  if [[ -n "${STACK_TEST_RESULT:-}${STACK_LINT_RESULT:-}" ]]; then
+    :
+  elif [[ -n "${RUBOCOP_FINAL_OFFENSES:-}" && "${RUBOCOP_FINAL_OFFENSES}" != "0" ]]; then
     echo -e "  Rubocop: ${RED}${BOLD}$RUBOCOP_FINAL_OFFENSES offense(s) remain${RESET}"
   elif [[ -n "${RUBOCOP_FINAL_LOG:-}" && -f "$RUBOCOP_FINAL_LOG" ]]; then
     echo -e "  Rubocop: ${GREEN}clean${RESET}"
@@ -143,10 +214,12 @@ show_commit_context() {
     esac
   fi
 
-  # Running total from the usage ledger (headless calls only), with the soft budget cap
-  local cost_line
+  # Running total from the usage ledger (headless calls, and the sessions so far on an agent
+  # that reports them), with the soft budget cap
+  local cost_line covers="headless calls only"
   if cost_line=$(run_cost_so_far); then
-    echo -e "  Cost:    ${cost_line} so far (headless calls only)"
+    agent_supports session_usage && covers="headless calls and sessions"
+    echo -e "  Cost:    ${cost_line} so far (${covers})"
     local cap="${MIGITE_CFG_BUDGET_MAX_USD_PER_RUN:-}"
     if [[ -n "$cap" ]]; then
       local spent="${cost_line##*\$}"

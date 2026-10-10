@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # lib/stack.sh - the project's stack: detection, tooling, and changed files.
 #
-# A stack is a `stack_<name>_detect` / `stack_<name>_app_root` function pair;
-# everything that runs a stack's linter or test runner (bundle exec, rubocop,
-# rspec) or lists the files they should look at lives here. Reads $REPO_ROOT,
-# $STACK_OVERRIDE; sets $STACK, $APP_ROOT, $APP_REL_PATH. The frontend half of a
-# Rails app (views, Stimulus/Turbo JavaScript) has its own changed-files list and
-# lint runner below; both are no-ops on a backend-only diff.
+# A built-in stack is a `stack_<name>_detect` / `stack_<name>_app_root` function
+# pair; a configured one is a `stacks.<name>` profile, data in the config (see
+# "Configured profiles" below). Everything that runs a stack's linter or test
+# runner (bundle exec, rubocop, rspec, a profile's commands) or lists the files
+# they should look at lives here. Reads $REPO_ROOT, $STACK_OVERRIDE; sets $STACK,
+# $APP_ROOT, $APP_REL_PATH, $STACK_DETECTED_BY. The frontend half of a Rails app
+# (views, Stimulus/Turbo JavaScript) has its own changed-files list and lint
+# runner below; both are no-ops on a backend-only diff.
 
 # ── Stack profiles ────────────────────────────────────────────────────────────
-# A stack is a `stack_<name>_detect` / `stack_<name>_app_root` function pair.
-# detect_stack() tries STACK_PROFILES in order and dispatches to the first
-# match — adding a stack means registering one more pair here, not adding a
-# branch to detect_stack() or to any caller. `generic` must stay last — it's
+# A built-in stack is a `stack_<name>_detect` / `stack_<name>_app_root` function
+# pair. detect_stack() tries the configured `stacks.<name>` profiles first, then
+# STACK_PROFILES in order, and dispatches to the first match. A new language is
+# a config profile, not another pair here. `generic` must stay last — it's
 # the catch-all that lets migite run on any project, not just Rails: review.sh
 # skips rubocop/rspec entirely when $STACK == "generic", and migite-plan uses
 # a generic file-glob set instead of the Rails-MVC EXPLORE_AREAS.
@@ -65,13 +67,80 @@ stack_generic_app_root() {
   APP_REL_PATH=""
 }
 
-# detect_stack — sets $STACK, then dispatches to the matched profile's
-# _app_root to set $APP_ROOT/$APP_REL_PATH. Honors an explicit $STACK_OVERRIDE
-# (set via migite's --stack flag) before trying STACK_PROFILES in order.
+# standalone_stack <args...> - the stack migite-audit and migite-pr-review key their
+# checklist by: --stack in <args>, else `stack:` in the config, else detection, as
+# migite does. An unknown --stack is an error. A repo detection can't place (several
+# Gemfiles one level down) is still rails: these tools never run from an app dir.
+standalone_stack() {
+  local override="" detected=""
+  while [[ $# -gt 0 ]]; do
+    [[ "$1" == "--stack" ]] && override="${2:-}"
+    shift
+  done
+  [[ -z "$override" && "$(cfg stack auto)" != "auto" ]] && override="$(cfg stack)"
+  if [[ -n "$override" ]]; then
+    if stack_is_profile "$override" || [[ " ${STACK_PROFILES[*]} " == *" $override "* ]]; then
+      echo "$override"
+      return 0
+    fi
+    local known
+    known="$(cfg stacks) ${STACK_PROFILES[*]}"
+    error "Unknown stack '$override' - supported: ${known# }"
+  fi
+  # shellcheck disable=SC2030,SC2031  # STACK is set inside the subshell on purpose
+  detected=$( (STACK_OVERRIDE="" && detect_stack >/dev/null 2>&1 && echo "$STACK") || true )
+  echo "${detected:-rails}"
+}
+
+# ── Configured profiles ───────────────────────────────────────────────────────
+# The third kind of stack: `stacks.<name>` in the config, data instead of a
+# function pair. A profile names its detect files, its lint / autofix / test
+# commands, and the globs (`source`, `specs`) that pick each command's changed
+# files out of changed_all_files. Exit codes decide pass or fail. Rails keeps its
+# own code: the tooling_failed patterns, the app root one level down, rubocop
+# autocorrect, the full-suite fallback and the frontend linters have no profile
+# equivalent. The contract is in docs/configuration.md (stacks).
+
+# stack_is_profile [name] - true when <name> (default $STACK) is a configured profile.
+stack_is_profile() {
+  local name="${1:-${STACK:-}}"
+  [[ -n "$name" && " $(cfg stacks) " == *" $name "* ]]
+}
+
+# stack_profile_detect <name> - true when any of the profile's detect patterns
+# (paths or globs, relative to $REPO_ROOT) exists; sets STACK_DETECTED_BY to that
+# pattern. A profile without detect patterns never matches: only `stack:` or
+# --stack picks it.
+stack_profile_detect() {
+  local pattern
+  while IFS= read -r pattern; do
+    [[ -n "$pattern" ]] || continue
+    if compgen -G "$REPO_ROOT/$pattern" >/dev/null; then
+      # shellcheck disable=SC2034  # read by bin/migite and lib/doctor.sh
+      STACK_DETECTED_BY="$pattern"
+      return 0
+    fi
+  done <<< "$(cfg "stacks.$1.detect")"
+  return 1
+}
+
+# detect_stack — sets $STACK, then dispatches to the matched stack's app root
+# to set $APP_ROOT/$APP_REL_PATH. Honors an explicit $STACK_OVERRIDE (--stack,
+# or `stack:` in the config) first, then tries the configured profiles in
+# config order (a profile's app root is the repo root), then STACK_PROFILES.
 detect_stack() {
+  # shellcheck disable=SC2034  # read by bin/migite and lib/doctor.sh
+  STACK_DETECTED_BY=""
+  local -a profiles=()
+  read -r -a profiles <<< "$(cfg stacks)"
   if [[ -n "${STACK_OVERRIDE:-}" ]]; then
+    if stack_is_profile "$STACK_OVERRIDE"; then
+      STACK="$STACK_OVERRIDE"
+      stack_generic_app_root
+      return
+    fi
     if [[ ! " ${STACK_PROFILES[*]} " == *" $STACK_OVERRIDE "* ]]; then
-      error "Unknown stack '$STACK_OVERRIDE' — supported: ${STACK_PROFILES[*]}"
+      error "Unknown stack '$STACK_OVERRIDE' — supported: ${profiles[*]+"${profiles[*]} "}${STACK_PROFILES[*]}"
     fi
     STACK="$STACK_OVERRIDE"
     "stack_${STACK}_app_root"
@@ -79,6 +148,13 @@ detect_stack() {
   fi
 
   local s
+  for s in ${profiles[@]+"${profiles[@]}"}; do
+    if stack_profile_detect "$s"; then
+      STACK="$s"
+      stack_generic_app_root
+      return
+    fi
+  done
   for s in "${STACK_PROFILES[@]}"; do
     if "stack_${s}_detect"; then
       STACK="$s"
@@ -174,6 +250,33 @@ changed_all_files() {
   { git diff "$base_branch" --name-only --diff-filter=ACMR
     git ls-files --others --exclude-standard
   } | grep -v '^scratchpad/' | sort -u
+}
+
+# changed_stack_files <base_branch> <source|specs> - the changed files a profile
+# command gets: changed_all_files filtered by the profile's <field> globs, one
+# per line. A glob matches the repo-relative path: `*` crosses `/` (`*.js` is
+# every .js file, `src/*` all of src/), and `**/` is zero or more directories
+# (`**/test_*.py` is a test_*.py at any depth). No globs means every changed file.
+changed_stack_files() {
+  local base_branch="$1" field="$2" f g
+  local -a globs=()
+  while IFS= read -r g; do
+    [[ -n "$g" ]] && globs+=("${g//\*\*\//@(|*/)}")
+  done <<< "$(cfg "stacks.$STACK.$field")"
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    if [[ ${#globs[@]} -eq 0 ]]; then
+      echo "$f"
+      continue
+    fi
+    for g in "${globs[@]}"; do
+      # shellcheck disable=SC2053  # $g is a glob on purpose
+      if [[ "$f" == $g ]]; then
+        echo "$f"
+        break
+      fi
+    done
+  done < <(changed_all_files "$base_branch")
 }
 
 # detect_base_branch — echoes the repo's default branch for diff scoping.
@@ -414,6 +517,81 @@ run_rspec_check() {
   app_files=$(strip_app_prefix "$files")
   # shellcheck disable=SC2086
   bundle_exec rspec $app_files 2>&1 | tee "$log"
+}
+
+# run_stack_command <lint|autofix|test> <files> <log> - runs the profile's
+# command from $APP_ROOT with stdin closed (a prompt can't hang the run) and tees
+# its output to <log>. `{files}` in the command becomes <files> (one per line)
+# as separate, quoted arguments; a command without it runs as written. Returns
+# the command's exit status - callers own it: `run_stack_command ... || rc=$?`.
+run_stack_command() {
+  local kind="$1" files="$2" log="$3" cmd f
+  local placeholder='"$@"'
+  local -a args=()
+  cmd="$(cfg "stacks.$STACK.$kind")"
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && args+=("$f")
+  done <<< "$files"
+  (cd "$APP_ROOT" && bash -c "${cmd//"{files}"/$placeholder}" "migite-$kind" ${args[@]+"${args[@]}"}) \
+    < /dev/null 2>&1 | tee "$log"
+  return "${PIPESTATUS[0]}"
+}
+
+# run_stack_lint <base_branch> <log> [autofix=false] - the profile's lint over
+# the changed files its `source` globs select. With autofix=true its `autofix`
+# command runs first, writing to <log> with an -autofix suffix; a fixer's exit
+# status says nothing about what's left, so lint decides. Returns lint's exit
+# status, or 0 with a "Skipped: <why>" first line in <log> when nothing ran.
+run_stack_lint() {
+  local base_branch="$1" log="$2" autofix="${3:-false}" files lint fix=""
+  lint="$(cfg "stacks.$STACK.lint")"
+  [[ "$autofix" == "true" ]] && fix="$(cfg "stacks.$STACK.autofix")"
+  if [[ -z "$lint" && -z "$fix" ]]; then
+    echo "Skipped: no lint command (stacks.$STACK.lint)." > "$log"
+    return 0
+  fi
+  files=$(changed_stack_files "$base_branch" source)
+  if [[ -z "$files" ]]; then
+    echo "Skipped: no changed files match stacks.$STACK.source." > "$log"
+    return 0
+  fi
+  [[ -n "$fix" ]] && { run_stack_command autofix "$files" "${log%.txt}-autofix.txt" || true; }
+  if [[ -z "$lint" ]]; then
+    echo "Skipped: autofix ran, but there is no lint command (stacks.$STACK.lint) to check what's left." > "$log"
+    return 0
+  fi
+  run_stack_command lint "$files" "$log"
+}
+
+# run_stack_test <base_branch> <log> - the profile's test command over the
+# changed files its `specs` globs select. Returns its exit status, or 0 with a
+# "Skipped: <why>" first line in <log> when nothing ran. There is no full-suite
+# fallback: a test command without {files} is already the whole suite.
+run_stack_test() {
+  local base_branch="$1" log="$2" files
+  if [[ -z "$(cfg "stacks.$STACK.test")" ]]; then
+    echo "Skipped: no test command (stacks.$STACK.test)." > "$log"
+    return 0
+  fi
+  files=$(changed_stack_files "$base_branch" specs)
+  if [[ -z "$files" ]]; then
+    echo "Skipped: no changed files match stacks.$STACK.specs." > "$log"
+    return 0
+  fi
+  run_stack_command test "$files" "$log"
+}
+
+# stack_check_result <rc> <log> - what a run_stack_lint / run_stack_test exit
+# status means: passed, failed, skipped (nothing ran; <log> says why), or
+# unavailable (126/127: the command could not start, not installed or not
+# executable - the toolchain's problem, never one to hand the agent).
+stack_check_result() {
+  local rc="$1" log="$2"
+  case "$rc" in
+    0) if [[ "$(head -1 "$log" 2>/dev/null)" == "Skipped: "* ]]; then echo skipped; else echo passed; fi ;;
+    126|127) echo unavailable ;;
+    *) echo failed ;;
+  esac
 }
 
 # truncate_log <file> <max_bytes> — the log, or head+tail when over budget:

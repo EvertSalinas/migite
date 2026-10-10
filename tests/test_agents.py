@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 from migite import agents          # noqa: E402
 from migite import gateway     # noqa: E402
 from migite import config   # noqa: E402
+from migite.agents import claude as claude_agent   # noqa: E402
 
 FAKES = ROOT / "tests"
 
@@ -94,6 +95,33 @@ class ClaudeTest(unittest.TestCase):
         self.assertEqual(launch.argv, ["claude", "--permission-mode", "bypassPermissions", "--", "P"])
         self.assertEqual(launch.shell(), "env -u CLAUDECODE claude --permission-mode bypassPermissions -- P")
         self.assertEqual(self.agent.session_launch(agents.SessionRequest(prompt="P")).argv, ["claude", "--", "P"])
+        self.assertEqual(launch.session_id, "")                   # no id asked for: the CLI picks its own
+
+    def test_a_session_with_an_id_records_under_it(self):
+        launch = self.agent.session_launch(agents.SessionRequest(prompt="P", model="m", session_id="sid-1"))
+        self.assertEqual(launch.argv, ["claude", "--model", "m", "--session-id", "sid-1", "--", "P"])
+        self.assertEqual(launch.session_id, "sid-1")
+
+    def test_prices_reproduce_what_the_cli_reported_for_real_calls(self):
+        # Three headless calls from a real run (bb-3752): the tokens they used, and the
+        # total_cost_usd the CLI reported for them.
+        def usage(inp, out, read, write_1h):
+            return {"input_tokens": inp, "output_tokens": out, "cache_read_input_tokens": read,
+                    "cache_creation_input_tokens": write_1h,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": write_1h}}
+        for model, u, reported in (("claude-opus-5-5", usage(24, 7427, 366742, 41648), 0.5551684),
+                                   ("claude-sonnet-5-5", usage(2, 4765, 3467, 17526), 0.1184514),
+                                   ("claude-haiku-4-5-20251001", usage(10, 958, 0, 9866), 0.024532)):
+            with self.subTest(model=model):
+                self.assertAlmostEqual(claude_agent.price(model, u), reported, places=7)
+
+    def test_price_rates_fast_mode_and_unknown_models(self):
+        million = {"input_tokens": 1_000_000}
+        self.assertAlmostEqual(claude_agent.price("claude-opus-5-5", million), 4.00)
+        self.assertAlmostEqual(claude_agent.price("claude-opus-5-5", {**million, "speed": "fast"}), 8.00)
+        # Cache writes with no TTL split (older CLIs) are priced on the 5-minute rate.
+        self.assertAlmostEqual(claude_agent.price("claude-opus-5-5", {"cache_creation_input_tokens": 1_000_000}), 5.00)
+        self.assertEqual(claude_agent.price("claude-opus-5-7", million), 0.0)   # never priced as its neighbour
 
     def test_parse_envelope(self):
         env = json.dumps({"type": "result", "result": "ok", "is_error": False, "duration_ms": 5, "total_cost_usd": 0.5,
@@ -197,6 +225,14 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual(argv[-1], "P"); self.assertIsNone(launch.stdin)
         argv = self.agent.ask_launch(ask(permission="ask")).argv
         self.assertNotIn("--auto", argv); self.assertNotIn("--model", argv)
+
+    def test_plan_runs_as_the_read_only_plan_agent(self):
+        argv = self.agent.ask_launch(ask(permission="plan")).argv
+        self.assertEqual(argv[argv.index("--agent") + 1], "plan")
+        self.assertNotIn("--auto", argv)
+        self.assertEqual(argv[-1], "P")
+        self.assertEqual(self.agent.session_launch(agents.SessionRequest(prompt="P", permission="plan")).argv,
+                         ["opencode", "--prompt", "P", "--agent", "plan"])
 
     def test_session(self):
         self.assertEqual(self.agent.session_launch(agents.SessionRequest(prompt="P", permission="edits")).argv,

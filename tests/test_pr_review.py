@@ -164,6 +164,56 @@ CONTROLLER = ("module API\n  module V1\n    module Chat\n      module Messages\n
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
+class StackChecklistTest(unittest.TestCase):
+    """The reviewers' checks come from the stack's checklist (prompts/checklists/<stack>.md):
+    a non-Rails repo gets the generic one, never Rails' Pundit and RSpec checks."""
+
+    def setUp(self):
+        self.tool = load_tool()
+        from migite import checklists
+        self.generic = checklists.load("generic", ROOT)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_rails_is_the_default_and_its_checks_are_unchanged(self):
+        self.assertIn("Pundit policy", dict(self.tool.PR_REVIEW_DIMENSIONS)["security"])
+
+    def test_the_reviewers_get_the_stacks_checks_and_expertise(self):
+        sends = self.tool.route_to_reviewers({
+            "diff": "", "commits": "", "file_contents": "", "rubocop_log": "", "rspec_log": "", "branch": "b",
+            "stack": "node", "expertise": "software", "dimensions": self.generic.pr_review_dimensions()})
+        self.assertEqual([s.arg["dimension"] for s in sends], [d for d, _ in self.generic.pr_review_dimensions()])
+        security = next(s.arg for s in sends if s.arg["dimension"] == "security")
+        self.assertNotIn("Pundit", security["checks"])
+        prompts = []
+        self.tool.call_agent = lambda prompt, role, label="": prompts.append(prompt) or "✅ No issues."
+        self.tool.review_dimension({**security, "rubocop_log": "LINT", "rspec_log": "TEST"})
+        self.assertIn("You are a senior software engineer", prompts[0])
+        self.assertIn("## Lint\nLINT", prompts[0])
+        self.assertIn("## Test\nTEST", prompts[0])
+
+    def test_a_profiles_lint_and_test_logs_are_read_and_bundle_never_runs(self):
+        (self.repo / "src").mkdir()
+        (self.repo / "src" / "a.ts").write_text("export const a = 1\n")
+        (self.repo / "lint.txt").write_text("1 problem")
+        commands = []
+
+        def run_cmd(cmd, cwd, timeout=60):
+            commands.append(cmd)
+            return {"--name-only": "src/a.ts", "log": "abc fix"}.get(next((k for k in ("--name-only", "log") if k in cmd), ""), "+diff")
+        self.tool.run_cmd = run_cmd
+        out = self.tool.load_pr({"branch": "b", "base": "main", "repo_root": str(self.repo), "skip_tests": False,
+                                 "stack": "node", "lint_log_file": str(self.repo / "lint.txt"), "test_log_file": ""})
+        self.assertFalse([c for c in commands if "bundle exec" in c])
+        self.assertEqual(out["rubocop_log"], "1 problem")
+        self.assertIn("no test command", out["rspec_log"])
+        self.assertIn("```typescript", out["file_contents"])
+
+
+@unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
 class VerificationStepTest(unittest.TestCase):
     def setUp(self):
         self.tool = load_tool()

@@ -128,7 +128,7 @@ See [Phase 3](../phases.md#phase-3-review).
   Reason:  The 422 path for an invoice without line items is unhandled and untested.
   Specs:   all passed
   Rubocop: clean
-  Cost:    17 calls, $2.94 so far (headless calls only)
+  Cost:    17 calls, $2.94 so far (headless calls and sessions)
 ────────────────────────────────────────────
 Proceed? [y/f/e/n/q] (y=commit, f=Claude Code fixes, e=edit directly, n=fix it yourself, q=abort):
 ```
@@ -247,6 +247,21 @@ migite "add retry with backoff to the uploader" --stack generic
 layers. Detection picks it automatically when there is no `Gemfile`; pass `--stack` (or set
 `stack: generic` in the repo's `.migite.yml`) when detection guesses wrong, for example in a
 monorepo with a stray Gemfile.
+
+To have heal and review run the repo's own linter and tests, describe them in a
+[`stacks.<name>` profile](../configuration.md#stacks) in the repo's `.migite.yml`:
+
+```yaml
+stacks:
+  node:
+    detect: [package.json]
+    source: ["*.js", "*.ts"]
+    specs: ["*.test.js", "*.test.ts"]
+    lint: npx eslint {files}
+    test: npx jest {files}
+```
+
+Detection then picks `node` (profiles come before `rails`), and the run's `Stack:` line says so.
 
 ### Resume after stopping
 

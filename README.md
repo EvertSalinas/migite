@@ -12,7 +12,7 @@ migite --jira BB-1234 --type feature      # plan → gate → implement → heal
 ```
 
 - **Two human gates**, one after the plan and one before the commit, with approve / AI-refine / hand-edit / redo / abort at each.
-- **Autonomous everywhere else**: 7 parallel codebase explorers, an architecture critic, an auto-heal loop for lint and tests, 4 specialist reviewers, a typed verdict.
+- **Autonomous everywhere else**: 7 parallel codebase explorers (or the agent's own plan mode, with `plan.strategy: native`), an architecture critic, an auto-heal loop for lint and tests, 4 specialist reviewers, a typed verdict.
 - **Memory**: every artifact mirrored to a markdown vault (Obsidian-friendly), and a per-repo `knowledge.md` injected into every future plan.
 - **Machine-readable**: `plan.json`, `review.json`, and a per-run usage ledger with cost per model.
 - **Configurable**: one layered `.migite.yml` for models, effort, gates, permissions, prompts, budget.
@@ -122,7 +122,7 @@ Proceed with plan? [y/f/e/n/q] (y=approve, f=feedback refine, e=edit directly, n
   Reason:  Implementation matches the plan; the one warning is a missing request spec for the 422 path.
   Specs:   all passed
   Rubocop: clean
-  Cost:    16 calls, $2.87 so far (headless calls only)
+  Cost:    16 calls, $2.87 so far (headless calls and sessions)
 ────────────────────────────────────────────
 Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourself, q=abort): y
 
@@ -134,11 +134,11 @@ Proceed? [y/f/e/n/q] (y=commit, f=Claude fixes, e=edit directly, n=fix it yourse
 ✔ Workflow complete.
 
 ── Usage ───────────────────────────────────────
-  model                              calls  in+cache tok  out tok    time     cost
-  claude-opus-5-5                        6       241,318    9,204    212s    $2.41
-  claude-haiku-4-5-20251001              7       165,438    2,710     41s    $0.33
-  claude-sonnet-5                        5        98,120    4,411     64s    $0.44
-  total                                 18       504,876   16,325    317s    $3.18
+  model                              calls turns  in+cache tok cached  out tok    time     cost
+  claude-opus-5-5                        6     9       241,318    52%    9,204    212s    $2.41
+  claude-haiku-4-5-20251001              7    41       165,438    71%    2,710     41s    $0.33
+  claude-sonnet-5                        5    12        98,120    48%    4,411     64s    $0.44
+  total                                 18    62       504,876    57%   16,325    317s    $3.18
 ```
 
 `y` at the commit gate does not commit. It ends the review loop; the commit is yours to make, and
@@ -154,6 +154,7 @@ blockers remain and a capital `Y` overrides with a record.
 |-----------|---------|--------|
 | Repo exists, work is decided, ready to build | `migite --jira BB-1234` | plan, review, PR description, knowledge |
 | Feedback arrived after implementation (PR comments, QA) | `migite --amend "must be idempotent on retry"` | `NN-amend-<slug>/amendment.md`, then the normal implement → review flow |
+| Building from CI, a schedule, or another agent | `migite --automata --jira BB-1234` | the same run with no prompts; the exit status says ready (0), blocked (2) or finished over blockers (3), see [docs/migite.md](./docs/migite.md#automata) |
 | Big initiative, unsure if it's worth doing | `migite-explore "extract billing into a service" --intakes` | feasibility doc with a PROCEED / SPIKE / DEFER / NOT WORTH IT verdict, adversarial challenge, one intake per workstream |
 | No repo yet, defining a new project | `migite-blueprint --brief brief.md --name billing-api` | blueprint, milestone intakes, seed `knowledge.md` |
 | What's wrong with this codebase? | `migite-audit --focus jobs` | ranked findings, feedable into `migite --audit` |
@@ -220,7 +221,9 @@ a fallback path. The vault is plain markdown at `~/dev-log` by default; point `v
 Obsidian vault if you want the `[[wikilinks]]` to resolve.
 
 Stacks: `rails` is detected from a `Gemfile` at the repo root or one level down; anything else is
-`generic`, which runs the whole pipeline minus lint and tests. See
+`generic`, which runs the whole pipeline minus lint and tests. A node, python or go repo gets its
+own lint and tests from a [`stacks.<name>` profile](./docs/configuration.md#stacks) in the config:
+detect files, commands, and the globs that pick each command's changed files. See
 [`--stack`](./docs/migite.md#stack-values).
 
 ---
@@ -289,9 +292,6 @@ feedback belongs in Issues, where it can be discussed and tracked.
 
 Roughly in the order they are likely to land:
 
-- **Stack profiles as data.** `stack:` can pick `rails` or `generic`; describing detect / lint / autofix / test / globs in `.migite.yml` would make `node`, `python`, and `go` config blocks instead of bash function pairs, and let `migite-audit` / `migite-pr-review` drop their Rails-only checklists.
-- **`--yes`, a non-interactive mode** so migite can run from CI or from another agent. The run manifest it builds on is in: every run writes `run.json` at each phase boundary and resumes from it ([docs/migite.md](./docs/migite.md#resuming-a-run)).
-- **Meter interactive sessions.** Headless calls are in the usage ledger; implement, gate fixes, and the PR description are not, because the CLI only reports usage in `--print` mode.
 - **Verify Cursor, Kimi, and OpenCode live.** The adapters exist and are unit-tested against fake CLIs ([docs/agents.md](./docs/agents.md)); the first real runs should confirm the output shapes and pin default model ids per backend.
 - **CI hardening.** Promote shellcheck warnings to blocking once triaged; add a smoke run of the agents against the fake CLI.
 - **One-line installer** to replace the clone-and-symlink block above.

@@ -31,7 +31,7 @@ migite/                       ← wherever you clone this repo
 ├── lib/                      ← bash, sourced by bin/*; one file per concern, sharing the entrypoint's variables
 │   ├── common.sh             ← colours, log/warn/error, notify, Python resolution + preflights, PYTHONPATH
 │   ├── config.sh             ← load_migite_config, load_agent_info, cfg / prompt_path, use_tmux, `migite config`
-│   ├── stack.sh              ← stack profiles, bundle_exec, rubocop/rspec, changed-file lists, base branch
+│   ├── stack.sh              ← stack detection, bundle_exec, rubocop/rspec, stacks.<name> profile commands, changed-file lists, base branch
 │   ├── agent.sh              ← agent_ask / agent_think / run_phase / spawn_langgraph, usage ledger
 │   ├── vault.sh              ← slugify, stamp_file / sync_artifact / sync_json, resume_from_vault
 │   ├── intake.sh             ← attachments block, knowledge injection, fill_intake_field
@@ -47,7 +47,7 @@ migite/                       ← wherever you clone this repo
 ├── migite/                   ← the Python package; bash runs it as `python -m migite.<module>`
 │   ├── config.py             ← layered config resolver; role → tier → the agent's model
 │   ├── gateway.py            ← the gateway: role → model and effort, capability fallbacks, prompt pointer, process, AgentError, usage ledger
-│   ├── agent_cli.py          ← bash's door to the gateway: ask, session, info, check
+│   ├── agent_cli.py          ← bash's door to the gateway: ask, session, session-usage, info, check
 │   ├── tickets.py            ← ticket parse / fetch / sources; picks the source from tracker.provider
 │   ├── paths.py              ← vault path resolver: org detection, base branch, slugify, run-dir lookup
 │   ├── runstate.py           ← the run manifest (run.json): schema, atomic writes, shell export, find
@@ -58,7 +58,11 @@ migite/                       ← wherever you clone this repo
 │   │   ├── kimi.py           ← Kimi Code
 │   │   └── opencode.py       ← OpenCode
 │   ├── trackers/             ← one module per ticket source: base.py (TicketRef, Ticket, render, parse_ref), jira_format.py, jira_acli.py, jira_agent.py
+│   ├── knowledge.py          ← the knowledge.md entries a prompt gets: recent, or relevant to the task (no langgraph)
+│   ├── keywords.py           ← extract_keywords: the task words migite-plan's explorers and knowledge.py match on
+│   ├── testing_plan.py       ← the testing-plan.md prompt shared by migite-plan and Phase 3, and a CLI bash calls (no langgraph)
 │   ├── verify.py             ← evidence gate and refuter for reviewer findings, shared by review.py and pr_review.py
+│   ├── checklists.py         ← loads prompts/checklists/<stack>.md, with prompts.dir overrides by section
 │   └── tools/                ← the LangGraph tools
 │       ├── plan.py           ← the planner ("migite-plan"), called by Phase 1
 │       ├── review.py         ← the reviewer ("migite-review"), called by Phase 3
@@ -68,6 +72,7 @@ migite/                       ← wherever you clone this repo
 │       └── pr_review.py      ← behind bin/migite-pr-review
 ├── evals/                    ← promptfoo setup that calibrates the refuter against labeled findings (README.md); offline, not part of the package
 ├── prompts/                  ← plan.md, implement.md, review.md, architecture_critic.md (overridable via prompts.dir)
+│   └── checklists/           ← rails.md, generic.md: what migite-review, migite-pr-review and migite-audit check, per stack
 ├── templates/                ← intake templates per --type, and commit.md (the PR-description prompt)
 ├── tests/                    ← run.sh (bash suite), test_*.py (unittest, incl. the adapter contract), fake CLIs per agent, fixtures/
 ├── docs/                     ← this directory, plus improvements.md (the self-improvement log, appended by Phase 4.5)
@@ -93,6 +98,11 @@ there every Python call is `python -m migite.<module>`, so the package, `prompts
   in `migite/gateway.py`, which asks the configured agent's adapter for machine-readable output and appends to the usage ledger
   named by `$MIGITE_USAGE_LEDGER`. tmux panes inherit the tmux server's environment, so the
   wrapper scripts re-export that variable.
+- **Unattended runs.** Under `--automata` (`automata` in `lib/common.sh`), `run_phase` doesn't open a
+  session: `run_phase_headless` sends the same prompt through `agent_ask` on the `session` role,
+  so every backend runs it headless and the gateway meters it like any other call (`ROLE_TOOLS`
+  gives that role the CLI's full toolset). The gates take their answer from `read_gate_choice`'s
+  third argument or `read_answer`, and `migite_exit` sets the exit statuses 2 and 3.
 - **Gemfile one level down.** `migite` always `cd`s to the repo root, but Bundler only searches
   upward for a `Gemfile`. `detect_stack` finds an app directory one level down and every
   `bundle_exec` runs from it, with `strip_app_prefix` rewriting the repo-relative paths `git diff`
@@ -122,7 +132,9 @@ migite-plan \
 
 `--task-file` injects supplementary details from [migite's intake mode](./migite.md#intake-mode)'s "add a separate task.md" prompt into `synthesize_plan` as authoritative context alongside the intake — it's optional and only ever set when that prompt produced a file.
 
-`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria), fetched in `plan.sh` by `migite-ticket` whenever `--jira` is used (Jira REST, or the agent's Atlassian MCP tools as a fallback; see [tickets.md](./tickets.md)), cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context) and the 7 explorers' keyword extraction. `migite-plan` itself never fetches anything - it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
+`--testing-plan-output` is where `testing-plan.md` goes. With `plan.testing_plan_when: review` (config only, no flag) `migite-plan` makes no testing-plan call and writes nothing there: Phase 3 does, through `python -m migite.testing_plan --plan P --out O [--diff F] [--frontend]` (the same prompt, plus the diff; exit 0 writes `--out`, 1 failed call, 2 empty reply, and `--out` is untouched on a non-zero exit).
+
+`--jira-context` is a pre-fetched Jira ticket summary (title, type, priority, status, description, acceptance criteria), fetched in `plan.sh` by `migite-ticket` whenever `--jira` is used (Jira REST, or the agent's Atlassian MCP tools as a fallback; see [tickets.md](./tickets.md)), cached to the scratchpad, and injected into both `synthesize_plan` (as authoritative scope/acceptance-criteria context; the native plan call under `plan.strategy: native`) and the 7 explorers' keyword extraction. `migite-plan` itself never fetches anything - it only reads whatever file this flag points to, same as `--audit`/`--blueprint`/`--task-file`.
 
 `--base-branch` sets the branch explorers diff against. Omitted, it auto-detects from `origin/HEAD`, then falls back to `main` / `master` / `develop`. `migite` passes its own detected value so both agree.
 
@@ -131,8 +143,11 @@ migite-plan \
 Reads `prompts/plan.md` (plan format + type routing, injected into `synthesize_plan`) and
 `prompts/architecture_critic.md` (the critic checklist) from the directory the script really
 lives in (`Path(__file__).resolve().parents[2]`, the checkout above `migite/tools/`), unless
-`prompts.dir` in the config overrides one. Either file missing is a hard exit-1 — never a silent
-empty prompt. Models come from the config roles `explore` / `think` / `critic`
+`prompts.dir` in the config overrides one. With `plan.strategy: native` it also reads
+`prompts/native_plan.md`, the preamble of the one plan-mode call that replaces the explorers and
+synthesis ([configuration](./configuration.md#plan-strategy)). Any of them missing is a hard
+exit-1 — never a silent empty prompt. Models come from the config roles `explore` / `think` /
+`critic`, and `native_plan` under the native strategy
 ([docs/configuration.md](./configuration.md#models)).
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure (no sentinel written).
@@ -159,7 +174,7 @@ migite-review \
   [--browser-check path/to/browser-check.md]
 ```
 
-`--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades. `--amendment` is repeatable, oldest first; migite passes only the amendments `plan.md` doesn't reflect yet. `--previous` takes the last review's `review-dimensions.json` and re-runs only the dimensions `dims_to_rerun` picks, carrying the clean ones over. `--frontend-files` adds the `frontend` reviewer; `--frontend-lint-log`, `--system-specs` and `--browser-check` give it the erb_lint/eslint log, whether the repo has `spec/system`, and Phase 3.1's `browser-check.md`.
+`--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades (that dimension is dropped when `review.dimensions.testing_plan` is `off`; `dims_to_rerun` and `carried_findings` then never see it). `--amendment` is repeatable, oldest first; migite passes only the amendments `plan.md` doesn't reflect yet. `--previous` takes the last review's `review-dimensions.json` and re-runs only the dimensions `dims_to_rerun` picks, carrying the clean ones over. `--frontend-files` adds the `frontend` reviewer; `--frontend-lint-log`, `--system-specs` and `--browser-check` give it the erb_lint/eslint log, whether the repo has `spec/system`, and Phase 3.1's `browser-check.md`.
 
 **Models used (defaults):** one config role per dimension — `review_correctness` and
 `review_security` on the strong tier (`claude-opus-5-5`), `review_test_coverage` and
@@ -189,7 +204,8 @@ the `--output-format json` envelope: `result`, `usage`, `total_cost_usd`, `durat
 ```json
 {"ts": "...", "tool": "migite-plan", "label": "explore:models", "model": "claude-haiku-4-5-20251001",
  "input_tokens": 10, "output_tokens": 39, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 23624,
- "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1}
+ "cache_creation_5m_input_tokens": 23624, "cache_creation_1h_input_tokens": 0,
+ "cost_usd": 0.0475, "duration_ms": 1407, "ok": true, "turns": 1, "session_id": "3f9c...", "kind": "call"}
 ```
 
 If the CLI doesn't return the envelope (older version, plain-text error) the wrapper passes stdout
@@ -199,18 +215,62 @@ every headless call re-sends Claude Code's own system context (~23k tokens in te
 share of a run's cost and why the summary prints it. The default, `isolated`, drops that context
 for every role that doesn't need it (see [configuration.md](./configuration.md#permissions)).
 
+`cache_creation_5m_input_tokens` and `cache_creation_1h_input_tokens` split
+`cache_creation_input_tokens` by how long the written cache entry lives (Claude Code's
+`usage.cache_creation`), and `session_id` is the CLI session the call ran in. They are there to
+diagnose why a call missed the cache. They are 0 and `""` on CLIs that don't report them, on
+Claude Code versions that predate them, and in ledgers written before they were recorded. The
+calls on a [`plan.chain_sessions`](./configuration.md#plan-chain-sessions) chain share one
+`session_id`.
+
+`kind` is `call` for a headless call and `session` for a `run_phase` session (implement, staged
+stages, TDD specs, the browser check, gate fixes, the PR description). A line without it, from a
+ledger written before sessions were metered, is a call.
+
+**Interactive sessions.** The CLI reports nothing when an interactive session ends, so
+`run_phase` meters it afterwards. `agent_cli session --id-file` gives the session a fresh id when
+the agent's command line can take one (Claude Code's `--session-id <uuid>`) and writes it to
+`$LOG_DIR/<ts>-session-id-<label>.txt`. When the session ends, `meter_session` runs
+`agent_cli session-usage`. That reads the adapter's record of the session: on Claude Code, the
+transcript `~/.claude/projects/<dir>/<id>.jsonl` (or `$CLAUDE_CONFIG_DIR/projects/`) and its
+subagents' transcripts in `<id>/subagents/`. Without an id it uses the newest transcript for the
+working directory written since the session started. The usage is summed per model and appended
+as one line per model, labelled `session:<label>`, `kind: session`:
+
+- Only each line's model, message id, timestamp and `usage` block are read. Message content never
+  reaches the ledger or the log.
+- One API message is written as one line per content block, all repeating the same usage, so
+  lines are counted once per message id. Lines without usage, the CLI's `<synthetic>` messages,
+  turns from before the session started, and usage blocks in a shape it doesn't know are skipped.
+- `cost_usd` comes from `PRICES` in `migite/agents/claude.py`: input, output and cache-read rates
+  per model. Cache writes cost 1.25x input on the 5-minute TTL and 2x on the 1-hour one, and fast
+  mode costs 2x. On real headless calls the table reproduces the CLI's own `total_cost_usd`
+  exactly. A model with no row is recorded at $0 with a notice.
+- `turns` is the number of API messages on that model, and `duration_ms` runs from its first turn
+  to its last.
+- On an agent without the `session_usage` capability, `run_phase` prints one notice per run and
+  records nothing.
+- Metering never fails the run. A session that exits non-zero is metered before its status stops
+  the run.
+- Under `--automata` a session is a headless call on the `session` role. It is metered by `ask`,
+  labelled `session:<label>` with `kind: session`, and never read back a second time.
+
 **`plan.json`** (beside `plan.md`, written by `migite-plan`):
 
 | Field | Meaning |
 |---|---|
+| `strategy` | `langgraph` (explorers + synthesis) or `native` (one call in the agent's plan mode): the planner that wrote the draft, from `plan.strategy` |
+| `strategy_note` | Why `native` was asked for and `langgraph` ran (a backend with no headless plan mode), else `""` |
 | `critic.clean`, `critic.critical/warning/note` | Whether the architecture critic returned the clean signal, and its 🔴/🟡/🟢 counts |
 | `open_questions` | Number of `### N.` entries under `## Open questions` |
 | `plan_headings` | The plan's `## ` headings, in order |
-| `synth_retries` | 0 or 1 — whether synthesis needed the stub retry |
+| `testing_plan_when` | `plan` or `review`: when the testing plan is written. Under `review`, `outputs.testing_plan` is `null` and Phase 3 writes the file |
+| `session_chain` | `plan.chain_sessions`: `enabled` (it was on and the backend can continue a session), `resumed[]` (the calls that continued the session synthesis or the native plan started: `refine_plan:edits`, `generate_testing_plan`), `note` (why the chain didn't apply or ended before the testing plan, else `""`) |
+| `synth_retries` | 0 or 1 — whether synthesis needed the stub retry, or the native plan its retry (no plan, or no `## Files examined` section) |
 | `refine_status` | `no_concerns` / `applied_as_edits` / `no_edits_needed` (the critic's findings applied as exact edits, or none needed) / `applied` / `applied_after_retry` / `kept_draft` (the full-rewrite fallback) |
-| `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports. Listed at the end of `architecture-critic.md` |
+| `refine_rejected[]` | Critic findings the refiner rejected, each `{finding, reason, evidence}`, with the evidence quote found in the plan or the explorer reports (the plan's `## Files examined` section under `native`). Listed at the end of `architecture-critic.md` |
 | `refine_unverified[]` | Findings the refiner declined but whose quoted reason is not in the plan or the explorer reports: left open, listed the same way |
-| `explorers.count`, `explorers.failed[]` | How many explorers ran and which failed |
+| `explorers.count`, `explorers.failed[]` | How many explorers ran and which failed. `langgraph` only: absent under `native`, so read it as optional |
 | `usage` | This tool's calls from the ledger, summed |
 
 **`review.json`** (beside `review.md`, written by `migite-review`):
@@ -240,10 +300,14 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
   "base_branch": "main",
   "stack": "rails",
   "task_type": "feature",
+  "strategy": "langgraph",
+  "strategy_note": "",
   "critic": { "clean": false, "critical": 0, "warning": 1, "note": 1 },
   "open_questions": 2,
   "plan_headings": ["## Summary", "## Scope", "## Approach", "## Test plan", "## Performance considerations",
                     "## cURL examples", "## Risks", "## Out of scope", "## Open questions"],
+  "testing_plan_when": "plan",
+  "session_chain": { "enabled": false, "resumed": [], "note": "" },
   "synth_retries": 0,
   "refine_status": "applied",
   "explorers": { "count": 7, "failed": [] },
@@ -252,6 +316,9 @@ A `plan.json` from a run whose critic found one warning and whose refine went th
              "input_tokens": 1820, "output_tokens": 12904, "cache_read_input_tokens": 236240, "cache_creation_input_tokens": 23624 }
 }
 ```
+
+With `"strategy": "native"` the `explorers` key is absent and `plan_headings` ends with
+`"## Files examined"`.
 
 Reading one field from bash and from Python:
 
@@ -273,12 +340,21 @@ A `review.json` example, including `findings[]`, is in
 Each ledger line also records `turns`, the number of agent turns the call took (Claude Code's
 `num_turns`; 0 when a CLI doesn't report it). One turn is a plain answer; more means the call
 used tools, which is what `permissions.headless_tools` keeps in check. The usage table shows a
-`turns` column.
+`turns` column, and a `cached` column: the share of each model's input tokens that was read from
+the cache, `cache_read / (input + cache_creation + cache_read)`, or `-` when the CLI reports no
+tokens. `usage.json` keeps each model's and tool's `cache_read_input_tokens` and
+`cache_creation_input_tokens` beside its `input_tokens` (which there already includes cache reads
+and writes) so the share can be recomputed.
 
 **`usage.json`** is written by `print_usage_summary` (from `migite`'s EXIT trap, so aborted runs
 report too) into the run's folder (`00-build/`, `NN-amend-<slug>/`). It summarises `usage.jsonl`
-beside it by model and by tool: this invocation's ledger lines appended to the run's earlier ones,
-exact repeats dropped, so a resumed or re-run build adds to the run's cost instead of replacing it. Interactive sessions (`run_phase`:
-implement, gate fixes, PR description) are not metered — the CLI only emits usage in `--print` mode.
+beside it by model, by tool and by kind: this invocation's ledger lines appended to the run's earlier ones,
+exact repeats dropped, so a resumed or re-run build adds to the run's cost instead of replacing it.
+It includes the interactive sessions (`run_phase`: implement, gate fixes, PR description) on an
+agent that reports them, read back from the CLI's transcript as described above. `by_kind.call` is
+the headless calls alone, comparable with ledgers from before sessions were metered, and
+`by_kind.session` the sessions. `unpriced_models` lists models whose session tokens were recorded
+at $0. The table prints an `of which sessions` line, and its cache-creation line counts headless
+calls only.
 
 Exits 0 and touches `--sentinel` on success. Exits 1 on failure.

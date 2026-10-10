@@ -20,11 +20,12 @@ ln -sf "$SCRIPT_DIR/fake-claude" "$rs_dir/bin/claude"
 printf '{"ui": {"notify": "off", "tmux": "off"}}\n' > "$rs_dir/config.json"
 
 # rs_migite <args...> - bin/migite in the fixture repo, isolated from the real
-# config, vault and logs; gate answers come from stdin.
+# config, vault and logs; gate answers come from stdin. RS_CONFIG and RS_EDITOR
+# swap in another config file or editor for one run.
 rs_migite() {
   ( cd "$rs_repo" && env -u TMUX HOME="$rs_dir/home" XDG_CONFIG_HOME="$rs_dir/home/.config" \
-      MIGITE_CONFIG="$rs_dir/config.json" DEV_LOG_BASE="$rs_dir/vault" MIGITE_ORG=Acme \
-      LOG_DIR="$rs_dir/logs" EDITOR=true PATH="$rs_dir/bin:$PATH" \
+      MIGITE_CONFIG="${RS_CONFIG:-$rs_dir/config.json}" DEV_LOG_BASE="$rs_dir/vault" MIGITE_ORG=Acme \
+      LOG_DIR="$rs_dir/logs" EDITOR="${RS_EDITOR:-true}" PATH="$rs_dir/bin:$PATH" \
       bash "$MIGITE_HOME/bin/migite" "$@" 2>&1 )
 }
 
@@ -73,5 +74,69 @@ out=$(printf '' | rs_migite --resume); rc=$?
 check "migite --resume: nothing unfinished in the repo → an error" \
   bash -c '[[ "$1" != 0 && "$2" == *"No unfinished run to resume"* ]]' _ "$rc" "$out"
 
+# ── --automata ───────────────────────────────────────────────────────────────
+# No stdin at all. Run 1 answers every prompt itself and the implement session,
+# headless through agent_cli ask, fails (FAKE_CLAUDE_MODE=exit1). Run 2 is the
+# same command without --automata. Run 3 resumes at a commit gate with a NEEDS
+# FIXES review under gates.commit.policy: strict and exits 2. None of the runs
+# reaches deliver, whose Phase 4.5 writes to this checkout's docs/improvements.md.
+au_scratch="$rs_repo/scratchpad/add-widget"
+au_manifest="$au_scratch/00-build/run.json"
+mkdir -p "$au_scratch"
+printf '# Add widget\n\n## Scope\n### Models\n- app/models/widget.rb\n' > "$au_scratch/plan.md"
+printf '#!/usr/bin/env bash\ntouch "%s/editor-opened"\n' "$rs_dir" > "$rs_dir/editor-marker"
+chmod +x "$rs_dir/editor-marker"
+
+out=$(RS_EDITOR="$rs_dir/editor-marker" FAKE_CLAUDE_MODE=exit1 FAKE_CLAUDE_ARGV="$rs_dir/claude-argv.txt" \
+        rs_migite --automata "Add widget" < /dev/null); rc=$?
+check "automata run 1: no --type → planned as a feature, and the intake editor never opens" \
+  bash -c '[[ "$1" == *"planning as a feature (--automata)"* ]] && test ! -e "$2/editor-opened"' _ "$out" "$rs_dir"
+check "automata run 1: the existing plan is used, the plan gate approved, TDD declined, each marked --automata" \
+  bash -c '[[ "$1" == *"Use existing plan or redo?"*"u  "*"(--automata)"* && "$1" == *"REVIEW GATE: plan"*"y  "*"(--automata)"* && "$1" == *"Phase 1.5 (TDD)"*"N  "*"(--automata)"* ]]' _ "$out"
+check "automata run 1: run.json records mode automata, plan done, TDD skipped and declined" \
+  test "$(json_field "$au_manifest" mode)|$(json_field "$au_manifest" phases.plan.status)|$(json_field "$au_manifest" phases.tdd.status)|$(json_field "$au_manifest" phases.tdd.decided)" = "automata|done|skipped|false"
+check "automata run 1: the implement session ran headless on the session role (--print, bypassPermissions, the strong model)" \
+  bash -c 'grep -q -- "--print" "$1" && grep -q -- "--permission-mode bypassPermissions" "$1" && grep -q -- "--model claude-opus-5-5" "$1" && ! grep -q -- "--safe-mode" "$1"' _ "$rs_dir/claude-argv.txt"
+check "automata run 1: the session is in the run's usage ledger" grep -q '"label": "session:Implementing"' "$au_scratch/00-build/usage.jsonl"
+check "automata run 1: a failed session stops the run with exit 1, implement left running, the run failed" \
+  test "$rc|$(json_field "$au_manifest" phases.implement.status)|$(json_field "$au_manifest" status)" = "1|running|failed"
+
+au_before=$(cat "$au_manifest")
+out=$(rs_migite "Add widget" < /dev/null); rc=$?
+check "automata run 2: resuming it without --automata is refused, saying how to continue" \
+  bash -c '[[ "$1" == 1 && "$2" == *"started with --automata"*"again with --automata"* ]]' _ "$rc" "$out"
+check "automata run 2: and leaves run.json as it was" test "$(cat "$au_manifest")" = "$au_before"
+
+# Run 3: implement and heal finished, stopped at the commit gate over a NEEDS FIXES
+# review of this very tree, so the gate re-opens on the same review.
+printf '# Review: Add widget\n\n## Verdict: NEEDS FIXES\n\n- Critical: the widget is never saved\n' > "$au_scratch/00-build/review.md"
+printf '{"verdict": "needs_fixes", "counts": {"critical": 1, "warning": 0, "note": 0}, "reason": "one critical"}\n' > "$au_scratch/00-build/review.json"
+au_fp=$(cd "$rs_repo" && tree_fingerprint "$(json_field "$au_manifest" repo.base_branch)")
+"$MIGITE_PYTHON" -m migite.runstate update --file "$au_manifest" --set phases.implement.status=done \
+  --set phases.heal.status=done --set phases.review.status=pending_gate --set "phases.review.tree_fingerprint=$au_fp" >/dev/null
+printf '{"ui": {"notify": "off", "tmux": "off"}, "gates": {"commit": {"policy": "strict", "automata_fix_rounds": 0}}}\n' > "$rs_dir/strict.json"
+out=$(RS_CONFIG="$rs_dir/strict.json" FAKE_CLAUDE_MODE=exit1 rs_migite --automata "Add widget" < /dev/null); rc=$?
+check "automata run 3: back at the commit gate on the review it stopped at" \
+  bash -c '[[ "$1" == *"Phase implement already finished"* && "$1" == *"reusing"*"review.md"* ]]' _ "$out"
+check "automata run 3: strict with blockers exits 2 and prints them" \
+  bash -c '[[ "$1" == 2 && "$2" == *"--automata stops at the commit gate"* && "$2" == *"- review verdict is NEEDS FIXES"* ]]' _ "$rc" "$out"
+check "automata run 3: the gate stays pending, the run unfinished (not failed), the blocker in run.json" \
+  test "$(json_field "$au_manifest" phases.review.status)|$(json_field "$au_manifest" status)|$(json_field "$au_manifest" phases.review.blockers.0)" = "pending_gate|in_progress|review verdict is NEEDS FIXES"
+check "automata run 3: deliver never ran" \
+  bash -c '[[ "$1" != *"Phase 3.5/4"* && "$2" == pending ]]' _ "$out" "$(json_field "$au_manifest" phases.deliver.status)"
+check "automata run 3: run.json records exit status 2 and the invocation as automata" \
+  bash -c '[[ "$1" == 2 && "$2" == *", automata, exit 2" ]]' _ \
+  "$(json_field "$au_manifest" exit_status)" "$(json_field "$au_manifest" invocations.1)"
+
+# Run 4: the same gate with gates.commit.automata_fix_rounds at its default (1).
+# The gate answers f before the policy decides; the fix session fails
+# (FAKE_CLAUDE_MODE=exit1), so the run stops with exit 1 and no override.
+printf '{"ui": {"notify": "off", "tmux": "off"}, "gates": {"commit": {"policy": "strict"}}}\n' > "$rs_dir/strict-fix.json"
+out=$(RS_CONFIG="$rs_dir/strict-fix.json" FAKE_CLAUDE_MODE=exit1 rs_migite --automata "Add widget" < /dev/null); rc=$?
+check "automata run 4: blockers remain, so the commit gate answers f with the fix round named" \
+  bash -c '[[ "$1" == *"--automata runs fix round 1 of 1"* && "$1" == *"COMMIT GATE"*"f  "*"(--automata)"* ]]' _ "$out"
+check "automata run 4: the fix session runs headless; its failure stops the run with exit 1, no override recorded" \
+  bash -c '[[ "$1" == 1 && "$2" == *"Fixing review findings"* ]] && test ! -e "$3"' _ "$rc" "$out" "$au_scratch/00-build/gate-overrides.md"
+
 unset -f rs_migite
-unset rs_dir rs_repo rs_scratch rs_manifest
+unset rs_dir rs_repo rs_scratch rs_manifest au_scratch au_manifest au_before au_fp

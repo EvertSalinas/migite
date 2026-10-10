@@ -147,7 +147,8 @@ Ruby-tooling one.
 <a id="troubleshooting-needs-fixes"></a>
 ### Review keeps saying NEEDS FIXES
 
-There's no bounded auto-fix loop or attempt cap — at the COMMIT GATE, `f` (Claude fixes it in an
+Interactively there's no bounded auto-fix loop or attempt cap (under `--automata` the gate takes
+`gates.commit.automata_fix_rounds` rounds, then decides) — at the COMMIT GATE, `f` (Claude fixes it in an
 interactive session) and `n` (you fix it, then press Enter) both re-run rubocop + rspec + the full
 `migite-review` pass and reopen the gate with a fresh verdict. You can loop through either as many
 times as you need; nothing stops `y` from being pressed on the first pass regardless of the

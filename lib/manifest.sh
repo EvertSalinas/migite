@@ -50,9 +50,15 @@ _manifest_layout_args() {
     --set "layout.timestamp=$TIMESTAMP"
 }
 
+# run_mode - this invocation's run.json `mode`: automata under --automata, else
+# interactive.
+run_mode() {
+  if automata; then echo automata; else echo interactive; fi
+}
+
 # manifest_init - a fresh run.json for this run, written when its first phase
 # (plan, or the amendment in amend mode) begins: the arguments, repo and layout,
-# every phase pending except plan, which is running.
+# the mode, every phase pending except plan, which is running.
 manifest_init() {
   local -a sets=()
   local f
@@ -61,7 +67,8 @@ manifest_init() {
          --set "args.jira_ticket=$JIRA_TICKET" --set "args.jira_url=$JIRA_URL"
          --set "args.intake=$INTAKE_FILE_ARG" --set "args.audit=$AUDIT_FILE"
          --set "args.blueprint=$BLUEPRINT_FILE" --set "args.stack=$STACK_OVERRIDE"
-         --set-json "args.staged=$STAGED" --set "phases.plan.status=running")
+         --set-json "args.staged=$STAGED" --set "phases.plan.status=running"
+         --set "mode=$(run_mode)")
   for f in ${ATTACH_FILES[@]+"${ATTACH_FILES[@]}"}; do
     sets+=(--add "args.attach=$f")
   done
@@ -102,6 +109,19 @@ manifest_phase_status() {
   json_field "$file" "phases.$1.status" || true
 }
 
+# manifest_review_blockers - the blockers run.json recorded at the commit gate's
+# last decision (phases.review.blockers), one per line; nothing without a run.json.
+manifest_review_blockers() {
+  local file i=0 b
+  file=$(manifest_file) || return 0
+  [[ -f "$file" ]] || return 0
+  while b=$(json_field "$file" "phases.review.blockers.$i"); do
+    printf '%s\n' "$b"
+    i=$((i + 1))
+  done
+  return 0
+}
+
 # manifest_should_run <phase> - false (and says so) when run.json records the
 # phase as done or skipped by an earlier invocation. Every other status runs it:
 # pending, running (it was interrupted), pending_gate (its gate re-opens), failed.
@@ -123,12 +143,24 @@ manifest_enter() {
   manifest_boundary "$1" running
 }
 
-# manifest_on_exit <exit code> - from migite's EXIT trap: a non-zero exit marks
-# the run failed. The phase it was in stays running, which is what makes resume
-# re-run exactly that phase. A q at a gate exits 0 and leaves the run in_progress.
+# manifest_on_exit <exit code> - from migite's EXIT trap: records the exit status
+# the caller sees (exit_status, and one line in invocations with this
+# invocation's start, end and mode), and a non-zero exit marks the run failed.
+# The phase it was in stays running, which is what makes resume re-run exactly
+# that phase. A q at a gate exits 0 and leaves the run in_progress, and so does a
+# status an automata run exits with on purpose (migite_exit: 2 at a blocked commit
+# gate, 3 when it finished over blockers). Any other non-zero code is reported as
+# 1, as bin/migite's trap does.
 manifest_on_exit() {
-  [[ "$1" -ne 0 ]] || return 0
-  manifest_set --set "status=failed"
+  local status="$1"
+  local -a sets=()
+  if [[ "$status" -ne 0 && "$status" != "${MIGITE_EXIT_STATUS:-}" ]]; then
+    status=1
+    sets+=(--set "status=failed")
+  fi
+  sets+=(--set-json "exit_status=$status"
+         --add "invocations=${MIGITE_STARTED_AT:-?} to $(date -u +%Y-%m-%dT%H:%M:%SZ), $(run_mode), exit $status")
+  manifest_set "${sets[@]}"
 }
 
 # manifest_find [runstate find flags...] - the newest manifest for this repo, in
@@ -239,6 +271,11 @@ manifest_restore() {
   fi
   [[ -n "${MANIFEST_LAYOUT_SLUG:-}" && -n "${MANIFEST_LAYOUT_RUN_SLUG:-}" ]] \
     || error "$file doesn't record its task and run folders; delete it to start the task over"
+  # An unattended run continues unattended only when asked to again: checked
+  # before anything below changes the manifest, the branch or the files.
+  if [[ "${MANIFEST_MODE:-interactive}" == "automata" && "${MANIFEST_STATUS:-}" != "complete" ]] && ! automata; then
+    error "This run was started with --automata ($file); run the same command again with --automata to continue it"
+  fi
 
   TASK_SLUG="$MANIFEST_LAYOUT_SLUG"
   TASK_DIR="$DEV_LOG_BASE/$ORG/$REPO_NAME/$TASK_SLUG"
@@ -280,8 +317,10 @@ manifest_restore() {
   # A manifest found in the vault (or named with --resume) becomes the run's own.
   [[ "$file" -ef "$RUN_SCRATCH_DIR/run.json" ]] || cp -p "$file" "$RUN_SCRATCH_DIR/run.json"
   manifest_restore_artifacts
-  # A failed run is unfinished again; next_phase still says where it stopped.
-  manifest_set --set "status=in_progress"
+  # A failed run is unfinished again; next_phase still says where it stopped. The
+  # mode is this invocation's: an interactive run resumed with --automata is an
+  # automata run from here on.
+  manifest_set --set "status=in_progress" --set "mode=$(run_mode)"
 
   # What the phases this resume skips would have set.
   if [[ "${AMEND_MODE:-false}" == "true" ]]; then
@@ -299,7 +338,7 @@ manifest_restore() {
   TASK_FILE=""
   [[ -f "$RUN_SCRATCH_DIR/task.md" ]] && TASK_FILE="$RUN_SCRATCH_DIR/task.md"
   KNOWLEDGE_FILE="$DEV_LOG_BASE/$ORG/$REPO_NAME/knowledge.md"
-  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE")
+  KNOWLEDGE_INJECT=$(build_knowledge_injection "$KNOWLEDGE_FILE" "$INTAKE_FILE" "$(dirname "$INTAKE_FILE")/jira-context.md")
   PLAN_GATE_ATTEMPTS="${MANIFEST_PHASES_PLAN_GATE_ATTEMPTS:-0}"
   COMMIT_GATE_ATTEMPTS="${MANIFEST_PHASES_REVIEW_GATE_ATTEMPTS:-0}"
   HEAL_ATTEMPT="${MANIFEST_PHASES_HEAL_HEAL_ATTEMPT:-0}"

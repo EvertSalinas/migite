@@ -30,16 +30,25 @@ build_attachments_block() {
   done
 }
 
-# build_knowledge_injection <knowledge-file>
+# build_knowledge_injection <knowledge-file> [<task-file>...]
 # Renders the "repository conventions" block injected into Plan/Implement/Amend prompts:
-# the newest entries first, up to knowledge.inject_max_bytes (migite/knowledge.py).
-# The whole file grew by an entry every run and went into every one of those prompts.
-# Echoes nothing if the file doesn't exist yet or has no entries.
+# up to knowledge.inject_max_bytes of entries (migite/knowledge.py), printed newest first.
+# With knowledge.select: relevant the entries sharing the most words with the task files
+# (the intake, and jira-context.md: a --jira intake is often the bare template) go in
+# first; with recent, or no task file, the newest do. Missing or empty task files are
+# skipped. The whole file grew by an entry every run and went into every one of those
+# prompts. Echoes nothing if the file doesn't exist yet or has no entries.
 build_knowledge_injection() {
-  local file="$1" lessons
+  local file="$1" lessons task_file
+  shift
   [[ -f "$file" ]] || return 0
-  lessons=$("$MIGITE_PYTHON" -m migite.knowledge recent --file "$file" \
-              --max-bytes "$(cfg knowledge.inject_max_bytes 8000)" 2>/dev/null || true)
+  local args=(relevant --file "$file" --max-bytes "$(cfg knowledge.inject_max_bytes 8000)")
+  if [[ "$(cfg knowledge.select relevant)" == "relevant" ]]; then
+    for task_file in "$@"; do
+      if [[ -s "$task_file" ]]; then args+=(--keywords-file "$task_file"); fi
+    done
+  fi
+  lessons=$("$MIGITE_PYTHON" -m migite.knowledge "${args[@]}" 2>/dev/null || true)
   [[ -n "$lessons" ]] || return 0
   printf '## Repository conventions and past lessons\n\nThe following lessons were captured from previous tasks in this repo, newest first. Adhere to them strictly before planning or implementing anything.\n\n%s\n\n---\n\n' "$lessons"
 }

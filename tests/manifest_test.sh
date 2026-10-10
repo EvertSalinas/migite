@@ -80,9 +80,20 @@ mf_manifest() {
   check "manifest_set: a refused write warns and the run carries on" \
     bash -c '[[ "$1" == 0 && "$2" == *"Could not update"* ]]' _ "$rc" "$out"
 
+  MIGITE_STARTED_AT="2026-01-01T00:00:00Z"
   manifest_on_exit 0
   check "manifest_on_exit 0: a clean exit (or a q at a gate) leaves the run in progress" \
     test "$(json_field "$f" status)" = "in_progress"
+  check "manifest_on_exit 0: records exit status 0 and the invocation, with its start and mode" \
+    bash -c '[[ "$1" == 0 && "$2" == "2026-01-01T00:00:00Z to "*", interactive, exit 0" ]]' _ \
+    "$(json_field "$f" exit_status)" "$(json_field "$f" invocations.0)"
+  ( MIGITE_EXIT_STATUS=3 MIGITE_AUTOMATA=true manifest_on_exit 3 )
+  check "manifest_on_exit 3 (migite_exit): status 3 recorded, the run not failed, the mode automata" \
+    bash -c '[[ "$1" == 3 && "$2" == in_progress && "$3" == *", automata, exit 3" ]]' _ \
+    "$(json_field "$f" exit_status)" "$(json_field "$f" status)" "$(json_field "$f" invocations.1)"
+  manifest_on_exit 7
+  check "manifest_on_exit 7: any other failure is recorded as 1, as the caller sees it" \
+    bash -c '[[ "$1" == 1 && "$2" == *", exit 1" ]]' _ "$(json_field "$f" exit_status)" "$(json_field "$f" invocations.2)"
   manifest_on_exit 1
   check "manifest_on_exit 1: an error marks the run failed, the phase stays running" \
     test "$(json_field "$f" status)|$(json_field "$f" phases.review.status)" = "failed|running"

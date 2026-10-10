@@ -4,6 +4,9 @@
 # Reads intake.md, fans out parallel codebase explorations, synthesises a plan,
 # runs the architecture critic, refines the plan, then writes plan.md +
 # architecture-critic.md + sentinel. Called by migite's spawn_langgraph().
+# With plan.strategy: native, one call in the agent's own plan mode explores the
+# repo and writes the plan instead of the explorers and synthesis; the critic,
+# refine, the testing plan and the outputs are the same.
 #
 # Usage:
 #   python -m migite.tools.plan --intake <file> --plan-output <file> --critic-output <file> \
@@ -26,12 +29,15 @@ from langgraph.types import Send
 from migite import gateway
 from migite import config
 from migite import doc_edits
+from migite import testing_plan as testing_plan_lib
 from migite import knowledge as knowledge_lib
 from migite import paths
+from migite.keywords import extract_keywords
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 # Calls name a role, never a model: explore (fast tier) for file analysis, think
-# and critic (strong tier) for synthesis, refine, and the critique. The gateway
+# and critic (strong tier) for synthesis, refine, and the critique, native_plan
+# (strong tier) for plan.strategy: native's one exploring call. The gateway
 # resolves each role for the configured agent (models.* in the config).
 
 # Prompts ship in the repo's prompts/ dir; resolve() finds the checkout from this
@@ -43,6 +49,7 @@ PROMPTS_DIR = MIGITE_HOME / "prompts"
 # Defaults; main() re-resolves them through the config so `prompts.dir` can override per project.
 PLAN_CMD_PATH = PROMPTS_DIR / "plan.md"
 CRITIC_CMD_PATH = PROMPTS_DIR / "architecture_critic.md"
+NATIVE_CMD_PATH = PROMPTS_DIR / "native_plan.md"   # plan.strategy: native only
 
 
 def read_prompt(path: Path) -> str:
@@ -62,9 +69,9 @@ EXPLORE_AREAS = [
     ("routes_config",      ["config/routes.rb", "config/application.rb", "config/initializers/*.rb"]),
 ]
 
-# Used when --stack generic (no recognized stack profile — see detect_stack in
-# lib/stack.sh): one broad area instead of Rails' MVC-shaped split, since a
-# generic repo has no convention to organize exploration areas around.
+# Used for every stack but rails (generic, and the stacks.<name> profiles - see
+# detect_stack in lib/stack.sh): one broad area instead of Rails' MVC-shaped
+# split, since those repos have no convention to organize exploration areas around.
 _GENERIC_SOURCE_EXTENSIONS = (
     "py", "js", "jsx", "ts", "tsx", "go", "rb", "java", "kt", "rs",
     "c", "cc", "cpp", "h", "hpp", "cs", "php", "swift",
@@ -97,13 +104,9 @@ EXCLUDE_DIR_COMPONENTS = {
     "coverage", "tmp", "log", "__pycache__", ".next", ".cache", ".git",
 }
 
-STOP_WORDS = {
-    "this", "that", "with", "from", "have", "been", "will", "when", "where", "what",
-    "which", "their", "there", "they", "also", "into", "more", "some", "than", "then",
-    "type", "name", "each", "such", "well", "just", "only", "should", "would", "could",
-    "these", "those", "about", "after", "before", "other", "first", "class", "return",
-    "method", "endpoint", "rails", "ruby", "model", "controller", "service",
-}
+# Each explorer's share of knowledge.md; synthesis gets knowledge.inject_max_bytes.
+# Both are picked by migite/knowledge.py, the same way (knowledge.select).
+EXPLORER_KNOWLEDGE_BYTES = 800
 
 
 # ── Audit condensation ─────────────────────────────────────────────────────────
@@ -134,6 +137,91 @@ def call_agent(prompt: str, role: str = "think", thinking: bool = False, label: 
     return gateway.call_agent(
         prompt, role, thinking=thinking, tool="migite-plan", label=label
     ).text
+
+
+# ── Session chain (plan.chain_sessions) ──────────────────────────────────────────
+# Synthesis, refine and the testing plan can continue one agent session instead of each
+# starting a new one, so a call reads what the earlier calls sent from the prompt cache
+# instead of being sent it again. The critic stays outside: its read tools would change
+# the session's tool set, and a different tool set reads nothing from the cache.
+
+def plan_call(state: "PlanState", prompt: str, *, label: str, role: str = "think", thinking: bool = False,
+              resume: str = "", permission: str | None = None, tools: str | None = None) -> tuple[str, str]:
+    """call_agent, or with the chain on, a call that continues session `resume` ("" = starts one)
+    and keeps its own session. Returns the reply and the session id the next call continues
+    ("" off the chain). `permission` and `tools` match the launch of the call that started the
+    session (state["chain_launch"]); the langgraph chain leaves both to the role."""
+    if not state.get("chain_sessions"):
+        return call_agent(prompt, role=role, thinking=thinking, label=label), ""
+    res = gateway.call_agent(prompt, role, thinking=thinking, tool="migite-plan", label=label,
+                             resume=resume, keep_session=True, permission=permission, tools=tools)
+    return res.text, res.usage.session_id
+
+
+def chain_setup(enabled: bool) -> tuple[bool, str]:
+    """(whether the chain runs, why not when it was asked for). The agent must be able to
+    continue a session, or every call would point at a conversation it doesn't have."""
+    if enabled and not gateway.supports("resume"):
+        return False, (f"the {gateway.AGENT.name} backend can't continue a session, "
+                       f"so every planning call started a new one")
+    return enabled, ""
+
+
+def end_chain(note: str) -> dict:
+    """The state update that ends the chain: later calls send everything, as without it."""
+    print(f"  ⚠ Session chain ended: {note}", flush=True)
+    return {"chain_session": "", "chain_note": note}
+
+
+def launch(state: "PlanState") -> dict:
+    """The permission/tools a chained call repeats from the call that started the session:
+    {} on the langgraph chain (each role's own), the plan-mode launch under plan.strategy: native."""
+    return dict(state.get("chain_launch") or {})
+
+
+def chain_check(state: "PlanState", role: str, label: str) -> tuple[str, dict]:
+    """(the session a call on `role` continues, the state update when the chain ends here). Each
+    model has its own cache, so a call joins only when its role runs on the model of the call
+    that started the session: synthesis's `think`, or `native_plan` under plan.strategy: native."""
+    chain = state.get("chain_session", "")
+    if not chain:
+        return "", {}
+    model, chain_model = gateway.model_for(role), gateway.model_for(state.get("chain_role") or "think")
+    if model != chain_model:
+        return "", end_chain(f"{label} runs on {model or 'the CLI default'} and the session on "
+                             f"{chain_model or 'the CLI default'}, and one model reads nothing from another's cache")
+    return chain, {}
+
+
+# ── Planning strategy (plan.strategy) ─────────────────────────────────────────────
+# langgraph: migite's explorers read the repo and synthesis writes the plan from their reports.
+# native: one call in the agent's own plan mode explores with its subagents and writes the plan.
+
+STRATEGIES = ("langgraph", "native")
+FILES_EXAMINED = "## Files examined"   # the native plan's last section; prompts/native_plan.md asks for it
+
+
+def strategy_setup(requested: str) -> tuple[str, str]:
+    """(the strategy that runs, why it isn't the one asked for). native needs a backend that can
+    run a headless call in its read-only plan mode; without one the explorers and synthesis run."""
+    if requested == "native" and not gateway.supports("plan_mode"):
+        return "langgraph", (f"the {gateway.AGENT.name} backend has no headless plan mode, "
+                             f"so the explorers and synthesis ran instead")
+    return (requested if requested in STRATEGIES else "langgraph"), ""
+
+
+def files_examined(plan: str) -> str:
+    """The body of the plan's `## Files examined` section, up to the next `## ` heading; "" when absent."""
+    lines = plan.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lower() == FILES_EXAMINED.lower():
+            body = []
+            for rest in lines[i + 1:]:
+                if rest.startswith("## "):
+                    break
+                body.append(rest)
+            return "\n".join(body).strip()
+    return ""
 
 
 def count_open_questions(plan: str) -> int:
@@ -199,11 +287,6 @@ def critic_is_usable(text: str) -> bool:
 
 # ── File discovery helpers ──────────────────────────────────────────────────────
 
-def extract_keywords(text: str) -> set[str]:
-    words = re.findall(r"\b[A-Za-z][a-zA-Z]{3,}\b", text)
-    return {w.lower() for w in words} - STOP_WORDS
-
-
 def camelize(name: str) -> str:
     return "".join(part.capitalize() for part in re.split(r"[-_]", name) if part)
 
@@ -241,9 +324,10 @@ def repo_has_frontend(repo_root: str) -> bool:
 def frontend_decision(intake: str, repo_root: str, stack: str) -> tuple[bool, str]:
     """(explore the frontend?, why). The intake's `**Frontend:**` answer wins
     both ways; with no answer, the repo decides (repo_has_frontend). The
-    generic stack already globs every source file, JavaScript included."""
-    if stack == "generic":
-        return False, "generic stack"
+    frontend explorer is Rails' Hotwire half: generic and every stacks.<name>
+    profile already glob every source file, JavaScript included."""
+    if stack != "rails":
+        return False, f"{stack} stack"
     answer = intake_frontend(intake)
     if answer:
         return answer == "yes", f"intake says {answer}"
@@ -384,12 +468,14 @@ def read_area_context(area: str, patterns: list[str], repo_root: str, keywords: 
 class PlanState(TypedDict):
     intake: str
     knowledge: str
+    explore_knowledge: str  # the same selection at EXPLORER_KNOWLEDGE_BYTES, for each explorer
     audit: str
     blueprint: str
     task_file: str
     jira_context: str
     plan_cmd: str
     critic_cmd: str
+    native_cmd: str         # prompts/native_plan.md; "" under langgraph
     repo_root: str
     base_branch: str
     task_type: str
@@ -406,12 +492,23 @@ class PlanState(TypedDict):
     critic_usable: bool
     plan_final: str
     testing_plan: str
+    testing_plan_when: str  # plan.testing_plan_when: "review" = Phase 3 writes testing-plan.md, not this tool
+    # plan.strategy: which planner wrote the draft (langgraph | native), and why native fell back.
+    strategy: str
+    strategy_note: str
     # Provenance for plan.json — how many stub retries synthesis needed, and
     # what refine_plan did with the critic findings.
     synth_retries: int
     refine_status: str
     refine_rejected: list     # critic findings the refiner rejected, with evidence found in the plan or explorer reports
     refine_unverified: list   # findings it declined, but whose quoted reason is not in either: left open
+    # plan.chain_sessions: synthesis, refine and the testing plan continue one agent session.
+    chain_sessions: bool      # on: the config asks for it and the agent can continue a session
+    chain_session: str        # the session the next chained call continues; "" = no chain (any more)
+    chain_resumed: list       # labels of the calls that continued it, for plan.json
+    chain_note: str           # why the chain didn't apply, or ended before the testing plan
+    chain_role: str           # the role that started the session: think (synthesis) or native_plan
+    chain_launch: dict        # permission/tools every chained call repeats; {} = the role's own
 
 
 class ExploreInput(TypedDict):
@@ -432,7 +529,8 @@ def load_context(state: PlanState) -> dict:
 
 
 def route_to_explorers(state: PlanState) -> list[Send]:
-    areas = GENERIC_EXPLORE_AREAS if state.get("stack") == "generic" else list(EXPLORE_AREAS)
+    # Rails' MVC split only fits rails; generic and stacks.<name> profiles get one broad area.
+    areas = list(EXPLORE_AREAS) if state.get("stack", "rails") == "rails" else list(GENERIC_EXPLORE_AREAS)
     if state.get("frontend"):
         areas.append(FRONTEND_EXPLORE_AREA)
     print(f"  ▶ Fanning out {len(areas)} explorers in parallel (stack={state.get('stack', 'rails')})", flush=True)
@@ -441,7 +539,7 @@ def route_to_explorers(state: PlanState) -> list[Send]:
             "area": area,
             "glob_patterns": patterns,
             "intake": state["intake"],
-            "knowledge": state["knowledge"],
+            "knowledge": state.get("explore_knowledge", ""),
             "jira_context": state.get("jira_context", ""),
             "repo_root": state["repo_root"],
             "base_branch": state["base_branch"],
@@ -459,7 +557,7 @@ def explore(state: ExploreInput) -> dict:
     if gem_context:
         context += f"\n\n{gem_context}"
     knowledge_block = (
-        f"Repository lessons (apply these):\n{state['knowledge'][:800]}\n\n"
+        f"Repository lessons (apply these):\n{state['knowledge']}\n\n"
         if state.get("knowledge") else ""
     )
     gem_instruction = (
@@ -488,9 +586,24 @@ Be specific — name files and methods. Under 350 words."""
     return {"explorations": [f"### {area}\n{findings}"]}
 
 
-def synthesize_plan(state: PlanState) -> dict:
-    print(f"  ▶ Synthesising plan from {len(state['explorations'])} exploration reports", flush=True)
-    explorations_text = "\n\n".join(state["explorations"])
+FORMATTING_RULES = """## Formatting rules (apply these on top of the format above — they override default prose style)
+
+These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
+
+- **Use `###` subheadings** inside sections whenever a section has 3+ distinct items (e.g. New files, Modified files, Schema). Never use bold text as a pseudo-header — that buries structure in a wall of text.
+- **One blank line between every top-level bullet** in any list longer than 3 items.
+- **Keep individual bullets under 4 lines.** If an explanation needs more, break it into a sub-bullet (`  -`) or a `> Note:` block. Do not write paragraph-length bullets.
+- **File entries get their own sub-section.** Each new or modified file gets a `###` heading with its path, then a short description below — not a single giant bullet that combines path + rationale + caveats.
+- **Use `---` between major top-level sections** to create visible breaks when skimming.
+- **Tables over prose for comparisons.** Anything that reads "X does Y, but Z does W" belongs in a two-column table.
+- **No inline parenthetical tangents.** If something is important enough to write, give it its own bullet. If it is not, omit it.
+
+Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
+
+
+def context_blocks(state: PlanState) -> tuple[str, str]:
+    """The task context both planners are given, split around where synthesis puts the explorer
+    reports: (intake through repository knowledge, blueprint and audit)."""
     audit_block = (
         f"## Known codebase issues (from audit — do not worsen these, address if relevant)\n"
         f"{condense_audit(state['audit'])}\n\n"
@@ -511,33 +624,30 @@ def synthesize_plan(state: PlanState) -> dict:
         f"{state['jira_context']}\n\n"
         if state.get("jira_context") else ""
     )
-    prompt = f"""## Task intake
+    head = f"""## Task intake
 {state['intake']}
 
 {task_file_block}{jira_block}{frontend_block(state)}## Repository knowledge
 {state['knowledge'] or '(none)'}
 
-{blueprint_block}{audit_block}## Codebase exploration
+"""
+    return head, f"{blueprint_block}{audit_block}"
+
+
+def synthesize_plan(state: PlanState) -> dict:
+    print(f"  ▶ Synthesising plan from {len(state['explorations'])} exploration reports", flush=True)
+    explorations_text = "\n\n".join(state["explorations"])
+    head, tail = context_blocks(state)
+    prompt = f"""{head}{tail}## Codebase exploration
 {explorations_text}
 
 ## Plan format and instructions
 {state['plan_cmd']}
 
-## Formatting rules (apply these on top of the format above — they override default prose style)
+{FORMATTING_RULES}"""
 
-These rules exist so the plan can be skimmed quickly. Every rule is mandatory:
-
-- **Use `###` subheadings** inside sections whenever a section has 3+ distinct items (e.g. New files, Modified files, Schema). Never use bold text as a pseudo-header — that buries structure in a wall of text.
-- **One blank line between every top-level bullet** in any list longer than 3 items.
-- **Keep individual bullets under 4 lines.** If an explanation needs more, break it into a sub-bullet (`  -`) or a `> Note:` block. Do not write paragraph-length bullets.
-- **File entries get their own sub-section.** Each new or modified file gets a `###` heading with its path, then a short description below — not a single giant bullet that combines path + rationale + caveats.
-- **Use `---` between major top-level sections** to create visible breaks when skimming.
-- **Tables over prose for comparisons.** Anything that reads "X does Y, but Z does W" belongs in a two-column table.
-- **No inline parenthetical tangents.** If something is important enough to write, give it its own bullet. If it is not, omit it.
-
-Write the complete development plan. Output only the plan document — no preamble or meta-commentary."""
-
-    draft = call_agent(prompt, thinking=True, label="synthesize_plan")
+    # On the chain, synthesis starts the session; the retry below starts a new one.
+    draft, session = plan_call(state, prompt, thinking=True, label="synthesize_plan")
     retries = 0
 
     # Guard against the model returning a one-line stub confirmation ("Plan written
@@ -553,7 +663,7 @@ Write the complete development plan. Output only the plan document — no preamb
             "one-line description of what you would write."
         )
         retries = 1
-        draft = call_agent(retry_prompt, thinking=True, label="synthesize_plan:retry")
+        draft, session = plan_call(state, retry_prompt, thinking=True, label="synthesize_plan:retry")
         if looks_like_stub(draft):
             raise RuntimeError(
                 "migite-plan: synthesis produced a stub instead of an actual plan "
@@ -562,7 +672,88 @@ Write the complete development plan. Output only the plan document — no preamb
                 f"{len(extract_headings(draft))} headings)."
             )
 
-    return {"plan_draft": draft, "synth_retries": retries}
+    out = {"plan_draft": draft, "synth_retries": retries}
+    if state.get("chain_sessions"):
+        out.update(chain_session=session, chain_role="think", chain_launch={})
+        if not session:
+            out.update(end_chain("synthesis reported no session id, so no later call could continue it"))
+    return out
+
+
+NATIVE_LAUNCH = {"permission": "plan", "tools": "default"}   # the native call's launch; chained calls repeat it
+
+
+def native_problem(draft: str) -> str:
+    """What is wrong with a native draft: "stub" (no plan document), "no_files" (no
+    `## Files examined` section), or "" when it is usable."""
+    if looks_like_stub(draft):
+        return "stub"
+    return "" if files_examined(draft) else "no_files"
+
+
+def native_plan(state: PlanState) -> dict:
+    """plan.strategy: native. One headless call in the agent's read-only plan mode, with the CLI's
+    own tools, explores the repo with its own subagents and writes the plan: the work of
+    load_context, the explorers and synthesize_plan. Its `## Files examined` section stands in for
+    the explorer reports wherever refine's evidence is checked. The session is kept whenever the
+    agent can continue one, so a retry can point at it instead of exploring again."""
+    print("  ▶ Native plan: the agent explores in its own plan mode and writes the plan", flush=True)
+    head, tail = context_blocks(state)
+    prompt = f"""{state['native_cmd']}
+
+{head}{tail}## Plan format and instructions
+{state['plan_cmd']}
+
+{FORMATTING_RULES} End it with the `{FILES_EXAMINED}` section described at the top."""
+    can_resume = gateway.supports("resume")
+
+    def ask(text: str, label: str, resume: str = "") -> tuple[str, str]:
+        res = gateway.call_agent(text, "native_plan", thinking=True, tool="migite-plan", label=label,
+                                 resume=resume, keep_session=can_resume, **NATIVE_LAUNCH)
+        return res.text, res.usage.session_id
+
+    draft, session = ask(prompt, "native_plan")
+    retries = 0
+    problem = native_problem(draft)
+    if problem:
+        retries = 1
+        missing = "a plan document" if problem == "stub" else f"the {FILES_EXAMINED} section"
+        print(f"  ⚠ The native plan came back without {missing} — retrying once", flush=True)
+        correction = ("Your last reply was not the complete plan document"
+                      + ("" if problem == "stub" else f": it had no `{FILES_EXAMINED}` section") + ". "
+                      f"Output the FULL plan document now, from its title to a final `{FILES_EXAMINED}` "
+                      "section listing every file you and your subagents read. Do not explore again "
+                      "and do not use any tool: everything you need is in this conversation.")
+        if session and can_resume:
+            # The session holds the exploration: point at it rather than paying for it twice.
+            retry_draft, retry_session = ask(correction, "native_plan:retry", resume=session)
+        else:
+            retry_draft, retry_session = ask(f"{prompt}\n\n{correction}", "native_plan:retry")
+        if not looks_like_stub(retry_draft):
+            draft, session = retry_draft, retry_session
+        elif problem == "stub":
+            raise RuntimeError(
+                "migite-plan: the native plan produced a stub instead of an actual plan document "
+                f"twice in a row — aborting rather than passing broken content downstream (last "
+                f"output: {len(retry_draft)} chars, {len(extract_headings(retry_draft))} headings).")
+        else:
+            # The first draft is a plan; the retry isn't. Keep the plan, but the session now ends
+            # with the retry's reply, so no later call can treat its last reply as plan.md.
+            print("  ⚠ The retry returned no plan document; keeping the first draft", flush=True)
+            session = ""
+
+    section = files_examined(draft)
+    if not section:
+        print(f"  ⚠ The native plan has no {FILES_EXAMINED} section; the refiner's rejections can only "
+              "be checked against the plan itself", flush=True)
+    out = {"plan_draft": draft, "synth_retries": retries,
+           "explorations": [f"### Files examined\n{section}"] if section else []}
+    if state.get("chain_sessions"):
+        out.update(chain_session=session, chain_role="native_plan", chain_launch=dict(NATIVE_LAUNCH))
+        if not session:
+            out.update(end_chain("the native plan left no session whose last reply is the plan, "
+                                 "so no later call could continue it"))
+    return out
 
 
 def frontend_block(state: PlanState) -> str:
@@ -570,19 +761,23 @@ def frontend_block(state: PlanState) -> str:
     Hotwire layers when they're in play, and flag a backend-only intake whose
     acceptance criteria turn out to need UI work rather than silently adding it."""
     if state.get("frontend"):
+        covered = ("explore views, components, helpers and Stimulus/Turbo code too"
+                   if state.get("strategy") == "native" else
+                   "the views_frontend exploration covers views, components, helpers and Stimulus/Turbo code")
         return (
             f"## Frontend ({state.get('frontend_source', '')})\n"
-            "This task may touch the frontend; the views_frontend exploration covers views, "
-            "components, helpers and Stimulus/Turbo code. If the task changes UI, list those files "
+            f"This task may touch the frontend; {covered}. If the task changes UI, list those files "
             "in Scope under their own `###` subsection, and in the Test plan include request specs "
             "that assert on turbo_stream responses and a system spec for each new interactive flow "
             "when the repo already has spec/system. If it turns out to be backend-only, say so and "
             "plan no view or JavaScript changes.\n\n"
         )
     if state.get("frontend_source") == "intake says no":
+        skipped = ("do not explore views or JavaScript" if state.get("strategy") == "native"
+                   else "views and JavaScript were not explored")
         return (
             "## Frontend (intake says no)\n"
-            "The intake marks this task backend-only, so views and JavaScript were not explored. "
+            f"The intake marks this task backend-only, so {skipped}. "
             "Plan no view or JavaScript changes; if the acceptance criteria can't be met without "
             "them, raise that under Open questions instead of planning them blind.\n\n"
         )
@@ -642,8 +837,9 @@ def _norm(text: str) -> str:
 
 def check_rejections(rejected: list, plan: str, explorations: list) -> tuple[list[dict], list[dict]]:
     """Split the findings the refiner rejected into (verified, unverified). A rejection stands only
-    when the passage it quotes as evidence is really in the plan or the explorer reports: the refiner
-    has no tools, so a reason it cannot quote is a guess, and the finding stays open."""
+    when the passage it quotes as evidence is really in the plan or the explorer reports (under
+    plan.strategy: native, the plan's Files examined section): the refiner works from text, so a
+    reason it cannot quote is a guess, and the finding stays open."""
     haystack = _norm("\n".join([plan, *explorations]))
     verified, unverified = [], []
     for r in rejected:
@@ -655,20 +851,26 @@ def check_rejections(rejected: list, plan: str, explorations: list) -> tuple[lis
     return verified, unverified
 
 
-def rejections_appendix(rejected: list, unverified: list) -> str:
+def rejections_appendix(rejected: list, unverified: list, source: str = "the explorer reports") -> str:
     """The sections added to architecture-critic.md (shown at the plan gate) for findings the refiner
-    did not apply. Plain text, no severity marks, so nothing that counts them reads these as findings."""
+    did not apply. Plain text, no severity marks, so nothing that counts them reads these as findings.
+    `source` names the evidence beside the plan: the explorer reports, or the native plan's own section."""
     parts = []
     if rejected:
         rows = "\n".join(f"- {r['finding']}: {r['reason']} (evidence: \"{r['evidence'][:200]}\")" for r in rejected)
         parts.append("## Rejected by the plan refiner\nThe refiner judged these findings wrong or already handled, from the "
-                     "plan and the explorer reports, so the plan was not changed for them. If you disagree, ask for the "
+                     f"plan and {source}, so the plan was not changed for them. If you disagree, ask for the "
                      "change with `f`.\n" + rows)
     if unverified:
         rows = "\n".join(f"- {r['finding']}: {r['reason']}" for r in unverified)
         parts.append("## Not applied, reason not verified\nThe refiner declined these findings, but the passage it quoted "
-                     "as its reason is not in the plan or the explorer reports. Treat them as open.\n" + rows)
+                     f"as its reason is not in the plan or {source}. Treat them as open.\n" + rows)
     return "\n\n".join(parts)
+
+
+def evidence_source(state: PlanState) -> str:
+    """What the refiner's evidence beside the plan is called, for architecture-critic.md."""
+    return "its Files examined section" if state.get("strategy") == "native" else "the explorer reports"
 
 
 def refine_plan(state: PlanState) -> dict:
@@ -681,25 +883,54 @@ def refine_plan(state: PlanState) -> dict:
     if "No architectural concerns" in findings:
         print("  ▶ Refine: no concerns — plan unchanged", flush=True)
         return {"plan_final": state["plan_draft"], "refine_status": "no_concerns"}
-    print("  ▶ Refining plan with critic findings", flush=True)
+    native = state.get("strategy") == "native"
+    chain, chained = chain_check(state, "think", "refine_plan:edits")   # chained: the chain's state after this node
+    print("  ▶ Refining plan with critic findings"
+          + (f" (continuing the {'native plan' if native else 'synthesis'} session)" if chain else ""), flush=True)
     # Exact edits first: the findings usually touch a few passages, and re-emitting a
     # 40-70 KB plan to change them cost ~55k output tokens and ~7 minutes. The full
     # rewrite below stays as the fallback when no usable edit comes back.
+    explorer_reports = ("Explorer reports (what the codebase contains)", "\n\n".join(state.get("explorations") or [])[:24000])
+    task = ("An architecture critic reviewed this plan. Edit the plan so it addresses every finding "
+            "below, keeping its structure and formatting conventions (### subheadings, tables, `---` "
+            "between top-level sections). A finding the plan or the explorer reports show to be wrong "
+            "or already handled is rejected instead of edited.")
+    if native:
+        # The plan carries its own evidence: its Files examined section is what the explorer reports were.
+        task = ("An architecture critic reviewed this plan. Edit the plan so it addresses every finding "
+                "below, keeping its structure and formatting conventions (### subheadings, tables, `---` "
+                f"between top-level sections). The plan's `{FILES_EXAMINED}` section records what the codebase "
+                "contains: it is the explorer reports the rules below mention. A finding the plan or that "
+                "section shows to be wrong or already handled is rejected instead of edited.")
+        if chain:
+            task += (" Do not use any tool in this reply, whatever this conversation used before: a rejection "
+                     "stands only on a passage quoted from the plan.")
     try:
         edited, report = doc_edits.update(
             state["plan_draft"], name="plan.md", role="think", label="refine_plan:edits", tool="migite-plan",
-            task=("An architecture critic reviewed this plan. Edit the plan so it addresses every finding "
-                  "below, keeping its structure and formatting conventions (### subheadings, tables, `---` "
-                  "between top-level sections). A finding the plan or the explorer reports show to be wrong "
-                  "or already handled is rejected instead of edited."),
-            context=[("Architecture critic findings", findings),
-                     ("Explorer reports (what the codebase contains)", "\n\n".join(state.get("explorations") or [])[:24000])],
-            triage=True)
+            task=task,
+            # On the chain, the session already holds the draft and the explorer reports (synthesis's prompt).
+            # Under native the plan's own Files examined section is the evidence, so nothing is added.
+            context=[("Architecture critic findings", findings)] + ([] if chain or native else [explorer_reports]),
+            triage=True, resume=chain, **(launch(state) if chain else {}))
+        if chain:
+            chained["chain_resumed"] = [*(state.get("chain_resumed") or []), "refine_plan:edits"]
     except gateway.AgentError as e:
         edited, report = None, {"reason": str(e)[:200]}
     if edited is not None:
         doc_edits.print_report(report)
-        out = {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed"}
+        out = {"plan_final": edited, "refine_status": "applied_as_edits" if report["applied"] else "no_edits_needed",
+               **chained}
+        if chain:
+            # The session holds the draft and every proposed edit; plan.md has only the ones that applied.
+            missed = [r for r in report["rejected"] if r.get("reason") != "no change"]
+            if missed:
+                out.update(end_chain(f"{len(missed)} of the refiner's edits didn't apply, so the "
+                                     f"session no longer holds plan.md as written"))
+            elif not report.get("session_id"):
+                out.update(end_chain("refine_plan:edits reported no session id"))
+            else:
+                out["chain_session"] = report["session_id"]
         verified, unverified = check_rejections(report.get("rejected_findings") or [], state["plan_draft"],
                                                 state.get("explorations") or [])
         if verified:
@@ -711,6 +942,8 @@ def refine_plan(state: PlanState) -> dict:
                   + (f"; {len(unverified)} declined without a reason that checks out (left open)" if unverified else ""), flush=True)
         return out
     print(f"  ⚠ Refine by edits didn't work ({report.get('reason', 'unknown')}); rewriting the plan in full", flush=True)
+    if chain:
+        chained.update(end_chain("refine fell back to a full rewrite, which runs without the session"))
     prompt = f"""Original plan:
 {state['plan_draft']}
 
@@ -756,56 +989,33 @@ Output only the revised plan document."""
         if overlap_regressed or looks_like_stub(refined):
             print("  ⚠ Refine still failed structure check — keeping pre-refine plan; "
                   "see architecture-critic.md for the findings that weren't applied", flush=True)
-            return {"plan_final": state["plan_draft"], "refine_status": "kept_draft"}
+            return {"plan_final": state["plan_draft"], "refine_status": "kept_draft", **chained}
 
-    return {"plan_final": refined, "refine_status": status}
+    return {"plan_final": refined, "refine_status": status, **chained}
 
 
 def generate_testing_plan(state: PlanState) -> dict:
-    print("  ▶ Generating testing plan", flush=True)
-    frontend_steps = (
-        "\n<This plan touches the frontend: for every UI step give the page path on the local dev "
-        "server, the exact action (click, fill, submit), and what should change on the page, "
-        "including whether Turbo should update it in place without a full page reload. Add a step "
-        "to check the browser console for JavaScript errors. These steps are written so a person, "
-        "or an agent driving a browser, can follow them literally.>"
-        if state.get("frontend") else ""
-    )
-    prompt = f"""You are writing a standalone QA/dev verification document for the implementation
-plan below — the concrete steps a human runs by hand, after the code is built, to confirm it
-actually works. This document lives on its own (not inside the plan) precisely so it can be
-regenerated in full whenever the implementation changes, without touching the plan's history.
-
-## Implementation plan
-{state['plan_final']}
-
-## Instructions
-Output ONLY the document below, no preamble, no meta-commentary. Use exactly this structure:
-
-# Testing Plan
-
-### Prerequisites — seed records (Rails console)
-```ruby
-<a runnable Rails console script that seeds whatever records this plan's verification needs.
-Use only generic emails (test.user@example.com, admin.qa@example.com) — never real addresses.>
-```
-
-### Verification steps
-<numbered steps — curl commands or browser/UI actions that exercise this plan's scope. Cover the
-happy path and the key error/edge cases called out in the plan. Include at least one step naming
-a log line to `grep` for as evidence the code path actually ran.>{frontend_steps}
-
-### Teardown
-```ruby
-<a runnable Rails console script that removes exactly the seed records created above>
-```
-
-If the plan involves no endpoints or user-facing behaviour to verify by hand (e.g. a pure internal
-refactor with only spec coverage), say so explicitly under each section and state what to verify
-instead (e.g. "run the full spec suite for X") rather than inventing steps that don't apply."""
-
-    testing_plan = call_agent(prompt, label="generate_testing_plan")
-    return {"testing_plan": testing_plan}
+    if state.get("testing_plan_when") == "review":
+        print("  ▶ Testing plan left to Phase 3 (plan.testing_plan_when: review)", flush=True)
+        return {"testing_plan": ""}
+    # Each model has its own cache: a call on another model reads none of the session's.
+    chain, out = chain_check(state, testing_plan_lib.ROLE, testing_plan_lib.LABEL)
+    print("  ▶ Generating testing plan" + (" (continuing the planning session)" if chain else ""), flush=True)
+    frontend = bool(state.get("frontend"))
+    if chain:
+        prompt = testing_plan_lib.build_prompt("", frontend=frontend, plan_above=True)
+        if launch(state):
+            # The native session has the agent's tools (its launch must match); this reply needs none.
+            prompt += ("\n\nDo not use any tool in this reply, whatever this conversation used before: "
+                       "write the document from the plan above.")
+        testing_plan, session = plan_call(state, prompt, label=testing_plan_lib.LABEL, role=testing_plan_lib.ROLE,
+                                          resume=chain, **launch(state))
+        out = {"chain_session": session,
+               "chain_resumed": [*(state.get("chain_resumed") or []), testing_plan_lib.LABEL]}
+    else:
+        prompt = testing_plan_lib.build_prompt(state["plan_final"], frontend=frontend)
+        testing_plan = call_agent(prompt, label=testing_plan_lib.LABEL, role=testing_plan_lib.ROLE)
+    return {"testing_plan": testing_plan, **out}
 
 
 def write_outputs(state: PlanState) -> dict:
@@ -818,14 +1028,19 @@ def write_outputs(state: PlanState) -> dict:
 
     critic_path = Path(state["critic_output"])
     critic_path.parent.mkdir(parents=True, exist_ok=True)
-    appendix = rejections_appendix(state.get("refine_rejected") or [], state.get("refine_unverified") or [])
+    appendix = rejections_appendix(state.get("refine_rejected") or [], state.get("refine_unverified") or [],
+                                   evidence_source(state))
     critic_path.write_text(f"{state['critic_findings'].rstrip()}\n\n{appendix}\n" if appendix else state["critic_findings"])
     print(f"    ✔ architecture-critic.md → {critic_path}", flush=True)
 
     testing_plan_path = Path(state["testing_plan_output"])
-    testing_plan_path.parent.mkdir(parents=True, exist_ok=True)
-    testing_plan_path.write_text(state["testing_plan"])
-    print(f"    ✔ testing-plan.md → {testing_plan_path}", flush=True)
+    testing_plan_deferred = state.get("testing_plan_when") == "review"
+    if testing_plan_deferred:
+        print("    ◦ testing-plan.md left to Phase 3 (plan.testing_plan_when: review)", flush=True)
+    else:
+        testing_plan_path.parent.mkdir(parents=True, exist_ok=True)
+        testing_plan_path.write_text(state["testing_plan"])
+        print(f"    ✔ testing-plan.md → {testing_plan_path}", flush=True)
 
     # plan.json — the machine-readable envelope beside plan.md. Everything here
     # is derived deterministically from the documents already written, so it can
@@ -833,6 +1048,7 @@ def write_outputs(state: PlanState) -> dict:
     critic = state["critic_findings"]
     critic_usable = state.get("critic_usable", True)
     critic_counts = gateway.severity_counts(critic)
+    strategy = state.get("strategy") or "langgraph"
     failed_explorers = [
         block.splitlines()[0].lstrip("# ").strip()
         for block in state["explorations"]
@@ -845,6 +1061,8 @@ def write_outputs(state: PlanState) -> dict:
         "base_branch": state["base_branch"],
         "stack": state.get("stack", ""),
         "task_type": state.get("task_type", ""),
+        "strategy": strategy,
+        "strategy_note": state.get("strategy_note") or "",
         "frontend": {
             "explored": bool(state.get("frontend")),
             "source": state.get("frontend_source", ""),
@@ -860,14 +1078,19 @@ def write_outputs(state: PlanState) -> dict:
         "refine_status": state.get("refine_status", ""),
         "refine_rejected": state.get("refine_rejected") or [],
         "refine_unverified": state.get("refine_unverified") or [],
-        "explorers": {
-            "count": len(state["explorations"]),
-            "failed": failed_explorers,
+        "testing_plan_when": state.get("testing_plan_when") or "plan",
+        "session_chain": {
+            "enabled": bool(state.get("chain_sessions")),
+            "resumed": state.get("chain_resumed") or [],
+            "note": state.get("chain_note") or "",
         },
+        # Only the langgraph planner has explorers; the native plan's evidence is its Files examined section.
+        **({"explorers": {"count": len(state["explorations"]), "failed": failed_explorers}}
+           if strategy == "langgraph" else {}),
         "outputs": {
             "plan": str(plan_path),
             "critic": str(critic_path),
-            "testing_plan": str(testing_plan_path),
+            "testing_plan": None if testing_plan_deferred else str(testing_plan_path),
         },
         "usage": gateway.summarize(own_records)["total"] if own_records else None,
     }
@@ -882,20 +1105,27 @@ def write_outputs(state: PlanState) -> dict:
 
 # ── Graph ────────────────────────────────────────────────────────────────────────
 
-def build_graph() -> StateGraph:
+def build_graph(strategy: str = "langgraph") -> StateGraph:
+    """langgraph: load_context → explorers (parallel) → synthesize_plan. native: native_plan alone.
+    Both then run architecture_critic → refine_plan → generate_testing_plan → write_outputs."""
     g = StateGraph(PlanState)
-    g.add_node("load_context", load_context)
-    g.add_node("explore", explore)
-    g.add_node("synthesize_plan", synthesize_plan)
+    if strategy == "native":
+        g.add_node("native_plan", native_plan)
+        g.add_edge(START, "native_plan")
+        g.add_edge("native_plan", "architecture_critic")
+    else:
+        g.add_node("load_context", load_context)
+        g.add_node("explore", explore)
+        g.add_node("synthesize_plan", synthesize_plan)
+        g.add_edge(START, "load_context")
+        g.add_conditional_edges("load_context", route_to_explorers, ["explore"])
+        g.add_edge("explore", "synthesize_plan")
+        g.add_edge("synthesize_plan", "architecture_critic")
     g.add_node("architecture_critic", run_architecture_critic)
     g.add_node("refine_plan", refine_plan)
     g.add_node("generate_testing_plan", generate_testing_plan)
     g.add_node("write_outputs", write_outputs)
 
-    g.add_edge(START, "load_context")
-    g.add_conditional_edges("load_context", route_to_explorers, ["explore"])
-    g.add_edge("explore", "synthesize_plan")
-    g.add_edge("synthesize_plan", "architecture_critic")
     g.add_edge("architecture_critic", "refine_plan")
     g.add_edge("refine_plan", "generate_testing_plan")
     g.add_edge("generate_testing_plan", "write_outputs")
@@ -924,7 +1154,7 @@ def main() -> None:
     args = ap.parse_args()
 
     # Layered config: models, timeouts, headless permission mode, prompt overrides.
-    global PLAN_CMD_PATH, CRITIC_CMD_PATH
+    global PLAN_CMD_PATH, CRITIC_CMD_PATH, NATIVE_CMD_PATH
     try:
         cfg = config.load(args.repo_root)
     except config.ConfigError as e:
@@ -940,23 +1170,32 @@ def main() -> None:
         sys.exit(1)
     PLAN_CMD_PATH   = cfg.prompt_path("plan", MIGITE_HOME, args.repo_root)
     CRITIC_CMD_PATH = cfg.prompt_path("architecture_critic", MIGITE_HOME, args.repo_root)
+    NATIVE_CMD_PATH = cfg.prompt_path("native_plan", MIGITE_HOME, args.repo_root)
 
     intake     = Path(args.intake).read_text()
-    # Newest entries first, capped: the whole file grows every run (migite/knowledge.py).
-    knowledge  = (knowledge_lib.recent(Path(args.knowledge).read_text(), int(cfg.get("knowledge.inject_max_bytes") or 8000),
-                                       source=args.knowledge)
-                  if args.knowledge and Path(args.knowledge).exists() else "")
+    knowledge_md = Path(args.knowledge).read_text() if args.knowledge and Path(args.knowledge).exists() else ""
     audit      = Path(args.audit).read_text()       if args.audit      and Path(args.audit).exists()      else ""
     blueprint  = Path(args.blueprint).read_text()   if args.blueprint  and Path(args.blueprint).exists()  else ""
     task_file  = Path(args.task_file).read_text()   if args.task_file  and Path(args.task_file).exists()  else ""
     jira_context = Path(args.jira_context).read_text() if args.jira_context and Path(args.jira_context).exists() else ""
+    # The knowledge.md entries that share the most words with the task, capped: the
+    # whole file grows every run (migite/knowledge.py). knowledge.select: recent = newest first.
+    knowledge_keywords = (knowledge_lib.task_keywords(intake) | knowledge_lib.task_keywords(jira_context)
+                          if cfg.get("knowledge.select") == "relevant" else set())
+    knowledge  = knowledge_lib.relevant(knowledge_md, knowledge_keywords,
+                                        int(cfg.get("knowledge.inject_max_bytes") or 8000), source=args.knowledge)
+    explore_knowledge = knowledge_lib.relevant(knowledge_md, knowledge_keywords, EXPLORER_KNOWLEDGE_BYTES,
+                                               source=args.knowledge)
     plan_cmd   = read_prompt(PLAN_CMD_PATH)
     critic_cmd = read_prompt(CRITIC_CMD_PATH)
     base_branch = args.base_branch or paths.detect_base_branch(args.repo_root)
     frontend, frontend_source = frontend_decision(intake, args.repo_root, args.stack)
+    chain_sessions, chain_note = chain_setup(bool(cfg.get("plan.chain_sessions")))
+    strategy, strategy_note = strategy_setup(str(cfg.get("plan.strategy") or "langgraph"))
+    native_cmd = read_prompt(NATIVE_CMD_PATH) if strategy == "native" else ""
 
     print(f"  migite-plan | base branch: {base_branch}", flush=True)
-    if args.stack != "generic":
+    if args.stack == "rails":
         print(f"  migite-plan | frontend: {'explored' if frontend else 'skipped'} ({frontend_source})", flush=True)
     if audit:
         print(f"  migite-plan | audit context loaded ({len(audit)} chars)", flush=True)
@@ -966,19 +1205,33 @@ def main() -> None:
         print(f"  migite-plan | supplementary task.md loaded ({len(task_file)} chars)", flush=True)
     if jira_context:
         print(f"  migite-plan | Jira ticket context loaded ({len(jira_context)} chars)", flush=True)
-    print(f"  migite-plan | explore={gateway.model_for('explore') or 'default'}  think={gateway.model_for('think') or 'default'}  critic={gateway.model_for('critic') or 'default'}", flush=True)
+    if strategy_note:
+        print(f"  ⚠ plan.strategy: native: {strategy_note}", flush=True)
+    if strategy == "native":
+        print(f"  migite-plan | strategy: native  native_plan={gateway.model_for('native_plan') or 'default'}  think={gateway.model_for('think') or 'default'}  critic={gateway.model_for('critic') or 'default'}", flush=True)
+    else:
+        print(f"  migite-plan | explore={gateway.model_for('explore') or 'default'}  think={gateway.model_for('think') or 'default'}  critic={gateway.model_for('critic') or 'default'}", flush=True)
+    if chain_sessions:
+        first = "the native plan" if strategy == "native" else "synthesis"
+        print(f"  migite-plan | session chain: {first}, refine and the testing plan continue one session", flush=True)
+    elif chain_note:
+        print(f"  ⚠ plan.chain_sessions: {chain_note}", flush=True)
 
-    graph = build_graph()
+    graph = build_graph(strategy)
     try:
         graph.invoke({
             "intake":     intake,
             "knowledge":  knowledge,
+            "explore_knowledge": explore_knowledge,
             "audit":      audit,
             "blueprint":  blueprint,
             "task_file":  task_file,
             "jira_context": jira_context,
             "plan_cmd":   plan_cmd,
             "critic_cmd": critic_cmd,
+            "native_cmd": native_cmd,
+            "strategy":   strategy,
+            "strategy_note": strategy_note,
             "repo_root":  args.repo_root,
             "base_branch": base_branch,
             "task_type":  args.task_type,
@@ -995,10 +1248,17 @@ def main() -> None:
             "critic_usable":  True,
             "plan_final":     "",
             "testing_plan":   "",
+            "testing_plan_when": str(cfg.get("plan.testing_plan_when") or "plan"),
             "synth_retries":  0,
             "refine_status":  "",
             "refine_rejected": [],
             "refine_unverified": [],
+            "chain_sessions": chain_sessions,
+            "chain_session":  "",
+            "chain_resumed":  [],
+            "chain_note":     chain_note,
+            "chain_role":     "",
+            "chain_launch":   {},
         })
         print("\n  ✔ migite-plan complete", flush=True)
     except Exception as e:

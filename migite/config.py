@@ -34,6 +34,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -95,14 +96,25 @@ DEFAULTS: dict[str, Any] = {
         # Unset = the tier's default above. Raise these for a slow backend (e.g. a
         # reasoning model that routinely runs past 15 minutes).
         "timeouts": {"fast": None, "standard": None, "strong": None},
-        "roles_timeouts": {},            # optional per-role timeout override: {"refine_plan": 1800, ...}
+        # Optional per-role timeout override: {"refine_plan": 1800, ...}. session is set: an
+        # --automata run's headless sessions (implement, gate fixes, PR description) are
+        # whole phases, far longer than the strong tier's 900s. Interactive sessions have no limit.
+        # native_plan is set too: with plan.strategy: native one call explores the repo and
+        # writes the plan, the work the explorers and synthesis split between them.
+        "roles_timeouts": {"session": 3600, "native_plan": 1800},
     },
-    "stack": "auto",                     # auto | rails | generic  (MIGITE_STACK, or --stack)
+    "stack": "auto",                     # auto | rails | generic | <a stacks profile>  (MIGITE_STACK, or --stack)
+    # Stack profiles: a non-Rails repo's lint and test commands as data (lib/stack.sh).
+    # stacks.<name>: detect / source / specs (lists of paths or globs) and lint / autofix /
+    # test (commands; {files} = the changed files the globs select). Empty = only the
+    # built-in rails / generic detection, the behaviour before profiles existed.
+    "stacks": {},
     "gates": {
         "commit": {
             "policy": "lenient",         # lenient = today's behaviour; strict = 'y' refused over blockers, 'Y' overrides
             "require_clean_lint": True,  # in strict mode, remaining rubocop offenses are a blocker
             "require_green_specs": True, # in strict mode, spec failures / tooling errors are a blocker
+            "automata_fix_rounds": 1,    # --automata: f rounds the gate answers while blockers remain, before the policy decides
         },
         "plan": {
             "warn_after_rejections": 3,  # warn that the task may be too large after N full redos
@@ -132,7 +144,26 @@ DEFAULTS: dict[str, Any] = {
         "browser_check": "off",              # Phase 3.1: the agent walks the testing plan in a browser. off | ask | on
     },
     "knowledge": {
-        "inject_max_bytes": 8000,            # newest knowledge.md entries put into plan/implement/fix/amend prompts
+        "inject_max_bytes": 8000,            # knowledge.md entries put into plan/implement/fix/amend prompts, up to this many bytes
+        # relevant = entries sharing the most words with the intake and Jira ticket first; recent = newest first
+        "select": "relevant",                # relevant | recent
+    },
+    "plan": {
+        # plan = migite-plan writes testing-plan.md from the finished plan (Phase 1).
+        # review = Phase 3 writes it from the plan and the diff, before the reviewers read it.
+        "testing_plan_when": "plan",         # plan | review
+        # true = synthesis, refine and the testing plan continue one agent session, so each reads
+        # what the earlier calls sent from the prompt cache (backends with `resume` only).
+        "chain_sessions": False,
+        # langgraph = migite's explorers read the repo and synthesis writes the plan from their
+        # reports. native = one call in the agent's own plan mode explores with its subagents
+        # and writes the plan (backends with `plan_mode`; the rest fall back to langgraph).
+        "strategy": "langgraph",             # langgraph | native
+    },
+    "review": {
+        "dimensions": {
+            "testing_plan": "on",            # on | off: the testing-plan reviewer in Phase 3 (the document is still written)
+        },
     },
     "prompts": {
         "dir": None,                         # per-project overrides for prompts/<name>.md (relative to repo root)
@@ -161,8 +192,9 @@ DEFAULTS: dict[str, Any] = {
 ROLE_TIERS: dict[str, str] = {
     # migite-plan
     "explore": "fast",            # 7 parallel explorers: grounding, capped at 14 files each
-    "think": "strong",            # plan synthesis + refine + testing plan: highest-leverage text in the run
+    "think": "strong",            # plan synthesis + refine: highest-leverage text in the run
     "critic": "strong",           # architecture critic
+    "native_plan": "strong",      # plan.strategy: native - one call in the agent's plan mode explores and writes the plan
     # migite-review — one role per dimension, plus the verdict
     "review_correctness": "strong",
     "review_security": "strong",
@@ -206,6 +238,7 @@ ROLE_TIERS: dict[str, str] = {
 #             scoped MCP tools need the CLI's MCP servers
 ROLE_TOOLS: dict[str, str] = {
     "critic": "read",             # architecture critic verifies the plan's claims against the repo
+    "native_plan": "default",     # the CLI's own tools, so it can run its explore subagents; plan mode keeps it read-only
     "review_correctness": "read", "review_security": "read",
     "review_test_coverage": "read", "review_testing_plan": "read",
     "review_frontend": "read",
@@ -215,10 +248,20 @@ ROLE_TOOLS: dict[str, str] = {
     "refute": "read",
     "heal": "default",
     "jira": "default",
+    "session": "default",         # --automata runs run_phase's sessions headless: the interactive session's toolset
 }
 READ_TOOLS = ("Read", "Grep", "Glob")
 
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "none")
+
+# stacks.<name>.<field>. A name maps 1:1 onto the shell variables bash reads
+# (MIGITE_CFG_STACKS_<NAME>_<FIELD>), hence lowercase, digits and underscores; the
+# built-in stacks keep their code path in lib/stack.sh and can't be redefined.
+BUILTIN_STACKS = ("rails", "generic")
+STACK_LIST_FIELDS = ("detect", "source", "specs")
+STACK_COMMAND_FIELDS = ("lint", "autofix", "test")
+STACK_FIELDS = STACK_LIST_FIELDS + STACK_COMMAND_FIELDS
+STACK_NAME_RE = re.compile(r"[a-z][a-z0-9_]*")
 
 
 def default_model(role: str, backend: str = agents.DEFAULT) -> str:
@@ -258,6 +301,10 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.lint": ("auto", "off"),
     "frontend.system_specs": ("on", "off"),
     "frontend.browser_check": ("off", "ask", "on"),
+    "review.dimensions.testing_plan": ("on", "off"),
+    "plan.testing_plan_when": ("plan", "review"),
+    "plan.strategy": ("langgraph", "native"),
+    "knowledge.select": ("relevant", "recent"),
     "permissions.headless_tools": ("isolated", "default"),
     "ui.tmux": ("auto", "on", "off"),
     "ui.notify": ("auto", "off"),
@@ -265,11 +312,11 @@ ENUMS: dict[str, tuple[str, ...]] = {
 
 INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds",
             "models.timeouts.fast", "models.timeouts.standard", "models.timeouts.strong",
-            "gates.plan.warn_after_rejections",
+            "gates.plan.warn_after_rejections", "gates.commit.automata_fix_rounds",
             "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max",
             "ui.prompt_diff_max_bytes", "knowledge.inject_max_bytes")
 BOOL_KEYS = ("gates.commit.require_clean_lint", "gates.commit.require_green_specs",
-             "heal.full_suite_fallback", "budget.print_summary")
+             "heal.full_suite_fallback", "budget.print_summary", "plan.chain_sessions")
 FLOAT_KEYS = ("budget.max_usd_per_run", "budget.review_call_max_usd")
 
 STARTER_TEMPLATE = """\
@@ -318,14 +365,24 @@ models:
   #   strong: 1800                 # e.g. raise for a slow reasoning model
   # roles_timeouts:                # optional per-role timeout override, in seconds (beats the tier)
   #   think: 2400
+  #   session: 3600               # the default: an --automata run's headless sessions (implement, fixes, PR description)
 
-stack: auto                  # auto | rails | generic  (or --stack on the command line)
+stack: auto                  # auto | rails | generic | a profile name from stacks  (or --stack on the command line)
+# stacks:                    # lint and test commands for a non-Rails repo, tried before rails. See docs/configuration.md
+#   node:
+#     detect: [package.json]             # any of these at the repo root selects the profile
+#     source: ["*.js", "*.ts"]           # changed files lint and autofix get as {files} (quote globs)
+#     specs: ["*.test.js", "*.test.ts"]  # changed files test gets as {files}
+#     autofix: npx eslint --fix {files}  # runs before lint; its exit code is ignored
+#     lint: npx eslint {files}           # exit code 0 = clean
+#     test: npx jest {files}             # exit code 0 = green
 
 gates:
   commit:
     policy: lenient          # strict: 'y' is refused while blockers remain; 'Y' overrides and is logged
     require_clean_lint: true
     require_green_specs: true
+    automata_fix_rounds: 1   # --automata: fix rounds while blockers remain, before the policy decides (0 = none)
   plan:
     warn_after_rejections: 3
 
@@ -347,10 +404,19 @@ frontend:                    # views + Stimulus/Turbo; each runs only when the d
   browser_check: off         # off | ask | on: the agent walks the testing plan in a browser before review
 
 knowledge:
-  inject_max_bytes: 8000     # newest knowledge.md entries put into plan/implement/fix/amend prompts
+  inject_max_bytes: 8000     # knowledge.md entries put into plan/implement/fix/amend prompts, up to this many bytes
+  select: relevant           # relevant | recent: entries sharing the most words with the intake and ticket first, or newest first
+
+# plan:
+#   testing_plan_when: plan  # plan | review: review = Phase 3 writes testing-plan.md from the plan and the diff, not Phase 1 from the plan
+#   chain_sessions: false    # true: synthesis, refine and the testing plan share one session and read each other from cache (Claude Code)
+#   strategy: langgraph      # langgraph | native: native = one call in the agent's plan mode explores with its own subagents and writes the plan (Claude Code, Cursor, OpenCode; Kimi falls back)
+# review:
+#   dimensions:
+#     testing_plan: on       # on | off: the testing-plan reviewer in Phase 3 (testing-plan.md is still written)
 
 # prompts:
-#   dir: .migite/prompts     # override any of prompts/{plan,implement,review,architecture_critic}.md
+#   dir: .migite/prompts     # override any of prompts/{plan,native_plan,implement,review,architecture_critic}.md
 # templates:
 #   dir: .migite/templates   # override intake templates or commit.md (the PR-description prompt)
 #   # {org} and {repo} are substituted, e.g. in ~/.config/migite/config.yml:
@@ -394,7 +460,7 @@ def _flatten(d: dict, prefix: str = "") -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in d.items():
         key = f"{prefix}.{k}" if prefix else k
-        # An EMPTY mapping is a leaf too — otherwise `stacks: {node: {}}` would
+        # An EMPTY mapping is a leaf too — otherwise `extras: {node: {}}` would
         # flatten to nothing and an unknown section could never be flagged.
         if isinstance(v, dict) and v and key not in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
             out.update(_flatten(v, key))
@@ -500,6 +566,61 @@ def _coerce(key: str, value: Any, source: str) -> Any:
     return value
 
 
+def _stack_key(key: str, value: Any, source: str) -> tuple[str, str] | None:
+    """(name, field) for a flattened stacks.<name>.<field> key, or None for an empty
+    `stacks:` (no profiles, so it clears nothing a lower file defined) or an empty
+    profile. Raises ConfigError on a bad profile name or shape."""
+    parts = key.split(".")
+    if len(parts) == 1:
+        if value in (None, {}):
+            return None
+        raise ConfigError(f"stacks must be a mapping of profile name -> settings (got {value!r} from {source})")
+    name = parts[1]
+    if not STACK_NAME_RE.fullmatch(name):
+        raise ConfigError(f"stacks.{name}: a profile name is lowercase letters, digits and underscores, "
+                          f"starting with a letter (from {source})")
+    if name in BUILTIN_STACKS or name == "auto":
+        raise ConfigError(f"stacks.{name}: '{name}' is built in and can't be redefined; "
+                          f"name the profile something else (from {source})")
+    if len(parts) == 2:
+        if value in (None, {}):
+            return None
+        raise ConfigError(f"stacks.{name} must be a mapping of {', '.join(STACK_FIELDS)} (from {source})")
+    if len(parts) > 3:
+        kind = "a list of paths or globs" if parts[2] in STACK_LIST_FIELDS else "a command string"
+        raise ConfigError(f"stacks.{name}.{parts[2]} must be {kind} (from {source})")
+    return name, parts[2]
+
+
+def _coerce_stack_field(key: str, field: str, value: Any, source: str) -> Any:
+    """detect / source / specs: one string or a list of them -> list[str].
+    lint / autofix / test: a non-empty command string. null leaves the field unset."""
+    if value is None:
+        return None
+    if field in STACK_LIST_FIELDS:
+        items = [value] if isinstance(value, str) else value
+        if not isinstance(items, list) or not all(isinstance(i, str) and i.strip() for i in items):
+            raise ConfigError(f"{key} must be a list of paths or globs (got {value!r} from {source})")
+        return [i.strip() for i in items]
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{key} must be a command string (got {value!r} from {source})")
+    return value.strip()
+
+
+def _check_stacks(data: dict, sources: dict[str, str]) -> None:
+    """Checks that need every file merged: each profile has a command to run, and
+    `stack` names a stack that exists."""
+    stacks = data.get("stacks") or {}
+    for name, profile in stacks.items():
+        if not any(profile.get(f) for f in STACK_COMMAND_FIELDS):
+            raise ConfigError(f"stacks.{name} has no lint, autofix or test command; add one or remove the profile")
+    known = ("auto", *BUILTIN_STACKS, *stacks)
+    # A blank `stack:` reads as null, and bash has always treated it as auto.
+    if data.get("stack") not in (None, "") and data.get("stack") not in known:
+        raise ConfigError(f"stack must be one of {', '.join(known)} "
+                          f"(got {data.get('stack')!r} from {sources.get('stack', 'defaults')})")
+
+
 # ── the Config object ─────────────────────────────────────────────────────────
 
 class Config:
@@ -534,6 +655,10 @@ class Config:
 
     def backend(self) -> str:
         return str(self.get("agent.backend") or agents.DEFAULT)
+
+    def stack_names(self) -> list[str]:
+        """The stacks.<name> profiles, in the order detection tries them."""
+        return list(self.get("stacks") or {})
 
     def models_by_role(self) -> dict[str, str]:
         return {role: self.model(role) for role in ROLE_TIERS}
@@ -671,23 +796,51 @@ def load(repo_root: str | Path | None = None, *, env: Mapping[str, str] | None =
     for path in files:
         loaded = _read_file(path)
         flat = _flatten(loaded)
+        file_stacks: list[str] = []
         for key, value in flat.items():
             if key.startswith("tracker.") and "token" in key.lower():
                 raise ConfigError(f"{path}: {key}: migite never reads a Jira token from a config file. "
                                   f"Log in with `acli jira auth login --web` instead, and remove the token from {path}")
+            if key == "stacks" or key.startswith("stacks."):
+                # An open mapping like models.roles, merged field by field across files.
+                parsed = _stack_key(key, value, str(path))
+                if parsed is None:
+                    if key != "stacks":
+                        warnings.append(f"{path}: '{key}' is an empty profile (ignored)")
+                    continue
+                name, field = parsed
+                if field not in STACK_FIELDS:
+                    warnings.append(f"{path}: unknown key '{key}' (ignored; a profile takes {', '.join(STACK_FIELDS)})")
+                    continue
+                _set_path(data, key, _coerce_stack_field(key, field, value, str(path)))
+                sources[key] = str(path)
+                if name not in file_stacks:
+                    file_stacks.append(name)
+                continue
             if key not in known and not key.startswith("models.roles"):
                 # (models.roles and models.roles_effort are open mappings validated in _coerce)
                 warnings.append(f"{path}: unknown key '{key}' (ignored)")
                 continue
             coerced = _coerce(key, value, str(path))
+            if key == "models.roles_timeouts":
+                # Role by role onto the layers below: a file that times one role keeps
+                # the session default and the roles every other file timed.
+                coerced = {**(_get_path(data, key) or {}), **coerced}
             _set_path(data, key, coerced)
             sources[key] = str(path)
+        if file_stacks:
+            # Detection tries profiles in this order: a higher-precedence file's first
+            # (the repo's before your user config's), then each file's in written order.
+            stacks = data["stacks"]
+            data["stacks"] = {**{n: stacks[n] for n in file_stacks},
+                              **{n: p for n, p in stacks.items() if n not in file_stacks}}
 
     for var, key in ENV_OVERRIDES.items():
         if var in env_map and env_map[var] != "":
             _set_path(data, key, _coerce(key, env_map[var], f"env:{var}"))
             sources[key] = f"env:{var}"
 
+    _check_stacks(data, sources)
     cfg = Config(data, sources, files, warnings)
     if use_cache and from_os_env:
         _CACHE[cache_key] = cfg
@@ -715,7 +868,12 @@ def to_shell(cfg: Config) -> str:
     for key, value in sorted(cfg.flat().items()):
         if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
             continue
+        if key == "stacks":
+            continue  # the empty mapping; the profile names go out as one line below
+        if key.startswith("stacks.") and isinstance(value, list):
+            value = "\n".join(value)  # one pattern per line, for bash's `while read`
         lines.append(f"{_shell_key(key)}={shlex.quote(_shell_value(value))}")
+    lines.append("MIGITE_CFG_STACKS=" + shlex.quote(" ".join(cfg.stack_names())))
     for role, model in sorted(cfg.models_by_role().items()):
         lines.append(f"MIGITE_CFG_MODEL_{role.upper()}={shlex.quote(model)}")
     for role, level in sorted(cfg.efforts_by_role().items()):

@@ -14,12 +14,16 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [vault, logs](#vault)
   - [models](#models)
   - [stack](#stack)
+  - [stacks](#stacks)
   - [gates](#gates)
   - [permissions](#permissions)
   - [heal](#heal)
   - [frontend](#frontend)
   - [knowledge](#knowledge)
+  - [plan](#plan)
+  - [review](#review)
   - [prompts, templates](#prompts)
+    - [checklists](#checklists)
   - [budget](#budget)
   - [ui](#ui)
 - [Environment variables](#env)
@@ -157,10 +161,23 @@ budget:
   max_usd_per_run: 1.50
 ```
 
-**Non-Rails repo or monorepo where detection picks wrong**
+**Node repo: heal and review run its linter and tests** (`<repo>/.migite.yml`)
 
 ```yaml
-stack: generic                  # skip rubocop/rspec; plan, implement, review still run
+stacks:
+  node:
+    detect: [package.json]
+    source: ["*.js", "*.ts"]            # quote globs: a bare * starts a YAML alias
+    specs: ["*.test.js", "*.test.ts"]
+    autofix: npx eslint --fix {files}
+    lint: npx eslint {files}
+    test: npx jest {files}
+```
+
+**Repo with nothing to lint or test, or a monorepo where detection picks wrong**
+
+```yaml
+stack: generic                  # skip lint and tests; plan, implement, review still run
 permissions:
   headless: edits               # if your managed settings forbid auto-approval
 ```
@@ -255,6 +272,8 @@ models:
     strong: 1800
   roles_timeouts:                   # optional per-role timeout override, in seconds (beats the tier)
     think: 1800
+    session: 3600                   # the default: an --automata run's headless sessions
+    native_plan: 1800               # the default: plan.strategy: native's one call explores and writes the plan
 ```
 
 The default tiering follows one rule: **a drafter is never weaker than the critic whose findings it
@@ -264,8 +283,9 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | Role | Default tier | Where |
 |---|---|---|
 | `explore` | fast | `migite-plan` — the 7 parallel codebase explorers, 8 when the task may touch the frontend (grounding, capped at 14 files each) |
-| `think` | **strong** | `migite-plan` — synthesis, refine, testing plan: the highest-leverage text in the run |
+| `think` | **strong** | `migite-plan` — synthesis and refine: the highest-leverage text in the run |
 | `critic` | strong | `migite-plan` — architecture critic |
+| `native_plan` | **strong** | `migite-plan` with [`plan.strategy: native`](#plan-strategy) — the one call in the agent's plan mode that explores the repo with its own subagents and writes the plan, in place of `explore` and synthesis |
 | `review_correctness`, `review_security` | **strong** | `migite-review` — the two reviewers where a miss costs the most |
 | `review_test_coverage`, `review_testing_plan` | standard | `migite-review` — checklist dimensions |
 | `review_frontend` | standard | `migite-review` - Hotwire/Stimulus checklist, only when the diff touches views or JavaScript |
@@ -273,9 +293,10 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `knowledge`, `improve` | standard | `migite` Phases 3.5 / 4.5 |
 | `plan_fold` | standard | `migite` Phase 3.8, the exact edits that keep `plan.md` current after each run |
 | `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
-| `amend`, `plan_refine`, `testing_plan`, `jira` | standard | `migite` amend mode, plan-gate refine, testing-plan regeneration, Jira fetch |
+| `amend`, `plan_refine`, `jira` | standard | `migite` amend mode, plan-gate refine, Jira fetch |
+| `testing_plan` | standard | `generate_testing_plan` (in `migite-plan`, or in Phase 3 with `plan.testing_plan_when: review`), and the testing-plan edits and regeneration in amend and fix rounds. It writes a checklist document from the finished plan, so it does not need the strong tier |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
-| `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description |
+| `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description. Under `--automata` each one is a headless call on this role |
 | `lens` | standard | `migite-explore` lenses |
 | `explore_synth`, `challenge`, `explore_refine` | strong | `migite-explore` synthesis, adversarial challenge, and the revision that applies it |
 | `analyst`, `extract` | standard | `migite-blueprint` analysts, milestone/knowledge extraction |
@@ -291,7 +312,9 @@ Changing a tier moves every role in it; pinning a role moves only that call. An 
 name under `roles:` or `roles_effort:` is an error.
 
 **Interactive sessions.** `run_phase` (implement, spec writing, gate fixes, PR description) opens
-the agent's own interface, so it is neither metered nor a headless call — but it runs on the
+the agent's own interface, so it is not a headless call. On Claude Code it is still metered: when
+the session ends, its transcript is read back into the usage ledger as `session:<label>` (see
+[internals.md](./internals.md#machine-readable-envelopes-and-the-usage-ledger)). It runs on the
 `session` role's model, passed to the CLI as its model for that run. Without it, the CLI decides
 on its own: opencode resumes whatever model its last session in this directory used, whatever
 `models:` says. Pin `models.roles.session` to move interactive work without touching a tier.
@@ -314,17 +337,120 @@ tier always gets the longer limit. To size a specific model or call, override pe
 role wins). Set a generous value when a reasoning backend routinely runs long — e.g.
 `models.timeouts.strong: 1800`. `migite config` prints each role's resolved `timeout=`.
 
+`models.roles_timeouts` merges role by role across the config files, so a file that times one
+role keeps the others. It has two defaults. `session: 3600`: under [`--automata`](./migite.md#automata)
+the implement, fix and PR-description sessions are headless calls on the `session` role, each a
+whole phase, far longer than the strong tier's 900s. A timed-out session stops the run (exit 1),
+and the same command with `--automata` runs that phase again. Interactive sessions have no limit.
+`native_plan: 1800`: with [`plan.strategy: native`](#plan-strategy) one call explores the repo and
+writes the plan, the work the explorers and synthesis split between them.
+
+The testing plan used to run on the strong tier, so its generation had `thinking_timeout_seconds`
+(900s). On the standard tier it gets `timeout_seconds` (600s). A long testing plan on a slow
+backend can need more: `models.roles_timeouts.testing_plan: 900`. A timeout while `migite-plan`
+generates it fails the whole plan run (with `plan.testing_plan_when: review` it only costs the
+testing plan, see [plan](#plan)), so raise it if you see one.
+
 <a id="stack"></a>
 ### `stack`
 
 ```yaml
-stack: auto             # auto | rails | generic   (MIGITE_STACK; --stack on the command line wins)
+stack: auto             # auto | rails | generic | a profile name from stacks   (MIGITE_STACK; --stack on the command line wins)
 ```
 
-`auto` runs the detection in `lib/stack.sh` (`Gemfile` at the root or one level down → `rails`,
-else `generic`). Setting it explicitly is for monorepos where detection picks wrong, or to force
-the no-tooling path. Describing stacks as data (lint/test commands, globs) is not supported yet —
-see the README roadmap.
+`auto` runs the detection in `lib/stack.sh`, in this order:
+
+1. the [`stacks`](#stacks) profiles, by their `detect` files
+2. `rails`: a `Gemfile` at the root or one level down
+3. `generic`: everything else, with no lint or tests
+
+Set it explicitly for a monorepo where detection picks wrong, to force the no-tooling path, or to
+pick a profile that has no `detect` files. A name that is neither built in nor a configured
+profile is a config error.
+
+<a id="stacks"></a>
+### `stacks`
+
+```yaml
+stacks:
+  node:                                 # the name: lowercase letters, digits, underscores
+    detect: [package.json]              # any one of these at the repo root selects the profile
+    source: ["*.js", "*.ts"]            # the changed files lint and autofix get
+    specs: ["*.test.js", "*.test.ts"]   # the changed files test gets
+    autofix: npx eslint --fix {files}   # runs before lint; its exit code is ignored
+    lint: npx eslint {files}            # exit code 0 = clean
+    test: npx jest {files}              # exit code 0 = green
+```
+
+A profile describes a non-Rails repo's lint and test commands as data. Heal (Phase 2.5) and
+review (Phase 3) run them where they run rubocop and rspec on a Rails repo. Every key is optional
+except one command: a profile needs at least one of `lint`, `autofix` and `test`. Profiles are
+empty by default, which leaves detection as it was before they existed: `rails` or `generic`.
+
+**Detection.** Profiles are tried before `rails`. A profile from a higher-precedence file comes
+first (the repo's `.migite.yml` before `~/.config/migite/config.yml`), then each file's in the
+order written. A profile matches when any one of its `detect` paths or globs exists at the repo
+root. One with no `detect` is used only when `stack:` or `--stack` names it. `rails`, `generic` and
+`auto` can't be profile names: the Rails path stays as it is.
+
+> **A profile in your user config applies to every repo.** A user-level `node` profile with
+> `detect: [package.json]` also claims every Rails app that ships a `package.json`, because
+> profiles come before `rails`. Put a profile in the repo's `.migite.yml`, give it a `detect`
+> file only that kind of repo has, or set `stack: rails` in the Rails repos. The run's `Stack:` line
+> and `migite doctor` name the profile and the file that matched.
+
+**Which files a command gets.** `source` and `specs` filter the same changed-file list every phase
+uses: the diff against the base branch plus untracked files, minus deletes and `scratchpad/`
+([Which files get linted and tested](./phases.md#lint-test-selection)). A glob matches the path
+from the repo root:
+
+- `*` crosses directories, so `*.js` is every `.js` file and `src/*` is all of `src/`.
+- `**/` is zero or more directories, so `**/test_*.py` is a `test_*.py` at any depth.
+- No globs means every changed file.
+
+Quote globs in YAML: a bare `*` starts an alias. A command runs only when its list has at least
+one file.
+
+**`{files}`.** In a command, `{files}` becomes that list, each path a separate, quoted argument (a
+space in a name is safe). A command without `{files}` runs as written, which is what a whole-suite
+runner like `go test ./...` wants; the globs then only decide *when* it runs. Commands run with
+`bash -c` from the repo root, with stdin closed. Chain several with `&&`.
+
+**Pass or fail is the exit code.** 0 passes. 126 or 127 (not executable, not installed) means the
+command could not start: that is a tooling error on the commit-gate banner, never something heal
+asks the agent to fix. Any other code is a failure. Heal hands the failing output to the agent
+through the same capped excerpt as rubocop and rspec (`heal.prompt_log_max_bytes`). Under
+`gates.commit.policy: strict`, failing tests and lint are blockers (`require_green_specs`,
+`require_clean_lint`).
+
+**What a profile does not have.** These are Rails' and stay in its code path:
+
+- the `tooling_failed` log patterns
+- the app directory one level down
+- `heal.full_suite_fallback` (a test command without `{files}` already is the whole suite)
+- the `frontend` linters and reviewer
+
+What the reviewers and `migite-audit` check on a profile comes from `prompts/checklists/generic.md`
+until you give the profile its own [checklist](#checklists) (`checklists/<name>.md` in `prompts.dir`).
+
+More examples:
+
+```yaml
+stacks:
+  python:
+    detect: [pyproject.toml, setup.py]
+    source: ["*.py"]
+    specs: ["**/test_*.py", "*_test.py"]
+    autofix: ruff check --fix {files} && ruff format {files}
+    lint: ruff check {files}
+    test: pytest {files}
+  go:
+    detect: [go.mod]
+    source: ["*.go"]
+    specs: ["*.go"]                     # any Go change runs the suite
+    lint: test -z "$(gofmt -l {files})" && go vet ./...
+    test: go test ./...
+```
 
 <a id="gates"></a>
 ### `gates`
@@ -333,8 +459,9 @@ see the README roadmap.
 gates:
   commit:
     policy: lenient           # lenient | strict
-    require_clean_lint: true  # strict only: remaining rubocop offenses block approval
-    require_green_specs: true # strict only: spec failures or a tooling error block approval
+    require_clean_lint: true  # strict only: remaining rubocop offenses (a profile's failing lint) block approval
+    require_green_specs: true # strict only: spec failures (a profile's failing tests) or a tooling error block approval
+    automata_fix_rounds: 1    # --automata only: fix rounds while blockers remain, before the policy decides (0 = none)
   plan:
     warn_after_rejections: 3  # warn that the task may be too large after N full redos (0 = never)
 ```
@@ -344,6 +471,16 @@ gates:
 a tooling error, or remaining rubocop offenses depending on the two `require_*` flags — and lists
 them. A capital **`Y`** approves anyway and appends the blockers to `gate-overrides.md` in the
 scratchpad (mirrored to the vault), so overrides leave a record.
+
+Under [`--automata`](./migite.md#automata) nobody can override. While blockers remain, the gate
+first answers `f` up to `automata_fix_rounds` times: the agent fixes the review findings and the
+blockers in a headless session, the testing plan is updated, and lint, tests and the review run
+again. A tooling error on its own gets no round, since a fix session can't repair the toolchain.
+The count is per invocation. Then the policy decides the exit status: `lenient` approves over the
+blockers, records them like a `Y`, and the run exits 3; `strict` stops at the gate with the
+blockers printed and exits 2. With nothing blocking, both approve and the run exits 0. The
+`require_*` flags shape the blocker list in both modes. A fix round costs one session, a
+testing-plan edit and a re-review; `automata_fix_rounds: 0` is the behaviour before the key existed.
 
 <a id="permissions"></a>
 ### `permissions`
@@ -381,6 +518,8 @@ the agent CLI's MCP servers, plugins, hooks or skills:
 | `critic`, `review_*`, `pr_review_*`, `audit_area`, `refute` | `Read`, `Grep`, `Glob` only, capped at `budget.review_call_max_usd` per call |
 | `heal` | the CLI's full toolset (it edits files) |
 | `jira` | the CLI's full context (its scoped tools are MCP tools) |
+| `session` | the CLI's full toolset: under [`--automata`](./migite.md#automata) the implement, fix and PR-description sessions run as headless calls on this role |
+| `native_plan` | the CLI's full toolset, so it can run its own explore subagents. It runs in the agent's read-only plan mode, which keeps it from editing anything (see [`plan.strategy`](#plan-strategy)) |
 | every other role | no tools: the prompt carries everything |
 
 Your `~/.claude/CLAUDE.md` and the repo's `CLAUDE.md` files are still passed to every isolated
@@ -397,8 +536,8 @@ one-time notice and run as `default`.
 ```yaml
 heal:
   max_attempts: 3             # MAX_HEAL_ATTEMPTS — Phase 2.5 fix-loop cap
-  full_suite_fallback: true   # Phase 3: run the whole rspec suite when no spec files changed
-  prompt_log_max_bytes: 60000 # per-log cap on the rubocop/rspec/frontend-lint excerpts in a heal prompt
+  full_suite_fallback: true   # Phase 3: run the whole rspec suite when no spec files changed (rails only)
+  prompt_log_max_bytes: 60000 # per-log cap on the rubocop/rspec/frontend-lint (or a profile's lint/test) excerpts in a heal prompt
 ```
 
 `full_suite_fallback: false` makes Phase 3 consistent with Phase 2.5 (skip rspec, say so) instead
@@ -432,13 +571,134 @@ each check does, is in [docs/phases.md](./phases.md#frontend).
 
 ```yaml
 knowledge:
-  inject_max_bytes: 8000      # newest knowledge.md entries put into prompts
+  inject_max_bytes: 8000      # knowledge.md entries put into prompts, up to this many bytes
+  select: relevant            # relevant | recent
 ```
 
-`knowledge.md` gains an entry every run. The plan, implement, fix and amend prompts get its
-newest entries first, up to this many bytes, with a note naming the file for the rest. They used
-to get the whole file, and the planner's explorers got its first 800 characters, which were the
-header and the oldest lessons.
+`knowledge.md` gains an entry every run. The plan, implement, fix and amend prompts get up to
+`inject_max_bytes` of its entries, printed newest first, with a note naming the file for the
+rest. They used to get the whole file, and the planner's explorers got its first 800 characters,
+which were the header and the oldest lessons.
+
+- `select: relevant` fills the budget with the entries that share the most words with the task
+  first: the intake, plus the Jira ticket when `--jira` was used. The template's own text doesn't
+  count. When no entry shares a word, it behaves like `recent`.
+- `select: recent` fills it with the newest entries.
+
+Each planner explorer gets the same kind of selection at 800 bytes. How words are matched is in
+[docs/phases.md](./phases.md#active-memory-injection).
+
+<a id="plan"></a>
+### `plan`
+
+```yaml
+plan:
+  testing_plan_when: plan     # plan | review
+  chain_sessions: false       # true | false
+  strategy: langgraph         # langgraph | native
+```
+
+`testing_plan_when: plan` (the default) writes `testing-plan.md` in Phase 1, from the finished plan. `review` leaves
+it out of Phase 1 and writes it at the start of Phase 3, from `plan.md` and the change as built
+(the diff capped at `ui.prompt_diff_max_bytes`, plus the name of every changed file, since a diff
+leaves new untracked files out), before the browser check and the reviewers read it. It then
+describes what was built rather than what was planned, and a plan you redo no longer pays for a
+testing plan nobody reads.
+
+- A testing plan that already exists is kept: a resume, an `--amend` run, a fix round and a
+  re-review never write over one.
+- Redoing the plan of a task that already has a testing plan (`r` on an existing plan) sets the old
+  testing plan aside in `scratchpad/<task>/.plan-history/` and removes both copies, so Phase 3
+  writes a new one for the new plan.
+- A failed or empty call only warns, and the review runs without it: the testing-plan reviewer
+  reports it missing (unless `review.dimensions.testing_plan` is `off`), and the next re-review
+  tries again. With `plan` timing a failed call fails `migite-plan` as a whole.
+- `plan.json` records `testing_plan_when`, and `outputs.testing_plan` is `null` under `review`.
+- The ledger shows the same `generate_testing_plan` call, role `testing_plan`, at either moment.
+
+<a id="plan-chain-sessions"></a>
+`chain_sessions: true` runs synthesis, refine and the testing plan as one agent session. Synthesis
+starts it, and each later call continues the session the call before it reported (Claude Code's
+`--resume`) instead of starting a new one. A call that continues a session reads what the earlier
+calls sent from the prompt cache, so refine is sent only the critic's findings (the session already
+holds the draft and the explorer reports), and the testing plan is pointed at the plan instead of
+being sent it again. A previous call's reply was never sent, so the first call that continues the
+session still writes it to the cache once. Off by default: it is an experiment, measured per call
+in `usage.jsonl`.
+
+- The architecture critic runs on its own, as before. Its read tools would change the session's
+  tool set, and a call with a different tool set reads nothing of the session from the cache.
+- On the chain, refine sends no JSON schema, for the same reason: Claude Code passes a schema as a
+  tool. migite reads the edit list from the reply's text, as it does on backends without
+  structured output.
+- The testing plan joins only when the `testing_plan` role runs on the same model as `think`, since
+  one model reads nothing from another's cache. By default it doesn't (standard tier against
+  strong); pin `models.roles.testing_plan` to the strong model to chain it. A different effort
+  level keeps the cache on Opus 5.5, Sonnet 5.5 and Fable 5.1, not on other models. With
+  `testing_plan_when: review` there is nothing to chain: Phase 3 writes the testing plan in its own
+  process.
+- The chain ends, and the calls after it run as they do with the setting off, when refine falls back
+  to a full rewrite, when some of its edits don't apply (the session would hold a different plan
+  from `plan.md`), or when a call reports no session id.
+- `plan.json` records it under `session_chain`: `enabled`, the calls that continued the session
+  (`resumed`), and a `note` saying why the chain didn't apply or ended early. In `usage.jsonl` the
+  chained calls share a `session_id`.
+- It needs a backend that can continue a session: Claude Code. On the others `migite-plan` prints
+  one notice and every call starts a new session, as with the setting off.
+- The chained calls' sessions are saved to disk like any Claude Code session; other isolated
+  headless calls save none.
+- With `strategy: native` the chain starts at the native plan call instead of synthesis. Refine and
+  the testing plan then repeat that call's launch (plan mode, the CLI's own tools), since a
+  different launch reads nothing of the session from the cache, and are told not to use the tools.
+  Each joins only when its role runs on the same model as `native_plan`; by default `think` does
+  (both strong tier) and `testing_plan` doesn't.
+
+<a id="plan-strategy"></a>
+`strategy` chooses who explores the codebase and writes the plan.
+
+- `langgraph` (the default) is the planner as it has always been: 7 explorers (8 when the task may
+  touch the frontend) each read up to 14 files of one area on the fast tier, and synthesis writes
+  the plan from their reports on the strong tier.
+- `native` replaces the explorers and synthesis with one headless call on the `native_plan` role,
+  in the agent's own read-only plan mode, with the CLI's own tools. The agent explores the repo
+  with its own subagents, as it would in an interactive plan session, then writes the plan in the
+  format of `prompts/plan.md`, preceded by `prompts/native_plan.md` (overridable through
+  [`prompts.dir`](#prompts) like the others). The critic, refine and the testing plan that follow
+  are the same, and so are the five outputs the gate, `--staged`, implement, the reviewers and the
+  plan fold read.
+
+What changes under `native`:
+
+- The plan ends with a `## Files examined` section: one line per file the agent read and what it
+  showed. It stays in `plan.md`. It is the evidence the explorer reports were: the refiner may
+  reject a critic finding only by quoting the plan, this section included.
+- A reply without a plan document or without that section is retried once, in the same session
+  when the backend can continue one, so the exploration isn't paid for twice.
+- No 14-file cap and no Haiku explorers: the agent reads what it decides to, on its own subagents'
+  models. Expect more cache reads and fewer, longer calls; the ledger records one `native_plan`
+  call where it recorded `explore:*` and `synthesize_plan`.
+- `plan.json` records `strategy: native` and has no `explorers` key.
+- It needs a backend with a headless plan mode: Claude Code (`--permission-mode plan`), Cursor
+  (`--mode plan`) and OpenCode (`--agent plan`, built from its docs, not yet run live). On Kimi,
+  whose `-p` rejects `--plan`, `migite-plan` prints one notice and plans with `langgraph`, and
+  `plan.json`'s `strategy_note` says why.
+
+<a id="review"></a>
+### `review`
+
+```yaml
+review:
+  dimensions:
+    testing_plan: on     # on | off: the testing-plan reviewer in Phase 3
+```
+
+`migite-review` runs four reviewers (correctness, security, test coverage, testing plan), plus
+the frontend one when the diff touches views or JavaScript. `testing_plan: off` drops the
+testing-plan reviewer: three reviewers run, the verdict is told the dimension did not run and
+treats the testing-plan checklist item as N/A, and a re-review never carries or re-runs it.
+`testing-plan.md` is still written, and still read by the browser check and the PR
+description; the key only skips grading it. Turning it back on makes the next re-review run the
+dimension, because the last review never did.
 
 <a id="prompts"></a>
 ### `prompts`, `templates`
@@ -451,9 +711,10 @@ templates:
 ```
 
 Any `<dir>/<name>.md` overrides the same-named file under migite's `prompts/`
-(`plan`, `implement`, `review`, `architecture_critic`) or `templates/` (`feature`, `bug`,
-`refactor`, `spike`, `config`, `commit`). Files not present in the override dir fall back to the
-repo copies, so you can override just the PR-description prompt for one project.
+(`plan`, `native_plan`, `implement`, `review`, `architecture_critic`, and the per-stack
+[checklists](#checklists)) or `templates/` (`feature`, `bug`, `refactor`, `spike`, `config`,
+`commit`). Files not present in the override dir fall back to the repo copies, so you can override
+just the PR-description prompt for one project.
 
 The directory may be relative (anchored at the repo root) or absolute, and may contain **`{org}`**
 and **`{repo}`**, substituted with the vault org and the repo name. That makes a single user-level
@@ -475,6 +736,55 @@ templates:
 The generic `templates/commit.md` shipped with migite has no company-specific checklist items; a
 team's own PR template belongs in an override like the one above.
 
+<a id="checklists"></a>
+#### Checklists: what the reviewers and the auditor check, per stack
+
+What `migite-review` (Phase 3), `migite-pr-review` and `migite-audit` check comes from a checklist
+file per stack, under `prompts/checklists/`:
+
+- `rails.md` for the rails stack
+- `generic.md` for `generic` and every [stack profile](#stacks) without a file of its own
+
+`prompts.dir` overrides a checklist like any other prompt, with one difference: an override
+**replaces only the sections it contains** and keeps the rest of the shipped file. Each override
+goes in `<prompts.dir>/checklists/<stack>.md`:
+
+- To change one Rails dimension, write `checklists/rails.md` with just that section.
+- To give a profile its own checks, write `checklists/node.md` with the sections you want; the
+  rest come from `generic.md`.
+
+```markdown
+Expertise: Node.js                      <!-- "a senior Node.js engineer / architect" -->
+
+## review: security                     <!-- migite-review's criteria for one reviewer -->
+Every route handler checks the session. No user input reaches child_process or eval.
+
+## pr_review: test_coverage             <!-- migite-pr-review's checks for one reviewer -->
+- New handlers have supertest specs for 200, 401 and 422
+
+## audit: handlers                      <!-- one migite-audit area -->
+Files: src/routes/**/*.ts src/middleware/**/*.ts
+- Unvalidated req.body fields
+- Promise chains with no catch
+
+## refute                               <!-- the refuter's "How to work" block -->
+How to work:
+1. ...
+```
+
+| Section | Names | Notes |
+|---|---|---|
+| `## review: <dimension>` | `correctness`, `security`, `test_coverage`, `testing_plan`, `frontend` | Fixed: each reviewer is a [model role](#models) (`review_<dimension>`), so a file changes its text but can't add one. `frontend` runs only on rails, when the diff touches views or JavaScript |
+| `## pr_review: <dimension>` | `correctness`, `security`, `test_coverage`, `conventions_and_migrations` | Fixed, for the same reason (`pr_review_<dimension>`) |
+| `## audit: <area>` | any | First line `Files:` with globs from the repo root. A new name adds an area, an existing one replaces it; `--focus` matches area names |
+| `## refute` | none | The second agent that tries to disprove each Critical. Rails has none and uses the block in `migite/verify.py`, the one the refuter evals calibrate |
+
+`Expertise:` before the first section names the reviewers' and the auditor's expertise. Other text
+before the first section is ignored. A section name that isn't in the table is an error naming the
+file and line. `migite-review`, `migite-pr-review` and `migite-audit` print the checklist files
+they used. Both standalone tools pick the stack the way `migite` does (`--stack`, then `stack:`,
+then detection), and `migite-pr-review` runs a profile's lint and tests itself, read-only (no autofix).
+
 <a id="budget"></a>
 ### `budget`
 
@@ -486,7 +796,9 @@ budget:
 ```
 
 The run cap is **soft**: once the run's usage ledger passes it, every gate banner shows a red
-over-budget line. Nothing is aborted mid-graph. Interactive sessions aren't metered.
+over-budget line. Nothing is aborted mid-graph. The ledger includes the interactive sessions on
+Claude Code (implement, fixes, PR description), so they count toward the cap once they end; on
+other agents they aren't metered.
 
 `review_call_max_usd` is a **hard** cap on each read-only reviewer call (`--max-budget-usd`), a
 guard against a reviewer that keeps opening files. A reviewer that hits it is reported as a
@@ -508,6 +820,9 @@ ui:
 `prompt_diff_max_bytes` bounds the branch diff in the amend and testing-plan prompts. They get
 `git diff --stat` for the whole change, then the diff cut to this size (its start and end), with
 the full diff saved under `logs.dir` for reference.
+
+Under [`--automata`](./migite.md#automata), `tmux`, `notify` and `editor` don't apply: nothing opens a
+pane, a notification or an editor.
 
 ---
 
@@ -543,6 +858,8 @@ files**:
 right after the repo root is known; it `eval`s `python -m migite.config env`, which prints one
 `MIGITE_CFG_<KEY>=value` assignment per leaf plus `MIGITE_CFG_MODEL_<ROLE>` for every resolved
 role, then maps them onto the variables the phases already read (`DEV_LOG_BASE`, `LOG_DIR`, ...).
+A `stacks` profile's lists go out one item per line (`MIGITE_CFG_STACKS_NODE_SOURCE`), and
+`MIGITE_CFG_STACKS` names the profiles in the order detection tries them.
 Phases use `cfg <key>`, `prompt_path <name>`, `template_path <name>`, and pass roles, never
 models, to `agent_ask` / `agent_think`. `load_migite_config` also caches the configured agent's
 description as `MIGITE_AGENT_*` (`load_agent_info`).

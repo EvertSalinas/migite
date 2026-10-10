@@ -9,7 +9,7 @@
 
 prompts="$REPO_ROOT/prompts"
 
-for p in plan implement review architecture_critic; do
+for p in plan native_plan implement review architecture_critic; do
   check "prompts/$p.md exists and is non-empty" test -s "$prompts/$p.md"
 done
 
@@ -34,6 +34,10 @@ check "templates/commit.md: no organisation-specific hosts, ticket prefixes, or 
   not grep -qiE 'apptegy|atlassian\.net|THRILL|brakeman|jenkins' "$REPO_ROOT/templates/commit.md"
 check "templates/commit.md: keeps the [PR_FILE] placeholder deliver.sh substitutes" \
   grep -qF '[PR_FILE]' "$REPO_ROOT/templates/commit.md"
+
+# plan.strategy: native - migite-plan reads the plan's evidence from this heading (FILES_EXAMINED)
+check "prompts/native_plan.md: asks for the '## Files examined' section migite-plan reads" \
+  grep -qF '## Files examined' "$prompts/native_plan.md"
 
 # The stub failure mode: a confirmation sentence instead of the document
 check "prompts/plan.md: no 'written to Obsidian' confirmation line (this WAS the observed stub output)" \

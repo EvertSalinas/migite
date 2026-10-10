@@ -129,7 +129,7 @@ When done, write notes on what you built to: $STAGE_OUTPUT_FILE"
       if [[ $STAGE_NUM -lt $STAGE_COUNT ]]; then
         echo ""
         git diff --stat 2>/dev/null | head -20 || true
-        read_gate_choice "STAGE CHECKPOINT: $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL" "Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=abort): "
+        read_gate_choice "STAGE CHECKPOINT: $STAGE_NUM/$STAGE_COUNT — $STAGE_LABEL" "Proceed? [c/r/e/q] (c=continue, r=redo this stage, e=edit next stage brief, q=abort): " c
         case "${GATE_CHOICE:-c}" in
           r|R)
             STAGE_NUM=$((STAGE_NUM - 1))
@@ -191,6 +191,10 @@ When done, write notes on what you built to: $STAGE_OUTPUT_FILE"
 run_auto_heal_loop() {
   echo ""
   log "Phase 2.5 — Running checks (auto-heal enabled, max $MAX_HEAL_ATTEMPTS attempts)"
+  if stack_is_profile; then
+    run_stack_heal_loop
+    return
+  fi
 
   local HEAL_RUBOCOP_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rubocop.txt"
   local HEAL_RSPEC_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-rspec.txt"
@@ -321,5 +325,99 @@ Fix all failures above. Do not run rubocop or the frontend linters yourself — 
     warn "Auto-heal stopped with failures remaining ($HEAL_ATTEMPT/$MAX_HEAL_ATTEMPTS attempts) — review phase will see them"
   else
     success "Auto-heal resolved failures after $HEAL_ATTEMPT attempt(s)"
+  fi
+}
+
+# run_stack_heal_loop - Phase 2.5 for a configured profile (stacks.<name>): the
+# loop above with exit codes in place of log patterns. The profile's autofix runs
+# locally before every lint, so the agent only sees what it left; only a lint or
+# test that failed goes to the agent. A command that could not start (exit
+# 126/127, see stack_check_result) is never handed over: editing the code can't
+# install a missing linter. Phase 3 reports it as a tooling error.
+run_stack_heal_loop() {
+  local HEAL_LINT_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-lint.txt"
+  local HEAL_TEST_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-test.txt"
+  local HEAL_LOG_MAX
+  HEAL_LOG_MAX=$(cfg heal.prompt_log_max_bytes 60000)
+  local LINT_CMD TEST_CMD FIX_CMD
+  LINT_CMD="$(cfg "stacks.$STACK.lint")"
+  TEST_CMD="$(cfg "stacks.$STACK.test")"
+  FIX_CMD="$(cfg "stacks.$STACK.autofix")"
+  local LINT_RESULT TEST_RESULT
+  HEAL_ATTEMPT=0
+
+  _heal_stack_checks() {
+    local rc=0
+    run_stack_lint "$BASE_BRANCH" "$HEAL_LINT_LOG" true || rc=$?
+    LINT_RESULT=$(stack_check_result "$rc" "$HEAL_LINT_LOG")
+    [[ "$LINT_RESULT" == "unavailable" ]] && warn "The $STACK lint could not start (exit $rc): $LINT_CMD - not asking $(agent_field display_name) to fix it"
+    rc=0
+    run_stack_test "$BASE_BRANCH" "$HEAL_TEST_LOG" || rc=$?
+    TEST_RESULT=$(stack_check_result "$rc" "$HEAL_TEST_LOG")
+    [[ "$TEST_RESULT" == "unavailable" ]] && warn "The $STACK tests could not start (exit $rc): $TEST_CMD - not asking $(agent_field display_name) to fix it"
+    return 0
+  }
+
+  _heal_stack_checks
+  while [[ $HEAL_ATTEMPT -lt $MAX_HEAL_ATTEMPTS ]]; do
+    [[ "$LINT_RESULT" != "failed" && "$TEST_RESULT" != "failed" ]] && break
+
+    HEAL_ATTEMPT=$((HEAL_ATTEMPT + 1))
+    warn "Auto-heal attempt $HEAL_ATTEMPT/$MAX_HEAL_ATTEMPTS..."
+
+    local HEAL_FIX_LOG="$LOG_DIR/$TIMESTAMP-${TASK_SLUG}-heal-fix-${HEAL_ATTEMPT}.txt"
+    local FAILURE_SECTIONS=""
+    if [[ "$LINT_RESULT" == "failed" ]]; then
+      local fixed_note=""
+      [[ -n "$FIX_CMD" ]] && fixed_note="; \`$FIX_CMD\` already applied - these remain and need a manual fix"
+      FAILURE_SECTIONS="${FAILURE_SECTIONS}## Lint output (\`$LINT_CMD\`${fixed_note})
+$(truncate_log "$HEAL_LINT_LOG" "$HEAL_LOG_MAX")
+
+"
+    fi
+    if [[ "$TEST_RESULT" == "failed" ]]; then
+      FAILURE_SECTIONS="${FAILURE_SECTIONS}## Test output (\`$TEST_CMD\`)
+$(truncate_log "$HEAL_TEST_LOG" "$HEAL_LOG_MAX")
+
+"
+    fi
+
+    local HEAL_FIX_PROMPT
+    HEAL_FIX_PROMPT="The implementation has failures. Fix them without changing the tests unless they are fundamentally flawed.
+
+${FAILURE_SECTIONS}## Plan
+$(cat "$PLAN_FILE")
+
+## Implementation notes
+$(cat "$IMPLEMENTATION_FILE")
+
+Fix all failures above. migite runs this repo's lint and tests again after every attempt (the \`$STACK\` stack profile in the migite config), with {files} standing for the changed files. Long logs above are excerpts; the full output is at $HEAL_LINT_LOG and $HEAL_TEST_LOG if you need more of it. When done, update: $IMPLEMENTATION_FILE"
+
+    # A failed call (e.g. a CLI error) must not kill the run - degrade to the
+    # review phase seeing the remaining failures, as if heal were exhausted.
+    if ! agent_think --quiet --permission "$(cfg permissions.heal auto)" "Auto-heal $HEAL_ATTEMPT" heal "$HEAL_FIX_LOG" "$HEAL_FIX_PROMPT"; then
+      warn "Auto-heal call failed - skipping to review with failures still present"
+      break
+    fi
+
+    log "Re-running checks after heal attempt $HEAL_ATTEMPT..."
+    _heal_stack_checks
+  done
+
+  local unavailable=false
+  if [[ "$LINT_RESULT" == "unavailable" || "$TEST_RESULT" == "unavailable" ]]; then
+    unavailable=true
+    warn "A $STACK check could not start - Phase 3 reports this as a tooling error"
+  fi
+  if [[ "$LINT_RESULT" == "failed" || "$TEST_RESULT" == "failed" ]]; then
+    warn "Auto-heal stopped with failures remaining ($HEAL_ATTEMPT/$MAX_HEAL_ATTEMPTS attempts) - review phase will see them"
+  elif [[ $HEAL_ATTEMPT -gt 0 ]]; then
+    success "Auto-heal resolved failures after $HEAL_ATTEMPT attempt(s)"
+  elif [[ "$unavailable" == "true" ]]; then
+    :
+  elif [[ "$LINT_RESULT" == "skipped" && "$TEST_RESULT" == "skipped" ]]; then
+    warn "Nothing to check: $(head -1 "$HEAL_LINT_LOG") $(head -1 "$HEAL_TEST_LOG")"
+  else
+    success "All checks passed - no healing needed"
   fi
 }

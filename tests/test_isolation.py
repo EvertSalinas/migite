@@ -106,6 +106,11 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(gateway.tools_policy("summary"), "none")
         self.assertEqual(gateway.tools_policy("heal"), "default")
 
+    def test_an_automata_session_keeps_the_interactive_sessions_toolset(self):
+        # --automata runs run_phase's sessions headless on this role: isolated, the
+        # implement session would have no tools and could not edit a file
+        self.assertEqual(gateway.tools_policy("session"), "default")
+
     def test_every_review_dimension_gets_read_only_tools(self):
         reviewers = [r for r in config.ROLE_TIERS if r.startswith(("review_", "pr_review_"))]
         self.assertIn("review_frontend", reviewers)

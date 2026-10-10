@@ -5,18 +5,71 @@
 #   structured   success envelope with structured_output (a review verdict)
 #   fold         success envelope whose result is a plan_fold reply with one edit ("1 minute" -> "15 seconds")
 #   fold_noop    success envelope whose result is a plan_fold reply with no edits
+#   critic       success envelope whose result is one architecture-critic finding
+#   edits        success envelope whose result is a triage edit reply that matches the `plan` mode's plan
+#   plan         success envelope whose result is a multi-section plan (passes migite-plan's stub guard)
+#   native_plan  the `plan` mode's plan with a final `## Files examined` section (plan.strategy: native)
+#   testing_plan success envelope whose result is a testing plan with its three ### sections
 #   text         plain text on stdout, no JSON (older CLI / --output-format text)
 #   is_error     envelope with is_error=true, exit 0
+#   empty        success envelope whose result is the empty string
 #   exit1        garbage on stdout, exit 1
 #   timeout      sleeps 30s (use with a short timeout)
-# It also records the argv it was called with to $FAKE_CLAUDE_ARGV when set.
+# It also records the argv it was called with to $FAKE_CLAUDE_ARGV, and the prompt it read
+# on stdin to $FAKE_CLAUDE_PROMPT, when set; $FAKE_CLAUDE_ARGV_LOG gets one argv line per call.
+# The session id is "fake", or "fake-<n>" for the n-th call when $FAKE_CLAUDE_SESSIONS names a
+# counter file. The real CLI keeps the id on --resume; a new one per call lets a test see which
+# call a later one continued.
+# $FAKE_CLAUDE_ROUTES ("<marker>=<mode>;<marker>=<mode>;...") picks the mode by the first marker
+# found in the prompt, else $FAKE_CLAUDE_MODE: a whole planner run, whose explorers call in
+# parallel, gets the right reply for each call without depending on the order they arrive in.
+# Without --print it stands in for an interactive session: it reads no stdin, and given
+# --session-id it writes a one-turn transcript where Claude Code keeps one,
+# ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<pwd -P, non-alphanumerics as "-">/<id>.jsonl, with
+# the turn on two lines as the real CLI writes it. It exits $FAKE_CLAUDE_SESSION_EXIT (0).
 set -u
+interactive=true
+for arg in "$@"; do
+  [[ "$arg" == "--" ]] && break
+  [[ "$arg" == "--print" ]] && interactive=false
+done
+if [[ "$interactive" == true ]]; then
+  [[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
+  sid=""
+  for ((i = 1; i <= $#; i++)); do
+    [[ "${!i}" == "--session-id" ]] && { j=$((i + 1)); sid="${!j}"; }
+  done
+  if [[ -n "$sid" ]]; then
+    cwd="$(pwd -P)"
+    dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${cwd//[^A-Za-z0-9]/-}"
+    mkdir -p "$dir"
+    turn='{"type":"assistant","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"'","sessionId":"'"$sid"'","requestId":"req_fake","message":{"id":"msg_fake","model":"claude-opus-5-5","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":500,"cache_read_input_tokens":1000,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000}}}}'
+    printf '%s\n%s\n' "$turn" "$turn" > "$dir/$sid.jsonl"
+  fi
+  exit "${FAKE_CLAUDE_SESSION_EXIT:-0}"
+fi
 prompt="$(cat)"
 [[ -n "${FAKE_CLAUDE_ARGV:-}" ]] && printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGV"
+[[ -n "${FAKE_CLAUDE_ARGV_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_CLAUDE_ARGV_LOG"
+[[ -n "${FAKE_CLAUDE_PROMPT:-}" ]] && printf '%s' "$prompt" > "$FAKE_CLAUDE_PROMPT"
+session="fake"
+if [[ -n "${FAKE_CLAUDE_SESSIONS:-}" ]]; then
+  calls="$(cat "$FAKE_CLAUDE_SESSIONS" 2>/dev/null || true)"
+  calls=$(( ${calls:-0} + 1 ))
+  printf '%s' "$calls" > "$FAKE_CLAUDE_SESSIONS"
+  session="fake-$calls"
+fi
 model="claude-haiku-4-5-20251001"
 for ((i = 1; i <= $#; i++)); do
   [[ "${!i}" == "--model" ]] && { j=$((i + 1)); model="${!j}"; }
 done
+mode="${FAKE_CLAUDE_MODE:-envelope}"
+if [[ -n "${FAKE_CLAUDE_ROUTES:-}" ]]; then
+  IFS=';' read -r -a routes <<< "$FAKE_CLAUDE_ROUTES"
+  for route in "${routes[@]}"; do
+    [[ "$prompt" == *"${route%%=*}"* ]] && { mode="${route#*=}"; break; }
+  done
+fi
 snippet="${prompt:0:40}"
 snippet="${snippet//\"/\\\"}"
 snippet="${snippet//$'\n'/ }"
@@ -25,19 +78,27 @@ envelope() {
   # $1 = result (JSON-escaped string body), $2 = extra JSON fields (with leading comma) or empty
   cat <<EOF
 {"type":"result","subtype":"success","is_error":false,"duration_ms":1407,"duration_api_ms":1265,"num_turns":1,
- "result":"$1","session_id":"fake","total_cost_usd":0.0475,
- "usage":{"input_tokens":10,"cache_creation_input_tokens":23624,"cache_read_input_tokens":0,"output_tokens":39},
+ "result":"$1","session_id":"$session","total_cost_usd":0.0475,
+ "usage":{"input_tokens":10,"cache_creation_input_tokens":23624,"cache_read_input_tokens":0,"output_tokens":39,
+          "cache_creation":{"ephemeral_5m_input_tokens":20000,"ephemeral_1h_input_tokens":3624}},
  "modelUsage":{"$model":{"inputTokens":10,"outputTokens":39,"costUSD":0.0475}}$2}
 EOF
 }
 
-case "${FAKE_CLAUDE_MODE:-envelope}" in
+# a plausible multi-section plan (> 400 chars, 6+ headings) so migite-plan's stub guard passes
+plan_text="# Fake plan\\nDate: 2026-01-01\\nType: feature\\nJira: N/A\\nStatus: planned\\n\\n## Summary\\nAdd the thing to the place, following the existing service-object pattern used elsewhere in this codebase.\\n\\n## Scope\\n### Models\\n- app/models/thing.rb (new)\\n### Controllers\\n- app/controllers/things_controller.rb (modified)\\n\\n## Approach\\n1. Add the model\\n2. Add the controller action\\n3. Wire the route\\n\\n## Test plan\\n- spec/models/thing_spec.rb\\n- spec/requests/things_spec.rb\\n\\n## Performance considerations\\nNone identified\\n\\n## Risks\\n- 🟡 Migration on a large table\\n\\n## Out of scope\\n- Bulk import\\n\\n## Open questions\\n### 1. Should deletes be soft?\\n**Why it matters:** audit trail\\n**Recommendation:** soft delete\\n### 2. Rate limit?\\n**Why it matters:** abuse\\n**Recommendation:** no, follow-up"
+
+case "$mode" in
   envelope)   envelope "echo:$snippet" "" ;;
-  plan)       # a plausible multi-section plan (> 400 chars, 6+ headings) so migite-plan's stub guard passes
-              envelope "# Fake plan\\nDate: 2026-01-01\\nType: feature\\nJira: N/A\\nStatus: planned\\n\\n## Summary\\nAdd the thing to the place, following the existing service-object pattern used elsewhere in this codebase.\\n\\n## Scope\\n### Models\\n- app/models/thing.rb (new)\\n### Controllers\\n- app/controllers/things_controller.rb (modified)\\n\\n## Approach\\n1. Add the model\\n2. Add the controller action\\n3. Wire the route\\n\\n## Test plan\\n- spec/models/thing_spec.rb\\n- spec/requests/things_spec.rb\\n\\n## Performance considerations\\nNone identified\\n\\n## Risks\\n- 🟡 Migration on a large table\\n\\n## Out of scope\\n- Bulk import\\n\\n## Open questions\\n### 1. Should deletes be soft?\\n**Why it matters:** audit trail\\n**Recommendation:** soft delete\\n### 2. Rate limit?\\n**Why it matters:** abuse\\n**Recommendation:** no, follow-up" "" ;;
+  empty)      envelope "" "" ;;
+  plan)       envelope "$plan_text" "" ;;
+  native_plan) envelope "$plan_text\\n\\n## Files examined\\n- app/models/account.rb: Account has_many :widgets and no things association yet\\n- app/controllers/widgets_controller.rb: the service-object pattern the controller follows" "" ;;
+  testing_plan) envelope "# Testing Plan\\n\\n### Prerequisites — seed records (Rails console)\\n\`\`\`ruby\\nAccount.create!(name: 'qa')\\n\`\`\`\\n\\n### Verification steps\\n1. curl -s localhost:3000/things | jq\\n2. grep 'ThingsController#index' log/development.log\\n\\n### Teardown\\n\`\`\`ruby\\nAccount.where(name: 'qa').destroy_all\\n\`\`\`" "" ;;
   structured) envelope "{\\\"verdict\\\":\\\"NEEDS FIXES\\\"}" ',"structured_output":{"verdict":"NEEDS FIXES","reason":"one critical","findings":[{"severity":"critical","problem":"x"},{"severity":"note","problem":"y"}],"document":"# Review: t\n\n## Verdict: NEEDS FIXES\n\nbody"}' ;;
   fold)       envelope '{\"revision\": \"Delay is 15 seconds, not 1 minute.\", \"edits\": [{\"find\": \"1 minute\", \"replace\": \"15 seconds\", \"why\": \"amendment 01\"}]}' "" ;;
   fold_noop)  envelope '{\"revision\": \"No plan changes.\", \"edits\": []}' "" ;;
+  critic)     envelope "🟡 **Warning** - Out of scope names no owner for bulk import" "" ;;
+  edits)      envelope '{\"revision\": \"Bulk import is a follow-up.\", \"edits\": [{\"find\": \"- Bulk import\", \"replace\": \"- Bulk import (a follow-up ticket)\", \"why\": \"critic\"}], \"rejected_findings\": []}' "" ;;
   text)       printf 'plain text result for: %s\n' "$snippet" ;;
   is_error)   cat <<EOF
 {"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":50,"result":"Something went wrong","total_cost_usd":0.001,"usage":{"input_tokens":1,"output_tokens":0}}

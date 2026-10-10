@@ -4,10 +4,13 @@ migite never builds a CLI flag or parses CLI output. It describes what it wants
 in its own vocabulary and hands that to the Agent for the configured backend:
 
   AskRequest      one headless call: prompt, model id, effort, JSON schema,
-                  a neutral permission word, and named tool scopes
-  SessionRequest  one interactive session: first prompt, permission, model
+                  a neutral permission word, named tool scopes, and a session
+                  to continue
+  SessionRequest  one interactive session: first prompt, permission, model,
+                  and an id to record it under
   Launch          what to run: argv, stdin, variables to set or unset
-  AskResult       one headless call's output, in one shape for every CLI
+  AskResult       one headless call's output, in one shape for every CLI; also
+                  what an interactive session spent on one model
   AgentInfo       everything else migite needs to know about a CLI
 
 Adapters are pure translation. They never start a process and never read the
@@ -73,6 +76,10 @@ class AskRequest:
     isolated: bool = False
     tools: tuple[str, ...] = ()
     max_budget_usd: float | None = None   # stop the call past this spend (isolated calls only)
+    # Session chains (agents with AgentInfo.resume): continue the session `resume` names,
+    # and keep this call's session so a later call can continue it.
+    resume: str = ""
+    keep_session: bool = False
 
 
 @dataclass
@@ -80,6 +87,7 @@ class SessionRequest:
     prompt: str
     permission: str = "none"
     model: str | None = None
+    session_id: str = ""              # record the session under this id, when the CLI can be told one
 
 
 @dataclass
@@ -88,6 +96,7 @@ class Launch:
     stdin: str | None = None
     env_set: dict[str, str] = field(default_factory=dict)
     env_unset: tuple[str, ...] = ()
+    session_id: str = ""              # the id the session will be recorded under; "" = the CLI picks one
 
     def environ(self, base: Mapping[str, str] | None = None) -> dict[str, str]:
         env = {k: v for k, v in (os.environ if base is None else base).items() if k not in self.env_unset}
@@ -117,8 +126,11 @@ class AskResult:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation_5m_input_tokens: int = 0   # cache writes split by TTL; 0 when the CLI doesn't say
+    cache_creation_1h_input_tokens: int = 0
     cost_usd: float = 0.0
     turns: int = 0                    # agent turns the call took; 0 when the CLI doesn't say
+    session_id: str = ""              # the CLI's session id; "" when the CLI doesn't say
     raw: dict = field(default_factory=dict)
     is_envelope: bool = True          # False when stdout wasn't the CLI's machine format
 
@@ -152,6 +164,11 @@ class AgentInfo:
                                        # "headless" (no seeded session; one-shot per phase)
     isolation: bool = False            # can run a headless call with only named tools and
                                        # without its MCP servers, plugins, hooks and skills
+    resume: bool = False               # a headless call can continue an earlier one's session by id
+    plan_mode: bool = False            # a headless call can run in the CLI's read-only plan mode:
+                                       # the `plan` permission word reaches it as a flag
+    session_usage: bool = False        # an interactive session's tokens and cost can be read back
+                                       # after it ends (Agent.session_usage)
 
 
 class Agent:
@@ -167,7 +184,7 @@ class Agent:
         return self.info.name
 
     def supports(self, capability: str) -> bool:
-        """structured_output | effort | usage | scope:<name>"""
+        """structured_output | effort | usage | resume | plan_mode | session_usage | scope:<name>"""
         if capability.startswith("scope:"):
             return capability[len("scope:"):] in self.info.scopes
         return bool(getattr(self.info, capability, False))
@@ -192,6 +209,13 @@ class Agent:
     def session_launch(self, req: SessionRequest) -> Launch:
         raise NotImplementedError
 
+    def session_usage(self, session_id: str, cwd: str, since: float) -> list[AskResult]:
+        """What an interactive session that started at `since` (epoch seconds) spent, one
+        AskResult per model, from the CLI's own record of it. `session_id` is the id its
+        Launch reported, "" when there was none. Only agents with AgentInfo.session_usage
+        keep a record migite can read; the rest have nothing to report."""
+        return []
+
     def version_argv(self) -> list[str]:
         return [self.binary, "--version"]
 
@@ -204,5 +228,6 @@ class Agent:
             "env_unset": list(i.env_unset), "exit_hint": i.exit_hint,
             "instruction_files": i.instruction_files, "models": dict(i.models),
             "permission_flags": i.permission_flags, "session_mode": i.session_mode,
-            "isolation": i.isolation,
+            "isolation": i.isolation, "resume": i.resume, "plan_mode": i.plan_mode,
+            "session_usage": i.session_usage,
         }
