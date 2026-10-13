@@ -17,21 +17,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import common  # noqa: E402
 import variants  # noqa: E402
-from migite import config, gateway, verify  # noqa: E402
+from migite import config, gateway, paths, verify  # noqa: E402
 
 CONTEXT = "\nThe code under review is in the repository working tree.\n"
+
+
+def context_for(repo: str, ref: str) -> str:
+    """What migite-pr-review gives the refuter: the tree, plus the branch's commits up to `ref`, each
+    with its own diff. The base is today's, so a branch already merged into it has no history left."""
+    root = common.expand(repo)
+    history = common.git(root, *verify.history_args(paths.detect_base_branch(str(root)), ref))
+    return CONTEXT + verify.history_context(history)
 
 
 def main() -> None:
     req = json.load(sys.stdin)
     variants.apply(req.get("variant"))
+    context = context_for(req["repo"], req["ref"])
     tree = common.checkout(req["repo"], req["ref"])
     os.chdir(tree)
     gateway.configure_from(config.load(str(tree)))
     gateway.require_cli()
 
     finding = verify.parse_findings(common.finding_block(req["entry"]))[0]
-    prompt = verify.refute_prompt(finding, "ok", "", CONTEXT)
+    prompt = verify.refute_prompt(finding, "ok", "", context)
     res = gateway.call_agent(prompt, verify.REFUTE_ROLE, tool="migite-eval", label=f"eval:{req['entry']['id']}",
                              model=req.get("model") or None)
     parsed = verify.parse_verdict(res.text)

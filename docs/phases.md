@@ -285,10 +285,13 @@ the synthesis:
 - **Refuter.** Every Critical goes to a fresh agent (role `refute`, strong tier, read-only tools) that
   sees the claim and the cited location but not the reviewer's reasoning or fix, and is asked to disprove
   it by tracing the code the way Ruby and Rails resolve it (constant lookup through enclosing modules,
-  inheritance, concerns, default scopes). `CONFIRMED` keeps the finding and adds a `**Verified:**` line.
+  inheritance, concerns, default scopes). Code that does what the claim describes is not enough: the
+  refuter also checks that the behaviour is not intended (a comment, specs outside the change, or a
+  commit that changed it on purpose), and in `migite-pr-review` it sees each commit's own diff for that.
+  `CONFIRMED` keeps the finding and adds a `**Verified:**` line.
   `REFUTED` removes it from the findings and lists it under `## Refuted by verification` at the end of
-  `review.md` (and in `review.json` as `refuted[]`), so you can audit the call. `UNVERIFIABLE` demotes it
-  to a Note. If the refuter fails or times out the finding stays as reported, marked as not checked.
+  `review.md` (and in `review.json` as `refuted[]`), so you can audit the call. `OVERSTATED` (the code does
+  what the claim says, but not with the harm it claims) and `UNVERIFIABLE` demote it to a Note. If the refuter fails or times out the finding stays as reported, marked as not checked.
 - The `testing_plan` and `frontend` reviewers are not refuted: their findings rest on a document or a
   browser report, not on code. At most 12 findings are checked per run, Criticals first.
 

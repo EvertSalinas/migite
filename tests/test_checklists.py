@@ -135,6 +135,9 @@ class HelpersTest(unittest.TestCase):
         self.assertIn("How to work: trace it.", node)
         self.assertNotIn("Ruby and Rails", node)
 
+    def test_the_generic_refuter_also_separates_the_mechanism_from_the_defect(self):
+        self.assertIn("Separate the mechanism from the defect", checklists.load("generic", ROOT).refute)
+
 
 if __name__ == "__main__":
     unittest.main()

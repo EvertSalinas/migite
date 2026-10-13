@@ -41,7 +41,7 @@ cd ~/Code/Evert/migite/evals
 npm install                       # promptfoo only, pinned in package.json
 ```
 
-Needs Node 20+ and the migite Python (`$MIGITE_PYTHON`, with PyYAML, and the `claude` CLI logged in).
+Needs Node 22.22+ (promptfoo 0.123's minimum) and the migite Python (`$MIGITE_PYTHON`, with PyYAML, and the `claude` CLI logged in).
 `node_modules` is about 2 GB and git-ignored. Promptfoo is a development tool for this folder:
 it is not a dependency of migite itself.
 
@@ -124,9 +124,9 @@ npm run view          # the promptfoo web UI, on localhost
 
 | Score | Meaning | If it is wrong |
 |---|---|---|
-| `correct` | confirmed a true finding, refuted a wrong one (half credit for demoting a wrong one to a Note) | |
+| `correct` | confirmed a true finding, refuted a wrong one (half credit for demoting a wrong one to a Note: OVERSTATED or UNVERIFIABLE) | |
 | `false_refute` | a **true** finding was REFUTED | silently dropped from the review. Keep this at zero |
-| `missed` | a true finding came back UNVERIFIABLE | demoted to a Note: it stops blocking |
+| `missed` | a true finding came back OVERSTATED or UNVERIFIABLE | demoted to a Note: it stops blocking |
 | `false_confirm` | a **wrong** finding was CONFIRMED | the original problem: a wrong Critical still blocks |
 | `turns` | tool calls plus the answer, averaged per provider | the cost of a prompt |
 

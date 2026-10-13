@@ -77,6 +77,7 @@ class PRReviewState(TypedDict):
     test_log_file: str
     diff: str
     commits: str
+    commit_history: str     # each commit with its own diff, newest first, for the refuter
     changed_files: list
     file_contents: str
     rubocop_log: str
@@ -123,6 +124,8 @@ def load_pr(state: PRReviewState) -> dict:
               f"files from the working tree, so check out '{branch}' first for a trustworthy review", flush=True)
 
     commits = run_cmd(f"git log {safe_base}...{safe_branch_ref} --oneline", repo_root)
+    history_cmd = " ".join(shlex.quote(a) for a in ["git", *verify.history_args(base, branch)])
+    commit_history = run_cmd(history_cmd, repo_root)[:verify.COMMIT_HISTORY_MAX]
     changed_files_raw = run_cmd(f"git diff {safe_base}...{safe_branch_ref} --name-only", repo_root)
     changed_files = [f for f in changed_files_raw.split("\n") if f.strip()]
 
@@ -186,6 +189,7 @@ def load_pr(state: PRReviewState) -> dict:
     return {
         "diff":          diff,
         "commits":       commits,
+        "commit_history": commit_history,
         "changed_files": changed_files,
         "file_contents": file_contents,
         "rubocop_log":   rubocop_log,
@@ -308,7 +312,7 @@ def reviewed(state: PRReviewState) -> list[str]:
 def verify_findings(state: PRReviewState) -> dict:
     """Evidence gate and refuter over every dimension's findings, before the synthesis sees them."""
     context = (f"\nThe pull request is branch `{state['branch']}` against `{state['base']}`; read files from "
-               "the repository working tree.\n")
+               "the repository working tree.\n" + verify.history_context(state.get("commit_history") or ""))
     blocks, refuted = verify.verify_blocks(
         state["findings"],
         ask=lambda prompt, label: call_agent(prompt, verify.REFUTE_ROLE, label=label),
@@ -348,6 +352,8 @@ Produce a single PR review document:
    demoted to a Note by verification stays a Note; never promote it.
 6. The verdict is NEEDS CHANGES only when a Critical finding remains, or a Warning would break
    behaviour the PR claims to deliver. Warnings and Notes alone are APPROVED WITH COMMENTS.
+   What the PR claims comes from the Jira ticket and the diff, never from a commit title alone:
+   a title like "fix X" is a label, not a promise that X now behaves differently.
 
 Output format:
 # PR Review: {state['branch']}
@@ -546,6 +552,7 @@ def main() -> None:
             "test_log_file": args.test_log,
             "diff":          "",
             "commits":       "",
+            "commit_history": "",
             "changed_files": [],
             "file_contents": "",
             "rubocop_log":   "",

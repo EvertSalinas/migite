@@ -408,10 +408,11 @@ and the draft with fewer gaps is kept:
 contain, so after the reviewers a second agent (role `refute`, strong tier, read-only tools) tries to
 disprove each Critical, and each Warning whose evidence did not check out. Reviewers must quote the
 line each Critical and Warning rests on on an `**Evidence:**` line, and migite confirms the quote is at
-the cited place in the branch (no model call). The refuter sees the claim and location, not the
-reviewer's reasoning or fix. `CONFIRMED` findings stay with a `**Verified:**` line, `REFUTED` ones are
-removed and listed under `## Refuted by verification` at the end of the review so you can audit the call,
-and `UNVERIFIABLE` ones become Notes. If the refuter fails the finding stays as reported, marked not
+the cited place in the branch (no model call). The refuter sees the claim, the location and each
+commit's own diff (newest first, capped at 8,000 characters), not the reviewer's reasoning or fix, and
+refutes a claim whose behaviour a comment, an existing spec or a commit shows to be intended.
+`CONFIRMED` findings stay with a `**Verified:**` line, `REFUTED` ones are removed and listed under `## Refuted by verification` at the end of the review so you can audit the call,
+and `OVERSTATED` and `UNVERIFIABLE` ones become Notes. If the refuter fails the finding stays as reported, marked not
 checked. Reviewers and the refuter read files from the working tree, so check the branch out first;
 migite warns when the working tree is on a different branch. Details: [phases.md](./phases.md#phase-3-review).
 

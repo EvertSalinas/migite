@@ -10,7 +10,8 @@ the reviewers and the synthesis, both shared by migite-review and migite-pr-revi
 2. Refuter (a second agent, fresh context, read-only tools): it tries to disprove every Critical,
    and every Warning whose evidence did not check out. CONFIRMED findings pass with a Verified
    line, REFUTED ones are dropped (and listed in an appendix, so a human can audit the call),
-   UNVERIFIABLE ones are demoted to a Note. A refuter that fails leaves the finding as it was,
+   OVERSTATED (a real mechanism, a harm that is not there) and UNVERIFIABLE ones are demoted to
+   a Note. A refuter that fails leaves the finding as it was,
    marked as unchecked: the gate never depends on this step working.
 
 verify_blocks() takes the per-dimension findings blocks ("### <dim>\\n<findings>") and returns the
@@ -28,6 +29,7 @@ REFUTE_ROLE = "refute"
 MAX_REFUTATIONS = 12                          # per run; the rest stay as reported, marked not checked
 EVIDENCE_WINDOW = 6                           # lines either side of the cited line
 SKIP_DIMENSIONS = ("testing_plan", "frontend")  # their findings rest on a document or a browser report, not on code
+COMMIT_HISTORY_MAX = 8000                     # chars of the branch's commits, each with its own diff, the refuter sees
 
 # Shared by both reviewers' prompts.
 EVIDENCE_LINE = ("**Evidence:** `path/file.rb:N` `the exact line of code, copied verbatim`  "
@@ -39,6 +41,12 @@ report that something is missing, misnamed, inherited from the wrong class, or u
 and resolve it the way Ruby and Rails do (constant lookup through the enclosing modules, inheritance, concerns
 and includes, default scopes, callbacks, Pundit and Rails conventions). Don't invent methods, files, or gems.
 
+A finding is a defect, not a description of what the code does. Before you report behaviour as wrong, check
+that it is not intended: a comment that explains it, specs outside the change that pin the same behaviour
+(grep for the method or attribute), or a commit that changed it on purpose. Behaviour the base branch already
+has and pins with its own specs is not a defect of this change: report it as a Note at most. A commit title
+is a label, not a claim: what a change promises comes from its ticket and its diff.
+
 Evidence is required on every Critical and Warning: quote the line your claim rests on. A claim you have not
 traced to code is not a Critical. A second agent will try to disprove each Critical, so state it precisely."""
 
@@ -49,7 +57,7 @@ FIELD_RE = re.compile(r"^\s*(?:[-*]\s*)?\*\*(?P<name>[A-Za-z ]+):\*\*\s*(?P<val>
 SPAN_RE = re.compile(r"`([^`\n]+)`")
 LOC_RE = re.compile(r"([^\s:`]+?)(?::(\d+)(?:-\d+)?)?")
 SYNTHETIC_RE = re.compile(r"reviewer failed|stopped at its budget cap", re.I)
-VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(CONFIRMED|REFUTED|UNVERIFIABLE)\b", re.I | re.M)
+VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(CONFIRMED|REFUTED|OVERSTATED|UNVERIFIABLE)\b", re.I | re.M)
 EVIDENCE_REPLY_RE = re.compile(r"^\s*EVIDENCE:\s*(.*)$", re.M)
 REASON_RE = re.compile(r"^\s*REASON:\s*(.*)\Z", re.M | re.S)
 
@@ -192,13 +200,30 @@ def make_reader(repo_root: str, ref: str | None = None) -> Callable[[str], str |
     return read
 
 
+def history_args(base: str, ref: str) -> list[str]:
+    """git arguments for the commits on `ref` that `base` lacks, newest first, each with its own diff."""
+    return ["log", f"{base}..{ref}", "-p", "--format=commit %h %s"]
+
+
+def history_context(history: str) -> str:
+    """The refuter's view of the branch's commits. The combined diff hides what each commit did (a
+    value flipped back reads as new code), so a change made on purpose looks like a bug without it."""
+    return ("\n## Commit history (each commit with its own diff, newest first, truncated)\n"
+            f"{history[:COMMIT_HISTORY_MAX] or '(not available)'}\n")
+
+
 HOW_TO_WORK = """How to work:
 1. Open the cited file and read the code around the cited line. Do not trust the claim's description of the code.
 2. Trace the claim to the code that would make it true. Resolve names the way Ruby and Rails do: constant
    lookup through the enclosing modules (a class inside `module A::B` finds `A::B::Foo` before a top-level
    `Foo`), inheritance and ancestors, concerns and includes, default scopes, callbacks, Pundit and Rails conventions.
 3. Look for what contradicts the claim: a definition the reviewer missed, a base class or concern that already
-   provides it, a guard clause elsewhere, a spec that covers it."""
+   provides it, a guard clause elsewhere, a spec that covers it.
+4. Separate the mechanism from the defect. Code that does what the claim describes does not confirm it on its
+   own: check whether that behaviour is intended, from a comment that explains it, specs outside the change
+   that pin the same behaviour, or a commit in the history above (when one is given) that changed it on
+   purpose. When it is intended, the claim is REFUTED: quote the comment, spec or changed line that shows it.
+   When part of it holds (dead code, a stale comment) but not the harm it asserts, the claim is OVERSTATED."""
 
 
 def refute_prompt(f: Finding, status: str, detail: str, context: str = "",
@@ -220,13 +245,16 @@ Claim: {f.problem or f.title}
 {how_to_work or HOW_TO_WORK}
 
 Verdicts:
-- CONFIRMED: you traced the problem to specific code and can quote the line(s) that prove it.
+- CONFIRMED: you traced the problem to specific code and can quote the line(s) that prove it is a defect,
+  not only that the code behaves as the claim describes.
 - REFUTED: the code shows the claim is false; quote the line(s) that contradict it.
+- OVERSTATED: the code does what the claim describes, but the harm it asserts is not there, or is smaller
+  than its severity (dead code, a stale comment, a narrower effect); quote the line that shows it.
 - UNVERIFIABLE: it depends on runtime data, configuration, or code you cannot read here.
 When you are unsure, answer REFUTED or UNVERIFIABLE: a claim you cannot trace to code must not block a merge.
 
 Reply in exactly this format and nothing else:
-VERDICT: CONFIRMED | REFUTED | UNVERIFIABLE
+VERDICT: CONFIRMED | REFUTED | OVERSTATED | UNVERIFIABLE
 EVIDENCE: `path/file.rb:N` `the exact line of code`
 REASON: <one or two sentences>"""
 
@@ -270,10 +298,13 @@ def _apply(f: Finding, outcome: dict | None) -> list[str]:
     if verdict == "confirmed":
         proof = outcome.get("evidence") or outcome.get("reason") or "traced to the code"
         return lines + [f"{bullet}**Verified:** {proof}"] + tail
-    if verdict == "unverifiable":
+    if verdict in ("unverifiable", "overstated"):
         lines[0] = f"{f.lead}{MARK['note']} **Note**{f.sep}{f.rest}"
-        why = outcome.get("reason") or "it depends on something that could not be read"
-        return lines + [f"{bullet}**Verification:** could not be confirmed, so this is a Note instead of a "
+        if verdict == "overstated":
+            what, why = "overstated", outcome.get("reason") or "the code does this, but not with the harm claimed"
+        else:
+            what, why = "could not be confirmed", outcome.get("reason") or "it depends on something that could not be read"
+        return lines + [f"{bullet}**Verification:** {what}, so this is a Note instead of a "
                         f"{f.severity.capitalize()}: {why}"] + tail
     return lines + [f"{bullet}**Verification:** not checked ({outcome.get('reason') or 'the refuter did not run'})"] + tail
 

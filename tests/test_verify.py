@@ -156,6 +156,12 @@ class VerdictParseTest(unittest.TestCase):
         self.assertNotIn("inherit from API::V1::Chat::ApplicationController", prompt)   # the reviewer's Fix
         self.assertIn("constant", prompt)
 
+    def test_the_refuter_must_prove_a_defect_not_only_the_mechanism(self):
+        prompt = verify.refute_prompt(finding(CRITICAL), "ok", "")
+        self.assertIn("Separate the mechanism from the defect", prompt)
+        self.assertIn("specs outside the change\n   that pin the same behaviour", prompt)
+        self.assertIn("not only that the code behaves as the claim describes", prompt)
+
 
 class VerifyBlocksTest(unittest.TestCase):
     files = {"app/controllers/insights_controller.rb": CONTROLLER}
@@ -193,6 +199,19 @@ class VerifyBlocksTest(unittest.TestCase):
         self.assertNotIn("🔴", out[0])
         self.assertIn("🟢 **Note** · `app/controllers/insights_controller.rb:5` · Wrong base controller", out[0])
         self.assertIn("could not be confirmed, so this is a Note instead of a Critical: depends on prod config.", out[0])
+
+    def test_an_overstated_critical_becomes_a_note_and_is_not_dropped(self):
+        out, refuted = self.run_blocks([f"### security\n{CRITICAL}"],
+                                       ["VERDICT: overstated\nEVIDENCE: `a.rb:1` `x`\nREASON: only dead code."])
+        self.assertEqual(refuted, [])
+        self.assertIn("🟢 **Note** · `app/controllers/insights_controller.rb:5` · Wrong base controller", out[0])
+        self.assertIn("overstated, so this is a Note instead of a Critical: only dead code.", out[0])
+
+    def test_the_refuter_can_answer_that_a_claim_is_overstated(self):
+        prompt = verify.refute_prompt(finding(CRITICAL), "ok", "")
+        self.assertIn("- OVERSTATED: the code does what the claim describes, but the harm it asserts is not there", prompt)
+        self.assertIn("VERDICT: CONFIRMED | REFUTED | OVERSTATED | UNVERIFIABLE", prompt)
+        self.assertEqual(verify.parse_verdict("VERDICT: OVERSTATED\nREASON: r")[0], "OVERSTATED")
 
     def test_a_refuter_that_fails_leaves_the_finding_and_says_so(self):
         out, refuted = self.run_blocks([f"### security\n{CRITICAL}"], [RuntimeError("timed out")])
