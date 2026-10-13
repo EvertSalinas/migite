@@ -93,3 +93,8 @@ How to work:
    the codebase relies on.
 3. Look for what contradicts the claim: a definition the reviewer missed, a base class or helper that already
    provides it, a guard clause elsewhere, a test that covers it.
+4. Separate the mechanism from the defect. Code that does what the claim describes does not confirm it on its
+   own: check whether that behaviour is intended, from a comment that explains it, tests outside the change
+   that pin the same behaviour, or a commit in the history above (when one is given) that changed it on
+   purpose. When it is intended, the claim is REFUTED: quote the comment, test or changed line that shows it.
+   When part of it holds (dead code, a stale comment) but not the harm it asserts, the claim is OVERSTATED.

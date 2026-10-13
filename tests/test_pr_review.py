@@ -144,6 +144,17 @@ class ReviewerPromptTest(unittest.TestCase):
             self.assertIn(expected, prompt)
         self.assertNotIn("Only build on code you can see above", prompt)
 
+    def test_each_reviewer_checks_behaviour_is_unintended_before_calling_it_a_defect(self):
+        def call_agent(prompt, role, label=""):
+            self.prompts.append(prompt)
+            return "✅ No issues in security."
+        self.tool.call_agent = call_agent
+        self.tool.review_dimension(self.dim_state())
+        prompt = self.prompts[0]
+        for expected in ("A finding is a defect, not a description", "specs outside the change",
+                         "A commit title\nis a label, not a claim"):
+            self.assertIn(expected, prompt)
+
     def test_a_failed_reviewer_still_gives_an_actionable_finding(self):
         def call_agent(prompt, role, label=""):
             raise RuntimeError("agent timed out")
@@ -270,6 +281,28 @@ class VerificationStepTest(unittest.TestCase):
         self.assertIn("Evidence, Verified and Verification lines", prompt)
         self.assertIn("never promote it", prompt)
         self.assertIn("NEEDS CHANGES only when a Critical finding remains", prompt)
+        self.assertIn("never from a commit title alone", prompt)
+
+    def test_the_refuter_sees_each_commits_own_diff(self):
+        self.fake("VERDICT: CONFIRMED\nEVIDENCE: `a.rb:1` `x`\nREASON: r")
+        history = "commit 1383f70 fix status\n-  account_status: \"active\",\n+  account_status: nil,"
+        self.tool.verify_findings(self.state(commit_history=history))
+        self.assertIn("## Commit history", self.calls[0][0])
+        self.assertIn('-  account_status: "active",', self.calls[0][0])
+
+    def test_the_commit_history_is_the_branchs_own_commits_with_their_diffs_capped(self):
+        commands = []
+
+        def run_cmd(cmd, cwd, timeout=60):
+            commands.append(cmd)
+            if " -p " in cmd:
+                return "commit abc fix\n" + "+x\n" * 10000
+            return "+diff" if "diff" in cmd else ""
+        self.tool.run_cmd = run_cmd
+        out = self.tool.load_pr({"branch": "feat/x", "base": "main", "repo_root": self.tmp.name, "skip_tests": True})
+        self.assertIn("git log main..feat/x -p", next(c for c in commands if " -p " in c))
+        self.assertTrue(out["commit_history"].startswith("commit abc fix"))
+        self.assertEqual(len(out["commit_history"]), self.tool.verify.COMMIT_HISTORY_MAX)
 
 
 if __name__ == "__main__":

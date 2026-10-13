@@ -108,6 +108,56 @@ class GoldenTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_YAML, "PyYAML not installed")
+class RepoTest(unittest.TestCase):
+    """The eval's view of a repository: the tree at a commit, and the branch's own commits."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "main")
+        (self.repo / "a.rb").write_text("status = \"active\"\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base commit")
+        self.git("switch", "-q", "-c", "feat")
+        (self.repo / "a.rb").write_text("status = nil\n")
+        self.git("commit", "-q", "-am", "fix status")
+        self.ref = self.git("rev-parse", "HEAD")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def git(self, *args):
+        import subprocess
+        return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                               "-c", "commit.gpgsign=false", *args],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_the_eval_refuter_sees_the_branchs_commits_with_their_diffs(self):
+        context = load(ROOT / "evals" / "run_refuter.py").context_for(str(self.repo), self.ref)
+        self.assertIn("## Commit history", context)
+        self.assertIn("fix status", context)
+        self.assertIn('-status = "active"', context)
+        self.assertNotIn("base commit", context)
+
+    def test_a_checkout_another_process_finished_first_is_kept(self):
+        old_cache, old_mkdtemp = common.CACHE, common.tempfile.mkdtemp
+        common.CACHE = Path(self.tmp.name) / "cache"
+
+        def mkdtemp(dir, prefix):
+            # Another process wins the race while this one extracts.
+            (Path(dir) / prefix.removesuffix(".part-")).mkdir(parents=True)
+            return old_mkdtemp(dir=dir, prefix=prefix)
+        common.tempfile.mkdtemp = mkdtemp
+        try:
+            dest = common.checkout(str(self.repo), self.ref)
+        finally:
+            common.CACHE, common.tempfile.mkdtemp = old_cache, old_mkdtemp
+        self.assertTrue(dest.is_dir())
+        self.assertEqual([p.name for p in dest.parent.iterdir()], [dest.name])
+
+
+@unittest.skipUnless(HAS_YAML, "PyYAML not installed")
 class VariantTest(unittest.TestCase):
     def setUp(self):
         import variants
@@ -130,7 +180,7 @@ class VariantTest(unittest.TestCase):
         prompt = verify.refute_prompt(self.finding(), "ok", "")
         self.assertIn("Stop as soon as one line you have traced decides the verdict", prompt)
         self.assertNotIn("a spec that covers it", prompt)
-        self.assertIn("VERDICT: CONFIRMED | REFUTED | UNVERIFIABLE", prompt)     # the rest of the prompt is untouched
+        self.assertIn("VERDICT: CONFIRMED | REFUTED | OVERSTATED | UNVERIFIABLE", prompt)  # the rest of the prompt is untouched
 
     def test_an_unknown_variant_is_an_error(self):
         with self.assertRaises(SystemExit):
@@ -146,11 +196,14 @@ class GradeTest(unittest.TestCase):
         self.assertFalse(refuted["pass"])
         self.assertEqual(refuted["namedScores"]["false_refute"], 1.0)
         self.assertEqual(self.grade(True, "UNVERIFIABLE")["namedScores"]["missed"], 1.0)
+        self.assertEqual(self.grade(True, "OVERSTATED")["namedScores"]["missed"], 1.0)
 
     def test_a_wrong_finding_must_be_refuted_and_demoting_it_is_half_right(self):
         self.assertEqual(self.grade(False, "REFUTED")["score"], 1.0)
         demoted = self.grade(False, "UNVERIFIABLE")
         self.assertEqual((demoted["score"], demoted["pass"]), (0.5, True))
+        overstated = self.grade(False, "OVERSTATED")
+        self.assertEqual((overstated["score"], overstated["pass"]), (0.5, True))
         confirmed = self.grade(False, "CONFIRMED")
         self.assertFalse(confirmed["pass"])
         self.assertEqual(confirmed["namedScores"]["false_confirm"], 1.0)

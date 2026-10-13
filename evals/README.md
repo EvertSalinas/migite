@@ -17,7 +17,7 @@ The step-by-step version, with the output you should see and how to decide, is t
 
 ## Setup (once)
 
-Needs Node 20+ and the migite Python (`$MIGITE_PYTHON`, with PyYAML and the `claude` CLI logged in).
+Needs Node 22.22+ (promptfoo 0.123's minimum) and the migite Python (`$MIGITE_PYTHON`, with PyYAML and the `claude` CLI logged in).
 
 ```bash
 cd evals
@@ -76,7 +76,7 @@ REFUTED. One case says nothing about accuracy: a variant that stops early is onl
 |---|---|---|
 | `correct` | confirmed a true finding, refuted a wrong one (half for demoting a wrong one) | |
 | `false_refute` | a **true** finding was refuted | it is silently dropped from the review. Keep this at zero |
-| `missed` | a true finding came back UNVERIFIABLE | demoted to a Note: it stops blocking |
+| `missed` | a true finding came back OVERSTATED or UNVERIFIABLE | demoted to a Note: it stops blocking |
 | `false_confirm` | a **wrong** finding was confirmed | the original problem: a wrong Critical still blocks |
 
 Change the model (`models.roles.refute` in your migite config, or a provider's `config.model`),

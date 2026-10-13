@@ -1,17 +1,17 @@
 """promptfoo assertion: did the refuter judge the finding the way its label says?
 
 A finding labeled true is right when CONFIRMED. One labeled false is right when REFUTED, and
-half right when UNVERIFIABLE (it is demoted to a Note, so it no longer blocks). The named
+half right when OVERSTATED or UNVERIFIABLE (it is demoted to a Note, so it no longer blocks). The named
 scores are the rates to watch:
 
   false_refute   a true finding was REFUTED: it would be dropped from the review. The costly one.
-  missed         a true finding was UNVERIFIABLE: it would be demoted to a Note.
+  missed         a true finding was OVERSTATED or UNVERIFIABLE: it would be demoted to a Note.
   false_confirm  a false finding was CONFIRMED: the wrong Critical survives, the original problem.
 """
 
 import re
 
-VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(CONFIRMED|REFUTED|UNVERIFIABLE)\b", re.I | re.M)
+VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(CONFIRMED|REFUTED|OVERSTATED|UNVERIFIABLE)\b", re.I | re.M)
 
 
 def verdict_of(output: str) -> str:
@@ -28,8 +28,8 @@ def grade(label: bool, verdict: str) -> dict:
         elif verdict == "REFUTED":
             score, reason = 0.0, "refuted a REAL finding: it would be silently dropped"
             scores["false_refute"] = 1.0
-        elif verdict == "UNVERIFIABLE":
-            score, reason = 0.0, "could not confirm a real finding: it would be demoted to a Note"
+        elif verdict in ("OVERSTATED", "UNVERIFIABLE"):
+            score, reason = 0.0, "did not confirm a real finding: it would be demoted to a Note"
             scores["missed"] = 1.0
         else:
             score, reason = 0.0, "the refuter's reply did not follow the required format"
@@ -37,7 +37,7 @@ def grade(label: bool, verdict: str) -> dict:
         if verdict == "REFUTED":
             score, reason = 1.0, "refuted a wrong finding"
             scores["correct"] = 1.0
-        elif verdict == "UNVERIFIABLE":
+        elif verdict in ("OVERSTATED", "UNVERIFIABLE"):
             score, reason = 0.5, "demoted a wrong finding to a Note: it no longer blocks"
             scores["correct"] = 0.5
         elif verdict == "CONFIRMED":

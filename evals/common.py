@@ -2,8 +2,10 @@
 
 import hashlib
 import re
+import shutil
 import subprocess
 import tarfile
+import tempfile
 import io
 from pathlib import Path
 
@@ -61,11 +63,18 @@ def checkout(repo: str, ref: str) -> Path:
     archive = subprocess.run(["git", "-C", str(root), "archive", sha], capture_output=True)
     if archive.returncode != 0:
         raise RuntimeError(f"git archive failed for {ref} in {root}: {archive.stderr.decode(errors='replace')[:200]}")
-    tmp = dest.with_name(dest.name + ".part")
-    tmp.mkdir(parents=True, exist_ok=True)
+    # Each process extracts into its own directory: promptfoo runs several cases at once, and two
+    # of them on the same commit must not share one. The first to finish keeps its copy.
+    CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(dir=CACHE, prefix=dest.name + ".part-"))
     with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
         tar.extractall(tmp, filter="data")
-    tmp.rename(dest)
+    try:
+        tmp.rename(dest)
+    except OSError:
+        if not dest.is_dir():
+            raise
+        shutil.rmtree(tmp, ignore_errors=True)
     return dest
 
 
