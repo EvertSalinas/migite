@@ -68,6 +68,7 @@ source "$MIGITE_HOME/lib/phases/amend.sh"
 source "$MIGITE_HOME/lib/phases/plan.sh"
 source "$MIGITE_HOME/lib/phases/implement.sh"
 source "$MIGITE_HOME/lib/phases/review.sh"
+source "$MIGITE_HOME/lib/phases/smoke.sh"
 source "$MIGITE_HOME/lib/phases/deliver.sh"
 
 # migite_usage - `migite --help`. Dispatched before Setup so it works anywhere,
@@ -425,7 +426,7 @@ fi
 # --stack on the command line beats `stack:` in the config, which beats auto-detection.
 [[ -z "$STACK_OVERRIDE" && "$(cfg stack auto)" != "auto" ]] && STACK_OVERRIDE="$(cfg stack)"
 IMPLEMENT_CMD_PATH="$(prompt_path implement)"
-for _prompt in plan implement review architecture_critic; do
+for _prompt in plan implement review architecture_critic smoke_plan; do
   [[ -f "$(prompt_path "$_prompt")" ]] || error "Prompt file missing: $(prompt_path "$_prompt") — is the migite checkout intact?"
 done
 unset _prompt

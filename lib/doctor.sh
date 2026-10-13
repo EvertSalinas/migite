@@ -23,8 +23,9 @@ Usage:
 
 Checks the stack detection (and a stacks.<name> profile's commands), the agent CLI and
 its version, where --jira gets tickets, git and Python, bundle (rails stack), the frontend
-linters and system-spec driver (rails stack), the configuration, the four phase prompts,
-scratchpad and vault drift, orphaned sentinels, and duplicate knowledge entries.
+linters and system-spec driver (rails stack), the smoke check's service (smoke.check), the
+configuration, the phase prompts, scratchpad and vault drift, orphaned sentinels, and
+duplicate knowledge entries.
 It changes nothing, and exits 1 when it finds an issue.
 
   --repo <path>   check another repo (default: the current directory)
@@ -164,6 +165,31 @@ run_doctor() {
     fi
   fi
 
+  # ── Smoke check (Phase 3.2) ───────────────────────────────────────────────
+  # Where migite would send the smoke calls, and whether something answers there
+  # now (python -m migite.smoke detect, no model call). Informational: a server
+  # that is down at doctor time is not an issue, it is asked about at run time.
+  local doc_smoke_mode
+  doc_smoke_mode="$(cfg smoke.check off)"
+  if [[ "$doc_smoke_mode" == "off" ]]; then
+    echo "ℹ Smoke check: off (smoke.check: ask | on sends real requests to the local service before review)"
+  else
+    local doc_smoke_json
+    doc_smoke_json="$(mktemp)"
+    if "$MIGITE_PYTHON" -m migite.smoke --repo-root "$REPO_ROOT" detect --out "$doc_smoke_json" > /dev/null 2>&1; then
+      local doc_smoke_state doc_smoke_url doc_smoke_src doc_smoke_reason
+      doc_smoke_state="$(json_field "$doc_smoke_json" state || echo unknown)"
+      doc_smoke_url="$(json_field "$doc_smoke_json" base_url || true)"
+      doc_smoke_src="$(json_field "$doc_smoke_json" source || true)"
+      doc_smoke_reason="$(json_field "$doc_smoke_json" reason || true)"
+      echo "ℹ Smoke check: $doc_smoke_mode; service $doc_smoke_state at $doc_smoke_url (from $doc_smoke_src)${doc_smoke_reason:+ - $doc_smoke_reason}"
+    else
+      echo "⚠ Smoke check: smoke.check is $doc_smoke_mode but the service could not be detected (python -m migite.smoke detect failed)"
+      issues=$((issues + 1))
+    fi
+    rm -f "$doc_smoke_json"
+  fi
+
   # ── Configuration ──────────────────────────────────────────────────────────
   # Validates the layered config for this repo (bad YAML / invalid enum → issue;
   # unknown keys → warning) and shows which files were loaded.
@@ -177,11 +203,11 @@ run_doctor() {
   fi
 
   # ── Phase prompts ──────────────────────────────────────────────────────────
-  # plan.md / implement.md / review.md / architecture_critic.md ship in the
-  # repo's prompts/ dir. migite, migite-plan and migite-review all hard-fail
+  # plan.md / implement.md / review.md / architecture_critic.md / smoke_plan.md ship
+  # in the repo's prompts/ dir. migite, migite-plan and migite-review all hard-fail
   # without them; doctor surfaces the gap before a run does.
   local doc_prompt
-  for doc_prompt in plan implement review architecture_critic; do
+  for doc_prompt in plan implement review architecture_critic smoke_plan; do
     if [[ -s "$MIGITE_HOME/prompts/$doc_prompt.md" ]]; then
       echo "✔ Prompt present: prompts/$doc_prompt.md"
     else

@@ -171,10 +171,11 @@ migite-review \
   [--frontend-files "app/views/a.html.erb app/javascript/b.js"] \
   [--frontend-lint-log path/to/frontend-lint.txt] \
   [--system-specs] \
-  [--browser-check path/to/browser-check.md]
+  [--browser-check path/to/browser-check.md] \
+  [--smoke-check path/to/smoke-check.md]
 ```
 
-`--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades (that dimension is dropped when `review.dimensions.testing_plan` is `off`; `dims_to_rerun` and `carried_findings` then never see it). `--amendment` is repeatable, oldest first; migite passes only the amendments `plan.md` doesn't reflect yet. `--previous` takes the last review's `review-dimensions.json` and re-runs only the dimensions `dims_to_rerun` picks, carrying the clean ones over. `--frontend-files` adds the `frontend` reviewer; `--frontend-lint-log`, `--system-specs` and `--browser-check` give it the erb_lint/eslint log, whether the repo has `spec/system`, and Phase 3.1's `browser-check.md`.
+`--base-branch` defaults to auto-detect (`origin/HEAD`, then `main` / `master` / `develop`) when omitted, same as `migite-plan`. `--testing-plan` is optional — when given, its full content (not the truncated plan excerpt every other dimension sees) is what the `testing_plan` reviewer dimension grades (that dimension is dropped when `review.dimensions.testing_plan` is `off`; `dims_to_rerun` and `carried_findings` then never see it). `--amendment` is repeatable, oldest first; migite passes only the amendments `plan.md` doesn't reflect yet. `--previous` takes the last review's `review-dimensions.json` and re-runs only the dimensions `dims_to_rerun` picks, carrying the clean ones over. `--frontend-files` adds the `frontend` reviewer; `--frontend-lint-log`, `--system-specs` and `--browser-check` give it the erb_lint/eslint log, whether the repo has `spec/system`, and Phase 3.1's `browser-check.md`. `--smoke-check` gives the `correctness` reviewer Phase 3.2's `smoke-check.md` (capped at 3000 chars) and the verdict synthesis its `Result:` line; migite passes it only when the calls were sent this round.
 
 **Models used (defaults):** one config role per dimension — `review_correctness` and
 `review_security` on the strong tier (`claude-opus-5-5`), `review_test_coverage` and
@@ -289,6 +290,18 @@ as one line per model, labelled `session:<label>`, `kind: session`:
 Both envelopes carry `schema_version`, `tool`, `generated_at`, `base_branch`, and `outputs` paths.
 Bash reads them with `json_field <file> <dotted.key>`; mirror them to the vault with `sync_json`
 (never `sync_artifact`, whose frontmatter stamp would corrupt JSON).
+
+The smoke check ([Phase 3.2](./phases.md#smoke-check), `migite/smoke.py`) writes two more, with
+the same `schema_version` / `tool` (`migite-smoke`) / `generated_at` header and no `base_branch`:
+
+| File | Fields |
+|---|---|
+| `smoke-plan.json` | `summary`, `base_url_hint`, `auth_header_names[]`, `changed_files[]` (what the plan was made from; a fix round whose list matches reuses it), `calls[]` (`id`, `why`, `method`, `path`, `auth`, `headers`, `body?`, `expect {status[], json_has[]?, body_contains?}`), `dropped[]` (`id`, `reason`) |
+| `smoke-check.json` | `result` (`pass` / `fail` / `skipped`), `reason`, `base_url`, `source` (`config` / `compose` / `local` / `dotenv` / `procfile` / `puma` / `default`), `state` (`up` / `stale` / `down` / `unknown`), `compose_service`, `started_at`, `counts {total, pass, fail, error}`, `calls[]` (the plan's fields plus `status`, `elapsed_ms`, `result`, `reason`, `location?`, and on a failure `body_excerpt`, `log_excerpt`), `dropped[]`, `auth_header_names[]`, `plan_path` |
+
+`python -m migite.smoke detect` prints the detection as JSON (`base_url`, `source`, `state`,
+`reason`, `compose_service`, `started_at`, `port`, `probe`, `restart_sensitive_changed[]`);
+`lib/phases/smoke.sh` reads `state`, `base_url` and `reason` from it with `json_field`.
 
 A `plan.json` from a run whose critic found one warning and whose refine went through cleanly:
 

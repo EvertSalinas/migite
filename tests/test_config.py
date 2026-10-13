@@ -682,5 +682,85 @@ class StacksConfigTest(_Isolated):
         self.assertIn("{files}", cfg.get("stacks.node.test"))
 
 
+class SmokeConfigTest(_Isolated):
+    """smoke.* (Phase 3.2) and gates.commit.require_smoke_pass."""
+
+    def test_defaults_keep_the_check_off(self):
+        cfg = self.load()
+        self.assertEqual(cfg.get("smoke.check"), "off")
+        self.assertIsNone(cfg.get("smoke.base_url"))
+        self.assertEqual(cfg.get("smoke.max_calls"), 12)
+        self.assertEqual(cfg.get("smoke.timeout_seconds"), 5)
+        self.assertIs(cfg.get("smoke.allow_writes"), False)
+        self.assertEqual(cfg.get("smoke.headers"), {})
+        self.assertEqual(cfg.get("smoke.log_file"), "log/development.log")
+        self.assertIs(cfg.get("gates.commit.require_smoke_pass"), True)
+
+    def test_the_planner_role_sits_on_the_standard_tier_with_read_tools(self):
+        self.assertEqual(config.ROLE_TIERS["smoke_plan"], "standard")
+        self.assertEqual(config.ROLE_TOOLS["smoke_plan"], "read")
+        self.assertEqual(self.load().model("smoke_plan"), "claude-sonnet-5")
+
+    def test_values_are_coerced_and_checked(self):
+        self.write_repo({"smoke": {"check": "ask", "port": "3001", "max_calls": "4", "allow_writes": "yes"},
+                         "gates": {"commit": {"require_smoke_pass": "no"}}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("smoke.check"), "ask")
+        self.assertEqual(cfg.get("smoke.port"), 3001)
+        self.assertEqual(cfg.get("smoke.max_calls"), 4)
+        self.assertIs(cfg.get("smoke.allow_writes"), True)
+        self.assertIs(cfg.get("gates.commit.require_smoke_pass"), False)
+        self.assertEqual(cfg.warnings, [])
+        self.write_repo({"smoke": {"check": "always"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("smoke.check", str(cm.exception))
+
+    def test_headers_are_an_open_mapping_whose_values_reference_env_vars(self):
+        self.write_repo({"smoke": {"headers": {"Authorization": "Bearer ${TOK}", "X-Tenant": "acme"}}})
+        cfg = self.load()
+        self.assertEqual(cfg.get("smoke.headers"), {"Authorization": "Bearer ${TOK}", "X-Tenant": "acme"})
+        self.assertEqual(cfg.warnings, [])
+        self.assertNotIn("TOK", config.to_shell(cfg))            # never exported to the shell
+        self.assertNotIn("MIGITE_CFG_SMOKE_HEADERS", config.to_shell(cfg))
+        shown = config.show(cfg)
+        self.assertIn("Authorization, X-Tenant", shown)          # names only
+        self.assertNotIn("Bearer", shown)
+
+    def test_a_literal_credential_in_a_header_is_refused(self):
+        for name in ("Authorization", "X-Api-Key", "x-auth-token", "Cookie"):
+            self.write_repo({"smoke": {"headers": {name: "literal-secret"}}})
+            with self.assertRaises(config.ConfigError) as cm:
+                self.load()
+            self.assertIn(f"smoke.headers.{name}", str(cm.exception))
+            self.assertIn("${VAR}", str(cm.exception))
+        self.write_repo({"smoke": {"headers": {"bad name": "x"}}})
+        with self.assertRaises(config.ConfigError):
+            self.load()
+        self.write_repo({"smoke": {"headers": "Authorization: x"}})
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load()
+        self.assertIn("mapping", str(cm.exception))
+
+    @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+    def test_yaml_on_and_off_and_the_starter_block(self):
+        (self.repo / ".migite.yml").write_text("smoke:\n  check: on\n  allow_writes: off\n")
+        cfg = self.load()
+        self.assertEqual(cfg.get("smoke.check"), "on")
+        self.assertIs(cfg.get("smoke.allow_writes"), False)
+        lines = config.STARTER_TEMPLATE.splitlines()
+        start = lines.index(next(line for line in lines if line.startswith("# smoke:")))
+        block = []
+        for line in lines[start:]:
+            if not line.startswith("#"):
+                break
+            block.append(line[2:])
+        (self.repo / ".migite.yml").write_text("\n".join(block) + "\n")
+        cfg = self.load()
+        self.assertEqual(cfg.warnings, [])
+        self.assertEqual(cfg.get("smoke.check"), "off")
+        self.assertEqual(cfg.get("smoke.headers"), {"Authorization": "Bearer ${MIGITE_SMOKE_TOKEN}"})
+
+
 if __name__ == "__main__":
     unittest.main()

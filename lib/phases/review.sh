@@ -12,6 +12,8 @@
 # touches views or JavaScript (changed_frontend_files), the frontend linters
 # run, migite-review adds its frontend reviewer, and the optional browser check
 # (frontend.browser_check, run_browser_check below) can run before the review.
+# The optional smoke check (smoke.check, run_smoke_check in lib/phases/smoke.sh)
+# runs after it and sets SMOKE_RESULT / SMOKE_REASON for the gate.
 #
 # Changed-file lists come from lib/stack.sh's changed_*_files (tracked union
 # untracked) — never an inline `git diff | grep`, which is how untracked new
@@ -322,6 +324,7 @@ run_review() {
 
   ensure_testing_plan
   run_browser_check
+  run_smoke_check
 
   local REVIEW_SENTINEL="$SCRATCHPAD_DIR/.review.done"
   local REVIEW_MODULE="migite.tools.review"
@@ -364,8 +367,17 @@ run_review() {
     [[ -s "$BROWSER_CHECK_FILE" ]] && FRONTEND_REVIEW_ARGS+=(--browser-check "$BROWSER_CHECK_FILE")
     return 0
   }
+  # The smoke report, when the calls were sent this round (run_smoke_check); the
+  # correctness reviewer reads it.
+  local -a SMOKE_REVIEW_ARGS=()
+  _smoke_review_args() {
+    SMOKE_REVIEW_ARGS=()
+    [[ -n "${SMOKE_RESULT:-}" && -s "${SMOKE_CHECK_FILE:-}" ]] && SMOKE_REVIEW_ARGS+=(--smoke-check "$SMOKE_CHECK_FILE")
+    return 0
+  }
   _frontend_review_args
   _testing_plan_review_args
+  _smoke_review_args
 
   # review.json is removed before every run so a stale envelope can never
   # outlive the review.md it described (review_verdict prefers it when present).
@@ -383,7 +395,8 @@ run_review() {
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON" "$REVIEW_DIMS_JSON"
     spawn_langgraph "Reviewing" "review" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
       ${TESTING_PLAN_REVIEW_ARGS[@]+"${TESTING_PLAN_REVIEW_ARGS[@]}"} \
-      ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"}
+      ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"} \
+      ${SMOKE_REVIEW_ARGS[@]+"${SMOKE_REVIEW_ARGS[@]}"}
     sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed — review output may be incomplete"
     sync_artifact "$REVIEW_FILE" "$REVIEW_VAULT"
@@ -458,11 +471,14 @@ run_review() {
     COMMIT_GATE_ATTEMPTS=$((COMMIT_GATE_ATTEMPTS + 1))
     rm -f "$REVIEW_SENTINEL" "$REVIEW_JSON"
     ensure_testing_plan
+    run_smoke_check --rerun
     _frontend_review_args
     _testing_plan_review_args
+    _smoke_review_args
     spawn_langgraph "Re-reviewing" "review-r${COMMIT_GATE_ATTEMPTS}" "$REVIEW_MODULE" "${REVIEW_LANGGRAPH_ARGS[@]}" \
       ${TESTING_PLAN_REVIEW_ARGS[@]+"${TESTING_PLAN_REVIEW_ARGS[@]}"} \
       ${FRONTEND_REVIEW_ARGS[@]+"${FRONTEND_REVIEW_ARGS[@]}"} \
+      ${SMOKE_REVIEW_ARGS[@]+"${SMOKE_REVIEW_ARGS[@]}"} \
       --previous "$REVIEW_DIMS_JSON"
     sync_json "$REVIEW_DIMS_JSON" "$(dirname "$REVIEW_VAULT")/review-dimensions.json"
     [[ -f "$REVIEW_SENTINEL" ]] || warn "migite-review may not have completed"
@@ -484,6 +500,10 @@ run_review() {
   _commit_gate_blockers() {
     local -a b=()
     [[ "$(review_verdict "$REVIEW_FILE")" == "needs_fixes" ]] && b+=("review verdict is NEEDS FIXES")
+    # The smoke check (Phase 3.2) on any stack; skipped and not-run never block.
+    if [[ "$(cfg gates.commit.require_smoke_pass true)" == "true" && "${SMOKE_RESULT:-}" == "fail" ]]; then
+      b+=("smoke check failed: ${SMOKE_REASON:-see smoke-check.md}")
+    fi
     if stack_is_profile; then
       # Exit codes, not log patterns (run_stack_review_checks).
       if [[ "$(cfg gates.commit.require_green_specs true)" == "true" ]]; then

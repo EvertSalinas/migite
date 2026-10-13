@@ -9,7 +9,7 @@
 
 prompts="$REPO_ROOT/prompts"
 
-for p in plan native_plan implement review architecture_critic; do
+for p in plan native_plan implement review architecture_critic smoke_plan; do
   check "prompts/$p.md exists and is non-empty" test -s "$prompts/$p.md"
 done
 

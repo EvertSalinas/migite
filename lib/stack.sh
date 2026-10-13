@@ -242,6 +242,18 @@ changed_frontend_files() {
     | sort -u
 }
 
+# changed_reachable_files <base_branch> - the changed files a request can reach
+# on a Rails app: routes, controllers, serializers, GraphQL, views, channels,
+# lib/ and initializers. The smoke check (lib/phases/smoke.sh) runs only when
+# this is non-empty, so a migration-only or job-only diff never pays for it.
+changed_reachable_files() {
+  local base_branch="$1"
+  { git diff "$base_branch" --name-only --diff-filter=ACMR
+    git ls-files --others --exclude-standard
+  } | { grep -E '(^|/)(config/routes\.rb$|config/routes/|config/initializers/|app/(controllers|serializers|graphql|views|channels)/|lib/)' || true; } \
+    | sort -u
+}
+
 # changed_all_files <base_branch> — every changed path, any extension, tracked
 # union untracked, minus migite's own scratchpad/. Used for the diff-vs-notes
 # cross-reference warning before review.

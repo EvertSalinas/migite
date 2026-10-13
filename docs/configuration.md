@@ -19,6 +19,7 @@ behaved before the config file existed, so adopting it is opt-in and incremental
   - [permissions](#permissions)
   - [heal](#heal)
   - [frontend](#frontend)
+  - [smoke](#smoke)
   - [knowledge](#knowledge)
   - [plan](#plan)
   - [review](#review)
@@ -295,6 +296,7 @@ review) sit on the strong tier, while checklist work and extraction stay standar
 | `summary` | fast | `migite` Phase 4.2, the run's `summary.md` (condenses files the run already wrote) |
 | `amend`, `plan_refine`, `jira` | standard | `migite` amend mode, plan-gate refine, Jira fetch |
 | `testing_plan` | standard | `generate_testing_plan` (in `migite-plan`, or in Phase 3 with `plan.testing_plan_when: review`), and the testing-plan edits and regeneration in amend and fix rounds. It writes a checklist document from the finished plan, so it does not need the strong tier |
+| `smoke_plan` | standard | `migite` Phase 3.2 with [`smoke.check`](#smoke): the one call that turns the diff into the HTTP calls to send (read-only tools; the calls are validated and sent by Python, not the model) |
 | `heal` | standard | `migite` Phase 2.5 auto-heal fixes for failing specs and leftover lint |
 | `session` | **strong** | `migite` interactive sessions (`run_phase`): implement, spec writing, gate fixes, PR description. Under `--automata` each one is a headless call on this role |
 | `lens` | standard | `migite-explore` lenses |
@@ -461,6 +463,7 @@ gates:
     policy: lenient           # lenient | strict
     require_clean_lint: true  # strict only: remaining rubocop offenses (a profile's failing lint) block approval
     require_green_specs: true # strict only: spec failures (a profile's failing tests) or a tooling error block approval
+    require_smoke_pass: true  # strict only: a failed smoke check (smoke.check) blocks approval; skipped never does
     automata_fix_rounds: 1    # --automata only: fix rounds while blockers remain, before the policy decides (0 = none)
   plan:
     warn_after_rejections: 3  # warn that the task may be too large after N full redos (0 = never)
@@ -565,6 +568,43 @@ Every key here applies only when the diff touches views or JavaScript, so a back
 behaves exactly as before. A bare `on` / `off` is fine in YAML: these keys (and `ui.tmux` /
 `ui.notify`) read the YAML booleans back as the words. How the frontend is detected, and what
 each check does, is in [docs/phases.md](./phases.md#frontend).
+
+<a id="smoke"></a>
+### `smoke`
+
+```yaml
+smoke:
+  check: off            # off | ask | on: Phase 3.2, real requests to the service running on this machine
+  # base_url: http://127.0.0.1:3000   # loopback only; unset = detect (below)
+  # compose_service: web              # unset = web | app | api | rails, else the first with a published port
+  # port: 3000                        # unset = PORT in .env* / Procfile.dev / config/puma.rb, else 3000
+  max_calls: 12         # calls kept from the plan, in order
+  timeout_seconds: 5    # per call
+  allow_writes: false   # true = POST / PUT / PATCH / DELETE are sent too, against the dev database
+  headers: {}           # sent on the calls the plan marks auth; values reference env vars, never literals
+  #   Authorization: "Bearer ${MIGITE_SMOKE_TOKEN}"
+  log_file: log/development.log   # read on a failed call when the service isn't on compose
+```
+
+What the check does, step by step, is in [docs/phases.md](./phases.md#smoke-check). The service
+is found in this order: `base_url`; else, with a compose file and `docker` on PATH, the compose
+service's published port (`compose_service`, or the first of `web`, `app`, `api`, `rails` with a
+published port, or the first service with one); else `port`, `PORT=` in `.env.development.local`,
+`.env.local`, `.env.development` or `.env`, the `web:` line of `Procfile.dev`, `port` in
+`config/puma.rb`, then 3000. Whatever the source, the URL must be loopback (`127.0.0.1`,
+`localhost`, `::1`): anything else is refused with nothing sent, and the planned paths can never
+name a host. Migite never starts a server.
+
+`headers` is a mapping sent with every call the plan marks `auth: true`. A value names its secret
+as `${VAR}`, read from the environment when the calls are sent: a literal value under a name that
+looks like a credential (`authorization`, `token`, `key`, `secret`, `cookie`) is a config error,
+the values are never exported to the shell, `migite config show` prints the names only, and the
+expanded value (also url-encoded and base64) is replaced by `[redacted ${VAR}]` in both report
+files and in every prompt. The planner's prompt gets the header names, never the values.
+
+`allow_writes: false` drops every POST, PUT, PATCH and DELETE the planner proposes, listed in the
+report with the reason. With `true` they go to whatever database the local service uses; the
+prompt asks for idempotent writes, nothing cleans up after them.
 
 <a id="knowledge"></a>
 ### `knowledge`

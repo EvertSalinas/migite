@@ -250,6 +250,47 @@ full-suite fallback, because a test command without `{files}` already is the who
 `run_stack_review_checks` and decided by exit code; the reviewers see them as the lint and test
 results, and the gate banner shows `Lint:` and `Tests:` lines). With `plan.testing_plan_when: review`, Phase 3 first writes `testing-plan.md` from `plan.md` and the diff (`ensure_testing_plan`), so the browser check and the `testing_plan` reviewer below read a testing plan that describes what was built; an existing one is kept, and a failed call only warns. See [configuration](./configuration.md#plan).
 
+<a id="smoke-check"></a>
+**Smoke check (Phase 3.2, opt-in).** Lint and specs prove the change in isolation; with
+[`smoke.check: ask` or `on`](./configuration.md#smoke) migite also sends a few real requests to
+the service running on this machine, after the browser check and before the reviewers
+(`run_smoke_check`, `lib/phases/smoke.sh`, everything network-facing in `migite/smoke.py`):
+
+1. **Detect** (no model call). Where the service is: `smoke.base_url`, else the docker compose
+   service's published port (`docker compose config` / `ps`), else `PORT` from `.env*`,
+   `Procfile.dev` or `config/puma.rb`, else 3000. Then a GET on `/up`, `/health`, `/healthz`
+   and `/`: any HTTP status means up. A service that runs old code is **stale**, not up: a
+   compose service with no bind mount of the repo, or a local process that started before a
+   change to `config/initializers/**`, `config/environments/**`, `config/application.rb`,
+   `Gemfile.lock` or `.env*` (`app/**` and `config/routes.rb` reload, so they don't count).
+   Migite never starts a server: when nothing answers it asks `[w/k]` (`w` = you started it,
+   check again; `k` = skip), and a stale service is skipped with the reason.
+2. **Plan**: one headless call (the `smoke_plan` role, standard tier, read-only tools,
+   `prompts/smoke_plan.md`) reads the diff, the testing plan and the routes and controllers the
+   diff touches, and returns a JSON list of calls: id, method, path, whether to attach the
+   configured auth headers, and the expected status, JSON fields or body text. Migite validates
+   it before anything is sent: paths only (no scheme or host), GET / HEAD / OPTIONS unless
+   `smoke.allow_writes`, at most `smoke.max_calls`, no reserved or secret headers; every dropped
+   call is listed with its reason. The result is `smoke-plan.json` in the run folder, reused by
+   every fix round whose changed-file list is the same (delete it to plan again).
+3. **Run** (no model call): `urllib`, loopback only, no proxy, no redirects (a 3xx is the
+   answer), `smoke.timeout_seconds` per call. Each call is PASS, FAIL (what missed, with the
+   `Location` of a redirect) or ERROR (no response). On a FAIL the response body (capped) and
+   the server log written during the call (`docker compose logs --since`, or what `smoke.log_file`
+   grew by) go in the report. `smoke-check.md` starts with `Result: PASS | FAIL - N of M calls
+   failed | SKIPPED - <why>` and holds one table row per call; `smoke-check.json` is the same,
+   typed. Header values come from `${ENV_VARS}` named in `smoke.headers` and are redacted in
+   both files and in every prompt.
+
+The `correctness` reviewer reads the report (a FAIL the changed code caused is Critical; one the
+environment caused is a Warning) and the verdict synthesis sees its `Result:` line. The gate
+banner shows a `Smoke:` line, and under `gates.commit.policy: strict` a FAIL is a blocker
+(`gates.commit.require_smoke_pass`); skipped and not-run never block. Every `f` and `n` fix round
+sends the calls again, for free. On rails the check only runs when the diff touches a route,
+controller, serializer, GraphQL type, view, channel, `lib/` or initializer
+(`changed_reachable_files`); on a stack profile or generic it runs whenever it is on. A failed
+tool call (no plan, a config error) warns and the review goes on without the check.
+
 
 ```
 load_inputs  (reads plan, implementation notes, rubocop/rspec logs, git diff, testing-plan.md)
@@ -498,6 +539,7 @@ the answer it took and `(--automata)` after it:
 | Phase 1.5 TDD | `N` |
 | Stage checkpoint (`--staged`) | `c`, continue |
 | Browser check (`frontend.browser_check: ask`) | `N` (`on` still runs it, headless) |
+| Smoke check (`smoke.check: ask`) | `N` (`on` still runs it). Service down: `k`, skip; nobody can start it |
 | Commit gate | `y` when nothing blocks. With blockers, `f` first, up to `gates.commit.automata_fix_rounds` times (default 1; not for a tooling error alone). Then lenient with blockers: `y`, recorded in `gate-overrides.md`, and the run exits 3. Strict with blockers: the run stops at the gate with exit 2 |
 | Anything worth remembering (Phase 3.5) | nothing |
 | Plan update, testing-plan update (Phase 3.8) | `y`, apply |

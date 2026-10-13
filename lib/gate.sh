@@ -214,6 +214,18 @@ show_commit_context() {
     esac
   fi
 
+  # Smoke check (smoke.check, lib/phases/smoke.sh) - its Result line when the calls
+  # were sent, else why they weren't (SMOKE_RESULT / SMOKE_REASON)
+  if [[ -n "${SMOKE_RESULT:-}" ]]; then
+    local smoke_line=""
+    [[ -s "${SMOKE_CHECK_FILE:-}" ]] && smoke_line=$(grep -m1 -E '^Result:' "$SMOKE_CHECK_FILE" | sed -E 's/^Result:[[:space:]]*//' || true)
+    case "$SMOKE_RESULT" in
+      pass) echo -e "  Smoke:   ${GREEN}${smoke_line:-PASS}${RESET}" ;;
+      fail) echo -e "  Smoke:   ${RED}${BOLD}${smoke_line:-FAIL - ${SMOKE_REASON:-see $SMOKE_CHECK_FILE}}${RESET}" ;;
+      *)    echo -e "  Smoke:   ${YELLOW}${smoke_line:-${SMOKE_RESULT}${SMOKE_REASON:+ - $SMOKE_REASON}}${RESET}" ;;
+    esac
+  fi
+
   # Running total from the usage ledger (headless calls, and the sessions so far on an agent
   # that reports them), with the soft budget cap
   local cost_line covers="headless calls only"

@@ -36,6 +36,8 @@ def state(**overrides):
 
 
 BROWSER_REPORT = "# Browser check\nResult: FAIL - the modal never opened\nURL: http://localhost:3000\n"
+SMOKE_REPORT = ("# Smoke check\nResult: FAIL - 1 of 2 calls failed\nURL: http://127.0.0.1:3000\n\n## Calls\n"
+                "| 1 | item_404 | GET | /api/items/0 | 404 | 500 | 12 | FAIL | status 500 not in [404] |\n")
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")
@@ -81,6 +83,16 @@ class FrontendReviewerTest(unittest.TestCase):
         self.assertEqual(self.review.synth_frontend_block(state(browser_check=BROWSER_REPORT)), "")
         block = self.review.synth_frontend_block(state(frontend_files=["a.js"], browser_check=BROWSER_REPORT))
         self.assertIn("Result: FAIL - the modal never opened", block)
+
+    def test_the_correctness_reviewer_and_the_verdict_see_the_smoke_report(self):
+        for dim in ("correctness", "security"):
+            self.review.review_dimension({**state(smoke_check=SMOKE_REPORT), "dimension": dim, "description": "criteria"})
+        correctness, security = (p for _, p in self.calls)
+        self.assertIn("status 500 not in [404]", correctness)
+        self.assertIn("Smoke check report", correctness)
+        self.assertNotIn("Smoke check report", security)
+        self.assertIn("Result: FAIL - 1 of 2 calls failed", self.review.synth_smoke_block(state(smoke_check=SMOKE_REPORT)))
+        self.assertEqual(self.review.synth_smoke_block(state()), "")
 
 
 @unittest.skipUnless(HAS_LANGGRAPH, "langgraph not installed")

@@ -332,7 +332,7 @@ run the same command with `--automata` again: lint and tests run again, and the 
 |---|---|
 | 0 | Finished, and nothing blocked the commit gate (or a finished run was invoked again) |
 | 1 | Error: a failed phase or session, missing input, or an automata run resumed without `--automata`. Any other failure is reported as 1 too |
-| 2 | Stopped at the commit gate: `gates.commit.policy: strict` and blockers remain. `run.json` keeps the gate `pending_gate`, with the blockers in `phases.review.blockers` |
+| 2 | Stopped at the commit gate: `gates.commit.policy: strict` and blockers remain (a `NEEDS FIXES` verdict, failing specs or lint, a tooling error, a failed [smoke check](./phases.md#smoke-check)). `run.json` keeps the gate `pending_gate`, with the blockers in `phases.review.blockers` |
 | 3 | Finished over blockers under `lenient`. The blockers are in `gate-overrides.md` and `phases.review.blockers` |
 
 **The agent sessions run headless.** Implement, staged stages, TDD specs, the browser check and

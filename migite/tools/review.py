@@ -208,6 +208,7 @@ class ReviewState(TypedDict):
     frontend_lint_log: str
     system_specs: bool          # the repo has spec/system
     browser_check: str          # browser-check.md from Phase 3.1, when it ran
+    smoke_check: str            # smoke-check.md from Phase 3.2, when the calls were sent
     amendments: list[str]
     review_output: str
     sentinel: str
@@ -234,6 +235,7 @@ class DimensionInput(TypedDict):
     frontend_files: list[str]
     frontend_lint_log: str
     browser_check: str
+    smoke_check: str
     amendments: list[str]
 
 
@@ -285,6 +287,7 @@ def route_to_reviewers(state: ReviewState) -> list[Send]:
             "frontend_files": state.get("frontend_files", []),
             "frontend_lint_log": state.get("frontend_lint_log", ""),
             "browser_check": state.get("browser_check", ""),
+            "smoke_check": state.get("smoke_check", ""),
             "amendments": state.get("amendments", []),
         })
         for dim, desc in dims if dim in rerun
@@ -311,6 +314,14 @@ def review_dimension(state: DimensionInput) -> dict:
                 "A FAIL step or a JavaScript console error is 🔴 Critical unless the report shows it is an "
                 "environment problem (server not running, seed data missing), which is a 🟡 Warning.\n"
             )
+    if dim == "correctness" and state.get("smoke_check"):
+        testing_plan_block += (
+            "\n## Smoke check report (migite sent real requests to the local development server)\n"
+            f"{state['smoke_check'][:3000]}\n"
+            "A FAIL whose status or server log shows the changed code raising or answering wrongly is 🔴 Critical, "
+            "cite the call's path. A FAIL the report puts down to the environment (stale server, missing seed data, "
+            "an unset auth variable) is 🟡 Warning. SKIPPED is not a finding.\n"
+        )
     evidence_field = "" if dim in verify.SKIP_DIMENSIONS else f"  - {verify.EVIDENCE_LINE}\n"
     grounding = (f"You have read-only tools (Read, Grep, Glob) on the repository, and nothing else. Open a file "
                  f"whenever a claim needs it, and no more: each costs time and tokens.\n"
@@ -399,6 +410,12 @@ def synth_frontend_block(state: ReviewState) -> str:
     return block
 
 
+def synth_smoke_block(state: ReviewState) -> str:
+    """The smoke check's Result line for the verdict synthesis, when the calls were sent."""
+    result = next((l for l in state.get("smoke_check", "").splitlines() if l.startswith("Result:")), "")
+    return f"\n## Smoke check (real requests to the local server)\n{result}\n" if result else ""
+
+
 def synth_testing_plan_block(state: ReviewState) -> str:
     """The verdict synthesis has no tools and review.md tells it a missing testing plan is a
     NEEDS FIXES; when the reviewer was switched off, say so instead of leaving it to guess."""
@@ -427,7 +444,7 @@ def synthesize_verdict(state: ReviewState) -> dict:
 
 ## {test_label}
 {state['rspec_log'][:800]}
-{synth_frontend_block(state)}{synth_testing_plan_block(state)}
+{synth_frontend_block(state)}{synth_smoke_block(state)}{synth_testing_plan_block(state)}
 Synthesise these findings into a single review document following the format above.
 De-duplicate overlapping findings. Assign the final verdict:
 - READY TO COMMIT — no critical issues
@@ -569,6 +586,7 @@ def main() -> None:
     ap.add_argument("--frontend-lint-log", default="", help="Path to the erb_lint/eslint log (optional)")
     ap.add_argument("--system-specs",    action="store_true", help="The repo has spec/system (shapes the frontend reviewer's system-spec rule)")
     ap.add_argument("--browser-check",   default="", help="Path to browser-check.md from Phase 3.1 (optional)")
+    ap.add_argument("--smoke-check",     default="", help="Path to smoke-check.md from Phase 3.2 (optional)")
     ap.add_argument("--amendment",       action="append", default=[],
                     help="Path to an amendment-NN.md; repeat for each, oldest first (optional)")
     ap.add_argument("--previous",        default="",
@@ -610,6 +628,7 @@ def main() -> None:
     frontend_files = args.frontend_files.split()
     frontend_lint_log = read_or_empty(args.frontend_lint_log) if args.frontend_lint_log else ""
     browser_check  = read_or_empty(args.browser_check) if args.browser_check else ""
+    smoke_check    = read_or_empty(args.smoke_check) if args.smoke_check else ""
     amendments     = [read_or_empty(a) for a in args.amendment]
     review_cmd     = read_prompt(REVIEW_CMD_PATH)
 
@@ -651,6 +670,7 @@ def main() -> None:
             "frontend_lint_log": frontend_lint_log,
             "system_specs": args.system_specs,
             "browser_check": browser_check,
+            "smoke_check": smoke_check,
             "amendments": amendments,
             "review_output": args.review_output,
             "sentinel": args.sentinel,

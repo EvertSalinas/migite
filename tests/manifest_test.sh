@@ -259,12 +259,14 @@ mf_staged_env() {
   mf_env
   # shellcheck source=../lib/phases/review.sh
   source "$MIGITE_HOME/lib/phases/review.sh"
+  # shellcheck source=../lib/phases/smoke.sh
+  source "$MIGITE_HOME/lib/phases/smoke.sh"
   TASK_SLUG="gate-task"; SCRATCHPAD_DIR="$mf_repo/scratchpad/gate-task"; TASK_DIR="$mf_dir/vault/Acme/api/gate-task"
   set_run_paths "$BUILD_RUN_SLUG"
   manifest_init
   printf '# Plan\n' > "$PLAN_FILE"; printf 'notes\n' > "$IMPLEMENTATION_FILE"
   STACK=generic; BASE_BRANCH=main; APP_ROOT="$mf_repo"; KNOWLEDGE_INJECT=""
-  export MIGITE_CFG_FRONTEND_BROWSER_CHECK=off MIGITE_CFG_UI_NOTIFY=off
+  export MIGITE_CFG_FRONTEND_BROWSER_CHECK=off MIGITE_CFG_SMOKE_CHECK=off MIGITE_CFG_UI_NOTIFY=off
   REVIEWS="$mf_dir/reviews.log"; : > "$REVIEWS"
   spawn_langgraph() { echo "$1" >> "$REVIEWS"; printf '# Review\n## Verdict: READY TO COMMIT\n' > "$REVIEW_FILE"; touch "$SCRATCHPAD_DIR/.review.done"; }
   read_gate_choice() { echo "$1" >> "$mf_dir/gate-banners.log"; GATE_CHOICE="${GATE_ANSWERS[0]:-q}"; GATE_ANSWERS=("${GATE_ANSWERS[@]:1}"); }

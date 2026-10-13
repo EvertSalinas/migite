@@ -10,7 +10,9 @@
 #   plan         success envelope whose result is a multi-section plan (passes migite-plan's stub guard)
 #   native_plan  the `plan` mode's plan with a final `## Files examined` section (plan.strategy: native)
 #   testing_plan success envelope whose result is a testing plan with its three ### sections
-#   text         plain text on stdout, no JSON (older CLI / --output-format text)
+#   smoke_plan   success envelope whose result is a smoke call list: one GET on /up, one POST
+#                (dropped unless smoke.allow_writes) and one absolute URL (always dropped)
+#   text        plain text on stdout, no JSON (older CLI / --output-format text)
 #   is_error     envelope with is_error=true, exit 0
 #   empty        success envelope whose result is the empty string
 #   exit1        garbage on stdout, exit 1
@@ -94,6 +96,7 @@ case "$mode" in
   plan)       envelope "$plan_text" "" ;;
   native_plan) envelope "$plan_text\\n\\n## Files examined\\n- app/models/account.rb: Account has_many :widgets and no things association yet\\n- app/controllers/widgets_controller.rb: the service-object pattern the controller follows" "" ;;
   testing_plan) envelope "# Testing Plan\\n\\n### Prerequisites — seed records (Rails console)\\n\`\`\`ruby\\nAccount.create!(name: 'qa')\\n\`\`\`\\n\\n### Verification steps\\n1. curl -s localhost:3000/things | jq\\n2. grep 'ThingsController#index' log/development.log\\n\\n### Teardown\\n\`\`\`ruby\\nAccount.where(name: 'qa').destroy_all\\n\`\`\`" "" ;;
+  smoke_plan) envelope '{\"summary\": \"the health route answers\", \"calls\": [{\"id\": \"up\", \"why\": \"the server answers\", \"method\": \"GET\", \"path\": \"/up\", \"auth\": false, \"expect\": {\"status\": 200}}, {\"id\": \"create\", \"why\": \"a write\", \"method\": \"POST\", \"path\": \"/items\", \"auth\": true, \"body\": {\"name\": \"x\"}, \"expect\": {\"status\": 201}}, {\"id\": \"remote\", \"why\": \"never sent\", \"method\": \"GET\", \"path\": \"http://example.com/\", \"auth\": false, \"expect\": {\"status\": 200}}]}' "" ;;
   structured) envelope "{\\\"verdict\\\":\\\"NEEDS FIXES\\\"}" ',"structured_output":{"verdict":"NEEDS FIXES","reason":"one critical","findings":[{"severity":"critical","problem":"x"},{"severity":"note","problem":"y"}],"document":"# Review: t\n\n## Verdict: NEEDS FIXES\n\nbody"}' ;;
   fold)       envelope '{\"revision\": \"Delay is 15 seconds, not 1 minute.\", \"edits\": [{\"find\": \"1 minute\", \"replace\": \"15 seconds\", \"why\": \"amendment 01\"}]}' "" ;;
   fold_noop)  envelope '{\"revision\": \"No plan changes.\", \"edits\": []}' "" ;;

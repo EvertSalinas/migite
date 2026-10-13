@@ -114,6 +114,7 @@ DEFAULTS: dict[str, Any] = {
             "policy": "lenient",         # lenient = today's behaviour; strict = 'y' refused over blockers, 'Y' overrides
             "require_clean_lint": True,  # in strict mode, remaining rubocop offenses are a blocker
             "require_green_specs": True, # in strict mode, spec failures / tooling errors are a blocker
+            "require_smoke_pass": True,  # in strict mode, a failed smoke check (smoke.check) is a blocker
             "automata_fix_rounds": 1,    # --automata: f rounds the gate answers while blockers remain, before the policy decides
         },
         "plan": {
@@ -142,6 +143,20 @@ DEFAULTS: dict[str, Any] = {
         "lint": "auto",                      # auto = erb_lint / eslint when the repo configures them; off = never
         "system_specs": "on",                # on = run changed spec/system specs (and in the full-suite fallback); off = skip them
         "browser_check": "off",              # Phase 3.1: the agent walks the testing plan in a browser. off | ask | on
+    },
+    "smoke": {
+        # Phase 3.2: real HTTP calls against the service under test, running on this machine
+        # (localhost or docker compose). migite detects it, one headless call plans the calls
+        # from the diff, Python sends them (migite/smoke.py). Never starts a server.
+        "check": "off",                      # off | ask | on
+        "base_url": None,                    # http://127.0.0.1:3000; unset = detect (compose published port, PORT, puma.rb, 3000)
+        "compose_service": None,             # the compose service to probe; unset = web | app | api | rails, else the first with a published port
+        "port": None,                        # the local port to probe when not on compose; unset = PORT in .env* / Procfile.dev / config/puma.rb / 3000
+        "max_calls": 12,                     # calls kept from the plan, in order
+        "timeout_seconds": 5,                # per call
+        "allow_writes": False,               # false = GET / HEAD / OPTIONS only; true = POST / PUT / PATCH / DELETE too (against the dev DB)
+        "headers": {},                       # name -> value sent on calls marked auth; values reference ${ENV_VAR}, expanded at run time and redacted
+        "log_file": "log/development.log",   # the server log read on a failed call when the service isn't on compose
     },
     "knowledge": {
         "inject_max_bytes": 8000,            # knowledge.md entries put into plan/implement/fix/amend prompts, up to this many bytes
@@ -207,6 +222,7 @@ ROLE_TIERS: dict[str, str] = {
     "summary": "fast",            # end-of-run summary.md: condenses files the run already wrote
     "plan_fold": "standard",      # end-of-run exact edits that keep plan.md current
     "plan_refine": "standard", "testing_plan": "standard", "jira": "standard",
+    "smoke_plan": "standard",     # Phase 3.2: the HTTP calls to send, from the diff (migite/smoke.py)
     "heal": "standard",           # auto-heal fixes for failing specs and leftover lint
     "session": "strong",          # run_phase's interactive sessions: implement, specs, gate
                                   # fixes, PR description — the drafter, never weaker than the
@@ -246,6 +262,7 @@ ROLE_TOOLS: dict[str, str] = {
     "pr_review_test_coverage": "read", "pr_review_conventions_and_migrations": "read",
     "audit_area": "read",
     "refute": "read",
+    "smoke_plan": "read",         # opens the routes and controllers the diff touches
     "heal": "default",
     "jira": "default",
     "session": "default",         # --automata runs run_phase's sessions headless: the interactive session's toolset
@@ -301,6 +318,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.lint": ("auto", "off"),
     "frontend.system_specs": ("on", "off"),
     "frontend.browser_check": ("off", "ask", "on"),
+    "smoke.check": ("off", "ask", "on"),
     "review.dimensions.testing_plan": ("on", "off"),
     "plan.testing_plan_when": ("plan", "review"),
     "plan.strategy": ("langgraph", "native"),
@@ -314,9 +332,16 @@ INT_KEYS = ("models.timeout_seconds", "models.thinking_timeout_seconds",
             "models.timeouts.fast", "models.timeouts.standard", "models.timeouts.strong",
             "gates.plan.warn_after_rejections", "gates.commit.automata_fix_rounds",
             "heal.max_attempts", "heal.prompt_log_max_bytes", "ui.prompt_inline_max",
-            "ui.prompt_diff_max_bytes", "knowledge.inject_max_bytes")
+            "ui.prompt_diff_max_bytes", "knowledge.inject_max_bytes",
+            "smoke.max_calls", "smoke.timeout_seconds", "smoke.port")
 BOOL_KEYS = ("gates.commit.require_clean_lint", "gates.commit.require_green_specs",
+             "gates.commit.require_smoke_pass", "smoke.allow_writes",
              "heal.full_suite_fallback", "budget.print_summary", "plan.chain_sessions")
+# Open mappings a config file holds whole: validated in _coerce, never flattened into
+# dotted keys, and (smoke.headers) never exported to the shell.
+OPEN_MAPPINGS = ("models.roles", "models.roles_effort", "models.roles_timeouts", "smoke.headers")
+HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9-]+$")
+SECRET_HEADER_RE = re.compile(r"authorization|token|key|secret|cookie", re.IGNORECASE)
 FLOAT_KEYS = ("budget.max_usd_per_run", "budget.review_call_max_usd")
 
 STARTER_TEMPLATE = """\
@@ -382,6 +407,7 @@ gates:
     policy: lenient          # strict: 'y' is refused while blockers remain; 'Y' overrides and is logged
     require_clean_lint: true
     require_green_specs: true
+    require_smoke_pass: true # strict only: a failed smoke check (smoke.check) blocks approval
     automata_fix_rounds: 1   # --automata: fix rounds while blockers remain, before the policy decides (0 = none)
   plan:
     warn_after_rejections: 3
@@ -402,6 +428,18 @@ frontend:                    # views + Stimulus/Turbo; each runs only when the d
   lint: auto                 # auto = erb_lint / eslint when the repo configures them; off = never
   system_specs: on           # off = skip spec/system (e.g. no Chrome on this machine)
   browser_check: off         # off | ask | on: the agent walks the testing plan in a browser before review
+
+# smoke:                     # Phase 3.2: real HTTP calls against the service running on this machine. See docs/phases.md
+#   check: off               # off | ask | on: one headless call plans the calls from the diff, migite sends them before review
+#   base_url: http://127.0.0.1:3000  # loopback only; unset = the compose service's published port, PORT, config/puma.rb, 3000
+#   compose_service: web     # unset = web | app | api | rails, else the first service with a published port
+#   port: 3000               # unset = PORT in .env* / Procfile.dev / config/puma.rb / 3000
+#   max_calls: 12
+#   timeout_seconds: 5       # per call
+#   allow_writes: false      # true = POST / PUT / PATCH / DELETE are sent too, against the dev database
+#   headers:                 # sent on the calls the plan marks auth; values reference env vars, never literals
+#     Authorization: "Bearer ${MIGITE_SMOKE_TOKEN}"
+#   log_file: log/development.log  # read on a failed call when the service isn't on compose
 
 knowledge:
   inject_max_bytes: 8000     # knowledge.md entries put into plan/implement/fix/amend prompts, up to this many bytes
@@ -462,7 +500,7 @@ def _flatten(d: dict, prefix: str = "") -> dict[str, Any]:
         key = f"{prefix}.{k}" if prefix else k
         # An EMPTY mapping is a leaf too — otherwise `extras: {node: {}}` would
         # flatten to nothing and an unknown section could never be flagged.
-        if isinstance(v, dict) and v and key not in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
+        if isinstance(v, dict) and v and key not in OPEN_MAPPINGS:
             out.update(_flatten(v, key))
         else:
             out[key] = v
@@ -541,6 +579,21 @@ def _coerce(key: str, value: Any, source: str) -> Any:
         raise ConfigError(f"{key} must be one of {', '.join(ENUMS[key])} (got {value!r} from {source})")
     if key in PERMISSION_KEYS:
         return agents.normalize_permission(str(value))
+    if key == "smoke.headers":
+        if not isinstance(value, dict):
+            raise ConfigError(f"{key} must be a mapping of header name -> value (from {source})")
+        headers: dict[str, str] = {}
+        for name, raw in value.items():
+            name, val = str(name), "" if raw is None else str(raw)
+            if not HEADER_NAME_RE.match(name):
+                raise ConfigError(f"{key}: {name!r} is not a header name (letters, digits and dashes; from {source})")
+            if "\n" in val or "\r" in val:
+                raise ConfigError(f"{key}.{name} must be one line (from {source})")
+            if SECRET_HEADER_RE.search(name) and "${" not in val:
+                raise ConfigError(f"{key}.{name}: migite never reads a credential from a config file. Put the value "
+                                  f"in an environment variable and write ${{VAR}} instead (from {source})")
+            headers[name] = val
+        return headers
     if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
         if not isinstance(value, dict):
             raise ConfigError(f"{key} must be a mapping of role -> value (from {source})")
@@ -866,8 +919,8 @@ def _shell_value(v: Any) -> str:
 def to_shell(cfg: Config) -> str:
     lines = []
     for key, value in sorted(cfg.flat().items()):
-        if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
-            continue
+        if key in OPEN_MAPPINGS:
+            continue  # the headers reference secrets; bash never needs them (migite.smoke reads the config)
         if key == "stacks":
             continue  # the empty mapping; the profile names go out as one line below
         if key.startswith("stacks.") and isinstance(value, list):
@@ -888,7 +941,9 @@ def to_shell(cfg: Config) -> str:
 def show(cfg: Config) -> str:
     rows = []
     for key, value in sorted(cfg.flat().items()):
-        if key in ("models.roles", "models.roles_effort", "models.roles_timeouts"):
+        if key == "smoke.headers":
+            value = ", ".join(sorted(value)) if value else "{}"   # names only; the values reference secrets
+        elif key in OPEN_MAPPINGS:
             value = json.dumps(value) if value else "{}"
         rows.append((key, _shell_value(value) or "(unset)", cfg.source(key)))
     width = max(len(r[0]) for r in rows)

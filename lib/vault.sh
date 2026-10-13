@@ -233,6 +233,10 @@ set_run_paths() {
   IMPLEMENTATION_VAULT="$RUN_VAULT_DIR/implementation.md"
   REVIEW_FILE="$RUN_SCRATCH_DIR/review.md"
   REVIEW_VAULT="$RUN_VAULT_DIR/review.md"
+  # Phase 3.2 (lib/phases/smoke.sh): per run, since an amend run has its own diff
+  SMOKE_PLAN_FILE="$RUN_SCRATCH_DIR/smoke-plan.json"
+  SMOKE_CHECK_FILE="$RUN_SCRATCH_DIR/smoke-check.md"
+  SMOKE_CHECK_JSON="$RUN_SCRATCH_DIR/smoke-check.json"
 }
 
 # relocate_task_dir <src> <dest> — move a preliminary task folder to its final
